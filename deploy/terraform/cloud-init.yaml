@@ -1,0 +1,23 @@
+#cloud-config
+# The pcd-ops image is pre-provisioned — nginx, systemd service, and all
+# dependencies are already installed. This cloud-init only writes the empty
+# .env so the operator can configure credentials via the Settings page.
+write_files:
+  - path: /opt/pcd-ops/.env
+    permissions: '0600'
+    owner: pcd-ops:pcd-ops
+    content: |
+      OS_AUTH_URL=
+      OS_USERNAME=
+      OS_PASSWORD=
+      OS_PROJECT_NAME=
+      OS_USER_DOMAIN_NAME=Default
+      OS_PROJECT_DOMAIN_NAME=Default
+      OS_REGION_NAME=
+      PROMETHEUS_URL=
+      GRAFANA_URL=
+      GRAFANA_TOKEN=
+      AI_BACKEND=ollama
+      AI_URL=http://localhost:11434
+      AI_MODEL=llama3.1:8b
+      AI_API_KEY=

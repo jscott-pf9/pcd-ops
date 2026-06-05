@@ -1,0 +1,49 @@
+# Credentials and secrets
+creds
+.env
+.env.*
+!.env.example
+settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Packer build output
+deploy/packer/output/
+*.qcow2
+
+# Terraform
+deploy/terraform/.terraform/
+deploy/terraform/.terraform.lock.hcl
+deploy/terraform/terraform.tfstate
+deploy/terraform/terraform.tfstate.backup
+deploy/terraform/*.tfvars
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+backend/data/

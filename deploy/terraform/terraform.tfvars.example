@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in values, or use the deploy.sh wrapper
+# which reads these automatically from the project .env file.
+
+os_auth_url            = "https://<your-pcd>.app.staging-pcd.platform9.com/keystone/v3"
+os_username            = "user@example.com"
+os_password            = "changeme"
+os_project_name        = "service"
+os_user_domain_name    = "Default"
+os_project_domain_name = "Default"
+os_region_name         = "RegionOne"
+
+vm_name      = "pcd-ops"
+image_name   = "pcd-ops"   # Glance image built by deploy/build-image.sh
+flavor_name  = "m1.medium"
+network_name = "locallan"
+key_pair     = "jscott-sshkey"
