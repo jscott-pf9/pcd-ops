@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     ai_model: str = "llama3.1:8b"
     ai_api_key: str = ""
 
+    # AI feature toggles (controls which background/interactive features call the AI)
+    ai_rightsizing_enabled: bool = True
+    ai_anomaly_enabled:     bool = True
+    ai_logs_enabled:        bool = True
+    ai_capacity_enabled:    bool = True
+
+    # AI analysis schedules — same format as Jobs ("hourly", "daily@02:00", "weekly@03:00")
+    ai_rightsizing_schedule: str = "daily@02:00"
+    ai_anomaly_schedule:     str = "hourly"
+
     # Data retention (days; 0 = keep forever)
     job_run_retention_days:  int = 30
     report_retention_days:   int = 30
@@ -55,5 +65,5 @@ settings = Settings()
 from app.services import settings_store  # noqa: E402
 
 for _k, _v in settings_store.load().items():
-    if hasattr(settings, _k) and _v != "":
+    if hasattr(settings, _k) and (_v != "" or isinstance(_v, bool)):
         setattr(settings, _k, _v)

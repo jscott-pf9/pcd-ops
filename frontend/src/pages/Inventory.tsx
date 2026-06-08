@@ -2,19 +2,21 @@ import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, ArrowUp, ArrowDown, Download, X, AlertTriangle, Shield } from "lucide-react";
 import { Cell, Pie, PieChart, Tooltip as RTooltip } from "recharts";
+import * as XLSX from "xlsx";
 import { apiFetch } from "../api/client";
 import { useTenants } from "../api/tenants";
 import DataFreshness from "../components/DataFreshness";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Tab = "servers" | "hypervisors" | "volumes" | "networks" | "floating_ips" | "images" | "security_groups";
+type Tab = "servers" | "hypervisors" | "volumes" | "networks" | "floating_ips" | "images" | "security_groups" | "clusters";
 
 interface Summary {
   servers: { total: number; active: number };
   hypervisors: { total: number };
   volumes: { total: number; total_tb: number };
   networks: { total: number };
+  clusters: { total: number };
   vcpus: { used: number; total: number };
   memory_gb: { used: number; total: number };
 }
@@ -145,17 +147,6 @@ function Pill({ on, yes = "Yes", no = "No" }: { on: boolean; yes?: string; no?: 
   return <span className={on ? "text-success" : "text-muted"} style={{ fontWeight: 600, fontSize: "0.8rem" }}>{on ? yes : no}</span>;
 }
 
-function UsageBar({ used, total, label, gbConvert }: { used: number; total: number; label: string; gbConvert?: boolean }) {
-  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
-  const disp = gbConvert ? `${Math.round(used / 1024)}/${Math.round(total / 1024)} GB` : `${used}/${total} ${label}`;
-  const fill = pct > 85 ? "var(--red)" : pct > 65 ? "var(--yellow)" : "var(--green)";
-  return (
-    <div className="usage-bar">
-      <div className="usage-bar-text">{disp}</div>
-      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${pct}%`, background: fill }} /></div>
-    </div>
-  );
-}
 
 function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent: string }) {
   return (
@@ -197,8 +188,9 @@ function TableWrap({ isLoading, total, filtered, onExport, exportLabel, children
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "servers",         label: "Servers"         },
+  { id: "clusters",        label: "Clusters"        },
   { id: "hypervisors",     label: "Hypervisors"     },
+  { id: "servers",         label: "Servers (VMs)"   },
   { id: "volumes",         label: "Volumes"         },
   { id: "networks",        label: "Networks"        },
   { id: "floating_ips",    label: "Floating IPs"    },
@@ -209,13 +201,156 @@ const TABS: { id: Tab; label: string }[] = [
 const CHART_COLORS = ["var(--blue-primary)","var(--purple)","var(--green)","var(--yellow)","var(--red)","#0891B2","#7C3AED","#059669"];
 
 export default function Inventory() {
-  const [tab,          setTab]          = useState<Tab>("servers");
+  const [tab,          setTab]          = useState<Tab>("clusters");
   const [search,       setSearch]       = useState("");
   const [tenantFilter, setTenantFilter] = useState("");
+  const [exportingAll, setExportingAll] = useState(false);
   const tenants = useTenants();
+
+  async function handleExportAll() {
+    setExportingAll(true);
+    try {
+      const [servers, hypervisors, volumes, networks, floatingIps, images, secGroups, clusters] =
+        await Promise.all([
+          apiFetch<any[]>("/inventory/servers"),
+          apiFetch<any[]>("/inventory/hypervisors"),
+          apiFetch<any[]>("/inventory/volumes"),
+          apiFetch<any[]>("/inventory/networks"),
+          apiFetch<any[]>("/inventory/floating_ips"),
+          apiFetch<any[]>("/inventory/images"),
+          apiFetch<any[]>("/inventory/security_groups"),
+          apiFetch<any[]>("/inventory/clusters"),
+        ]);
+
+      const t = (id: string) => tenants.get(id) ?? id?.slice(0, 8) ?? "";
+
+      const sheets: { name: string; aoa: (string | number)[][] }[] = [
+        {
+          name: "Servers",
+          aoa: [
+            ["Name","Status","Flavor","vCPUs","RAM GB","IPs","Tenant","Hypervisor","Created","Updated","Image ID","ID"],
+            ...(servers ?? []).map((s: any) => [
+              s.name, s.status, s.flavor_name, s.flavor_vcpus ?? "",
+              s.flavor_ram_mb ? Math.round(s.flavor_ram_mb / 1024) : "",
+              (s.ips || []).join("; "), t(s.project_id), s.hypervisor_hostname ?? "",
+              fmtDate(s.created_at), fmtDate(s.updated_at), s.image_id ?? "", s.id,
+            ]),
+          ],
+        },
+        {
+          name: "Hypervisors",
+          aoa: [
+            ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs",
+             "RAM GB","RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
+             "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP"],
+            ...(hypervisors ?? []).map((h: any) => [
+              h.hostname, h.state, h.status, h.running_vms ?? "",
+              h.cpu_sockets ?? "", h.cpu_cores ?? "", h.cpu_threads ?? "", h.cpu_logical ?? "",
+              h.memory_mb_total ? Math.round(h.memory_mb_total / 1024) : "",
+              h.memory_mb_used ? Math.round(h.memory_mb_used / 1024) : "",
+              h.cpu_vendor ?? "", h.cpu_model ?? "", h.cpu_arch ?? "",
+              h.nic_count ?? "",
+              h.ssh_ok === true ? "reachable" : h.ssh_ok === false ? "unreachable" : "",
+              h.os_version ?? "", h.pending_patches ?? "",
+              h.hypervisor_type ?? "", h.hypervisor_version ?? "", h.host_ip ?? "",
+            ]),
+          ],
+        },
+        {
+          name: "Volumes",
+          aoa: [
+            ["Name","Status","Size GB","Type","Attached To","Tenant","Created","ID"],
+            ...(volumes ?? []).map((v: any) => [
+              v.name, v.status, v.size_gb, v.volume_type ?? "",
+              (v.attached_to || []).join("; "), t(v.project_id), fmtDate(v.created_at), v.id,
+            ]),
+          ],
+        },
+        {
+          name: "Networks",
+          aoa: [
+            ["Name","Status","External","Shared","Admin State","Subnet IDs","Tenant","ID"],
+            ...(networks ?? []).map((n: any) => [
+              n.name, n.status, n.external ? "Yes" : "No", n.shared ? "Yes" : "No",
+              n.admin_state_up ? "up" : "down", (n.subnets || []).join("; "),
+              t(n.project_id), n.id,
+            ]),
+          ],
+        },
+        {
+          name: "Floating IPs",
+          aoa: [
+            ["Floating IP","Fixed IP","Status","Associated VM","Server ID","Port ID","Tenant","ID"],
+            ...(floatingIps ?? []).map((f: any) => [
+              f.floating_ip_address, f.fixed_ip_address ?? "", f.status,
+              f.server_name ?? "", f.server_id ?? "", f.port_id ?? "",
+              t(f.project_id), f.id,
+            ]),
+          ],
+        },
+        {
+          name: "Images",
+          aoa: [
+            ["Name","Status","Visibility","Format","Size GB","VMs Using","Protected","Owner","Created","ID"],
+            ...(images ?? []).map((img: any) => [
+              img.name, img.status, img.visibility, img.disk_format,
+              img.size_gb, (img.used_by_vms || []).join("; "),
+              img.is_protected ? "Yes" : "No", img.owner?.slice(0, 8) ?? "",
+              fmtDate(img.created_at), img.id,
+            ]),
+          ],
+        },
+        {
+          name: "Security Groups",
+          aoa: [
+            ["Name","Description","Rules","Risky Rules","Tenant","ID"],
+            ...(secGroups ?? []).map((sg: any) => [
+              sg.name, sg.description ?? "", sg.rules?.length ?? 0, sg.risky_rules ?? 0,
+              sg.tenant_name || t(sg.project_id), sg.id,
+            ]),
+          ],
+        },
+        {
+          name: "SG Rules",
+          aoa: [
+            ["Group Name","Group ID","Direction","Protocol","Port Min","Port Max","CIDR","Ethertype","Risky"],
+            ...(secGroups ?? []).flatMap((sg: any) =>
+              (sg.rules || []).map((r: any) => [
+                sg.name, sg.id, r.direction, r.protocol ?? "any",
+                r.port_range_min ?? "", r.port_range_max ?? "",
+                r.remote_ip_prefix ?? "", r.ethertype ?? "", r.risky ? "Yes" : "No",
+              ])
+            ),
+          ],
+        },
+        {
+          name: "Clusters",
+          aoa: [
+            ["Name","Availability Zone","Host Count","Hosts","Metadata","Created","Updated","ID"],
+            ...(clusters ?? []).map((c: any) => [
+              c.name, c.availability_zone ?? "", (c.hosts || []).length,
+              (c.hosts || []).join("; "),
+              Object.entries(c.metadata || {}).map(([k, v]) => `${k}=${v}`).join("; "),
+              fmtDate(c.created_at), fmtDate(c.updated_at), c.id,
+            ]),
+          ],
+        },
+      ];
+
+      const wb = XLSX.utils.book_new();
+      sheets.forEach(({ name, aoa }) => {
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      });
+      XLSX.writeFile(wb, "inventory.xlsx");
+    } finally {
+      setExportingAll(false);
+    }
+  }
 
   const summary      = useQuery({ queryKey: ["inventory","summary"],        queryFn: () => apiFetch<Summary>("/inventory/summary") });
   const servers      = useQuery({ queryKey: ["inventory","servers"],        queryFn: () => apiFetch<any[]>("/inventory/servers"),        enabled: tab==="servers" });
+  const clusters     = useQuery({ queryKey: ["inventory","clusters"],       queryFn: () => apiFetch<any[]>("/inventory/clusters"),       enabled: tab==="clusters" });
   const hypervisors  = useQuery({ queryKey: ["inventory","hypervisors"],    queryFn: () => apiFetch<any[]>("/inventory/hypervisors"),    enabled: tab==="hypervisors" });
   const volumes      = useQuery({ queryKey: ["inventory","volumes"],        queryFn: () => apiFetch<any[]>("/inventory/volumes"),        enabled: tab==="volumes" });
   const networks     = useQuery({ queryKey: ["inventory","networks"],       queryFn: () => apiFetch<any[]>("/inventory/networks"),       enabled: tab==="networks" });
@@ -234,7 +369,13 @@ export default function Inventory() {
     <div>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 14 }}>
         <h1 style={{ margin: 0 }}>Inventory</h1>
-        <DataFreshness domainKey="inventory:summary" />
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <DataFreshness domainKey="inventory:summary" />
+          <button className="btn btn-secondary btn-sm" onClick={handleExportAll} disabled={exportingAll}
+            style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <Download size={12} /> {exportingAll ? "Exporting…" : "Export All"}
+          </button>
+        </div>
       </div>
 
       {/* Summary stat cards */}
@@ -246,6 +387,7 @@ export default function Inventory() {
           <StatCard label="Memory"     value={`${s.memory_gb.used} / ${s.memory_gb.total} GB`}  sub="used / total"   accent="var(--green)" />
           <StatCard label="Volumes"    value={String(s.volumes.total)}                           sub={`${s.volumes.total_tb} TB`} accent="var(--yellow)" />
           <StatCard label="Networks"   value={String(s.networks.total)}                          accent="var(--red)" />
+          {s.clusters && <StatCard label="Clusters" value={String(s.clusters.total)}             accent="var(--purple)" />}
         </div>
       )}
 
@@ -276,6 +418,7 @@ export default function Inventory() {
       {tab === "floating_ips"    && <FloatingIpsTable     data={floatingIps.data} isLoading={floatingIps.isLoading} search={search} tenantFilter={tenantFilter} tenants={tenants} />}
       {tab === "images"          && <ImagesTable          data={images.data}      isLoading={images.isLoading}      search={search} tenantFilter={tenantFilter} tenants={tenants} />}
       {tab === "security_groups" && <SecurityGroupsTable  data={secGroups.data}   isLoading={secGroups.isLoading}   search={search} tenantFilter={tenantFilter} tenants={tenants} />}
+      {tab === "clusters"        && <ClustersTable        data={clusters.data}    isLoading={clusters.isLoading}    search={search} />}
     </div>
   );
 }
@@ -324,11 +467,12 @@ function ServersTable({ data, isLoading, search, tenantFilter, tenants }: any) {
 
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
         onExport={() => exportCsv("servers.csv",
-          ["Name","Status","Flavor","vCPUs","RAM GB","IPs","Tenant","Hypervisor","Created"],
+          ["Name","Status","Flavor","vCPUs","RAM GB","IPs","Tenant","Hypervisor","Created","Updated","Image ID","ID"],
           sorted.map((s: any) => [s.name, s.status, s.flavor_name, s.flavor_vcpus,
             s.flavor_ram_mb ? Math.round(s.flavor_ram_mb/1024) : "", (s.ips||[]).join(";"),
             tenants.get(s.project_id) ?? s.project_id?.slice(0,8),
-            s.hypervisor_hostname, fmtDate(s.created_at)]))}
+            s.hypervisor_hostname, fmtDate(s.created_at), fmtDate(s.updated_at),
+            s.image_id ?? "", s.id]))}
       >
         <tr>{["Name","Status","Flavor","vCPUs","RAM","IPs","Tenant","Hypervisor","Created"].map((h, i) =>
           <SortTh key={h} label={h} field={["name","status","flavor_name","flavor_vcpus","flavor_ram_mb","","","hypervisor_hostname","created_at"][i]} sort={sort} toggle={toggle} />
@@ -367,14 +511,25 @@ function ServersTable({ data, isLoading, search, tenantFilter, tenants }: any) {
   );
 }
 
+
+// ── DrawerSection helper ──────────────────────────────────────────────────────
+
+function DrawerSection({ label }: { label: string }) {
+  return (
+    <div style={{ margin: "12px 0 4px", fontWeight: 700, fontSize: 10, textTransform: "uppercase",
+      letterSpacing: ".07em", color: "var(--gray-400)" }}>
+      {label}
+    </div>
+  );
+}
+
 // ── Hypervisors ────────────────────────────────────────────────────────────────
 
 function HypervisorsTable({ data, isLoading, search, servers }: any) {
-  const rows = filterRows(data, search, "", ["hostname","state","status","host_ip"]);
+  const rows = filterRows(data, search, "", ["hostname","state","status","host_ip","cpu_model","cpu_vendor","hypervisor_type"]);
   const { sorted, sort, toggle } = useSort<any>(rows);
   const [drawer, setDrawer] = useState<any>(null);
 
-  // Build hypervisor → hosted VMs map from servers data
   const vmsByHyp = useMemo(() => {
     const m: Record<string, any[]> = {};
     (servers ?? []).forEach((s: any) => {
@@ -384,56 +539,135 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
     return m;
   }, [servers]);
 
+  // Show SSH/NIC column only when SSH was attempted (key or password configured)
+  const hasSsh = (data ?? []).some((h: any) => h.ssh_ok != null);
+
+  const COLS = [
+    { label: "Hostname",     field: "hostname" },
+    { label: "State",        field: "state" },
+    { label: "VMs",          field: "running_vms" },
+    { label: "Sockets",      field: "cpu_sockets" },
+    { label: "Cores/Socket", field: "cpu_cores" },
+    { label: "RAM",          field: "memory_mb_total" },
+    { label: "CPU",          field: "cpu_model" },
+    { label: "Type",         field: "hypervisor_type" },
+    ...(hasSsh ? [{ label: "SSH / NICs", field: "nic_count" }] : []),
+    ...(hasSsh ? [{ label: "OS", field: "os_version" }] : []),
+    ...(hasSsh ? [{ label: "Patches", field: "pending_patches" }] : []),
+  ];
+
   return (
     <>
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
         onExport={() => exportCsv("hypervisors.csv",
-          ["Hostname","State","Status","VMs","vCPUs Used","vCPUs Total","RAM Used GB","RAM Total GB","IP"],
-          sorted.map((h: any) => [h.hostname,h.state,h.status,h.running_vms,
-            h.vcpus_used,h.vcpus_total,
-            h.memory_mb_used?Math.round(h.memory_mb_used/1024):"",
-            h.memory_mb_total?Math.round(h.memory_mb_total/1024):"",h.host_ip]))}>
-        <tr>{["Hostname","State","Status","VMs","vCPUs","Memory","Disk","IP"].map((h, i) =>
-          <SortTh key={h} label={h} field={["hostname","state","status","running_vms","vcpus_used","memory_mb_used","disk_gb_used","host_ip"][i]} sort={sort} toggle={toggle} />
+          ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs","RAM GB",
+           "RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
+           "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP"],
+          sorted.map((h: any) => [
+            h.hostname, h.state, h.status, h.running_vms ?? "",
+            h.cpu_sockets ?? "", h.cpu_cores ?? "", h.cpu_threads ?? "", h.cpu_logical ?? "",
+            h.memory_mb_total ? Math.round(h.memory_mb_total / 1024) : "",
+            h.memory_mb_used ? Math.round(h.memory_mb_used / 1024) : "",
+            h.cpu_vendor ?? "", h.cpu_model ?? "", h.cpu_arch ?? "",
+            h.nic_count ?? "",
+            h.ssh_ok === true ? "reachable" : h.ssh_ok === false ? "unreachable" : "",
+            h.os_version ?? "", h.pending_patches ?? "",
+            h.hypervisor_type ?? "", h.hypervisor_version ?? "", h.host_ip ?? "",
+          ]))}>
+        <tr>{COLS.map(({ label, field }) =>
+          <SortTh key={label} label={label} field={field} sort={sort} toggle={toggle} />
         )}</tr>
         {sorted.map((h: any) => (
           <tr key={h.id} onClick={() => setDrawer(h)} style={{ cursor: "pointer" }}>
             <td style={{ fontWeight: 500 }}>{h.hostname}</td>
             <td><StatusBadge status={h.state === "up" ? "UP" : "DOWN"} /></td>
-            <td><StatusBadge status={h.status === "enabled" ? "ENABLED" : "DISABLED"} /></td>
             <td>{h.running_vms ?? "—"}</td>
-            <td><UsageBar used={h.vcpus_used} total={h.vcpus_total} label="vCPUs" /></td>
-            <td><UsageBar used={h.memory_mb_used} total={h.memory_mb_total} label="MB" gbConvert /></td>
-            <td><UsageBar used={h.disk_gb_used} total={h.disk_gb_total} label="GB" /></td>
-            <td className="text-mono">{h.host_ip}</td>
+            <td>{h.cpu_sockets ?? "—"}</td>
+            <td>{h.cpu_cores ?? "—"}</td>
+            <td>{h.memory_mb_total ? `${Math.round(h.memory_mb_total / 1024)} GB` : "—"}</td>
+            <td className="text-mono" style={{ fontSize: 11, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {[h.cpu_vendor, h.cpu_model].filter(Boolean).join(" ") || "—"}
+            </td>
+            <td className="text-mono" style={{ fontSize: 11 }}>{h.hypervisor_type ?? "—"}</td>
+            {hasSsh && (
+              <td>
+                {h.ssh_ok === true  && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", flexShrink: 0 }} />{h.nic_count} NIC{h.nic_count !== 1 ? "s" : ""}</span>}
+                {h.ssh_ok === false && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--red)" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--red)", flexShrink: 0 }} />unreachable</span>}
+                {h.ssh_ok == null  && <span className="text-muted">—</span>}
+              </td>
+            )}
+            {hasSsh && <td style={{ fontSize: 11 }}>{h.os_version ?? "—"}</td>}
+            {hasSsh && (
+              <td>
+                {h.pending_patches == null ? <span className="text-muted">—</span>
+                  : h.pending_patches === 0 ? <span className="badge badge-ok">up to date</span>
+                  : <span className="badge badge-warn">{h.pending_patches} pending</span>}
+              </td>
+            )}
           </tr>
         ))}
       </TableWrap>
 
       {drawer && (
         <DetailDrawer title={drawer.hostname} subtitle="Hypervisor" onClose={() => setDrawer(null)}>
-          <DrawerRow label="State"   value={<StatusBadge status={drawer.state === "up" ? "UP" : "DOWN"} />} />
-          <DrawerRow label="Status"  value={<StatusBadge status={drawer.status === "enabled" ? "ENABLED" : "DISABLED"} />} />
-          <DrawerRow label="IP"      value={drawer.host_ip} />
-          <DrawerRow label="VMs running" value={drawer.running_vms} />
-          {drawer.vcpus_total && <DrawerRow label="vCPUs" value={<UsageBar used={drawer.vcpus_used} total={drawer.vcpus_total} label="vCPUs" />} />}
-          {drawer.memory_mb_total && <DrawerRow label="RAM" value={<UsageBar used={drawer.memory_mb_used} total={drawer.memory_mb_total} label="MB" gbConvert />} />}
+          <DrawerRow label="State"       value={<StatusBadge status={drawer.state === "up" ? "UP" : "DOWN"} />} />
+          <DrawerRow label="Status"      value={<StatusBadge status={drawer.status === "enabled" ? "ENABLED" : "DISABLED"} />} />
+          <DrawerRow label="IP"          value={drawer.host_ip} />
+          <DrawerRow label="VMs Running" value={drawer.running_vms ?? "—"} />
 
-          <div style={{ marginTop: 14 }}>
-            <div style={{ fontWeight: 600, fontSize: 12, color: "var(--gray-700)", marginBottom: 8 }}>
-              Hosted VMs ({(vmsByHyp[drawer.hostname] ?? []).length})
-            </div>
-            {(vmsByHyp[drawer.hostname] ?? []).map((vm: any) => (
-              <div key={vm.id} style={{ display: "flex", justifyContent: "space-between",
-                padding: "5px 0", borderBottom: "1px solid var(--gray-50)", fontSize: 12 }}>
-                <span style={{ fontWeight: 500 }}>{vm.name}</span>
-                <StatusBadge status={vm.status} />
+          <DrawerSection label="CPU" />
+          <DrawerRow label="Vendor"          value={drawer.cpu_vendor ?? "—"} />
+          <DrawerRow label="Model"           value={<span className="text-mono" style={{ fontSize: 11 }}>{drawer.cpu_model ?? "—"}</span>} />
+          <DrawerRow label="Architecture"    value={drawer.cpu_arch ?? "—"} />
+          <DrawerRow label="Sockets"         value={drawer.cpu_sockets ?? "—"} />
+          <DrawerRow label="Cores / Socket"  value={drawer.cpu_cores ?? "—"} />
+          <DrawerRow label="Threads / Core"  value={drawer.cpu_threads ?? "—"} />
+          {drawer.cpu_logical && (
+            <DrawerRow label="Logical CPUs"  value={String(drawer.cpu_logical)} />
+          )}
+
+          <DrawerSection label="Memory" />
+          <DrawerRow label="Physical RAM"  value={drawer.memory_mb_total ? `${Math.round(drawer.memory_mb_total / 1024)} GB` : "—"} />
+          {drawer.memory_mb_used != null && (
+            <DrawerRow label="Allocated"   value={`${Math.round(drawer.memory_mb_used / 1024)} GB`} />
+          )}
+
+          <DrawerSection label="Hypervisor" />
+          <DrawerRow label="Type"    value={drawer.hypervisor_type ?? "—"} />
+          <DrawerRow label="Version" value={drawer.hypervisor_version ?? "—"} />
+          {hasSsh && (
+            <DrawerRow label="SSH" value={
+              drawer.ssh_ok === true
+                ? <span style={{ color: "var(--green)", fontWeight: 600 }}>● reachable</span>
+                : drawer.ssh_ok === false
+                ? <span style={{ color: "var(--red)", fontWeight: 600 }}>● unreachable</span>
+                : <span className="text-muted">—</span>
+            } />
+          )}
+          {drawer.nic_count != null && <DrawerRow label="NICs" value={drawer.nic_count} />}
+          {drawer.os_version && <DrawerRow label="OS Version" value={drawer.os_version} />}
+          {drawer.pending_patches != null && (
+            <DrawerRow label="Pending Patches" value={
+              drawer.pending_patches === 0
+                ? <span className="badge badge-ok">up to date</span>
+                : <span className="badge badge-warn">{drawer.pending_patches} pending</span>
+            } />
+          )}
+
+          {(vmsByHyp[drawer.hostname]?.length > 0) && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: "var(--gray-700)", marginBottom: 8 }}>
+                Hosted VMs ({vmsByHyp[drawer.hostname].length})
               </div>
-            ))}
-            {!(vmsByHyp[drawer.hostname]?.length) && (
-              <p className="text-muted" style={{ fontSize: 12 }}>No VMs (check Servers tab is loaded)</p>
-            )}
-          </div>
+              {vmsByHyp[drawer.hostname].map((vm: any) => (
+                <div key={vm.id} style={{ display: "flex", justifyContent: "space-between",
+                  padding: "5px 0", borderBottom: "1px solid var(--gray-50)", fontSize: 12 }}>
+                  <span style={{ fontWeight: 500 }}>{vm.name}</span>
+                  <StatusBadge status={vm.status} />
+                </div>
+              ))}
+            </div>
+          )}
         </DetailDrawer>
       )}
     </>
@@ -451,9 +685,10 @@ function VolumesTable({ data, isLoading, search, tenantFilter, tenants }: any) {
     <>
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
         onExport={() => exportCsv("volumes.csv",
-          ["Name","Status","Size GB","Type","Attached To","Tenant","Created"],
+          ["Name","Status","Size GB","Type","Attached To","Tenant","Created","ID"],
           sorted.map((v: any) => [v.name,v.status,v.size_gb,v.volume_type,
-            (v.attached_to||[]).join(";"), tenants.get(v.project_id)??v.project_id?.slice(0,8), fmtDate(v.created_at)]))}>
+            (v.attached_to||[]).join(";"), tenants.get(v.project_id)??v.project_id?.slice(0,8),
+            fmtDate(v.created_at), v.id]))}>
         <tr>{["Name","Status","Size","Type","Attached To","Tenant","Created"].map((h,i) =>
           <SortTh key={h} label={h} field={["name","status","size_gb","volume_type","","","created_at"][i]} sort={sort} toggle={toggle} />
         )}</tr>
@@ -496,9 +731,10 @@ function NetworksTable({ data, isLoading, search, tenantFilter, tenants }: any) 
   return (
     <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
       onExport={() => exportCsv("networks.csv",
-        ["Name","Status","External","Shared","Subnets","Tenant"],
+        ["Name","Status","External","Shared","Admin State","Subnet IDs","Tenant","ID"],
         sorted.map((n: any) => [n.name,n.status,n.external?"Yes":"No",n.shared?"Yes":"No",
-          n.subnets?.length??0, tenants.get(n.project_id)??n.project_id?.slice(0,8)]))}>
+          n.admin_state_up?"up":"down", (n.subnets||[]).join(";"),
+          tenants.get(n.project_id)??n.project_id?.slice(0,8), n.id]))}>
       <tr>{["Name","Status","External","Shared","Subnets","Tenant"].map((h,i) =>
         <SortTh key={h} label={h} field={["name","status","external","shared","",""][i]} sort={sort} toggle={toggle} />
       )}</tr>
@@ -525,9 +761,10 @@ function FloatingIpsTable({ data, isLoading, search, tenantFilter, tenants }: an
   return (
     <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
       onExport={() => exportCsv("floating_ips.csv",
-        ["Floating IP","Fixed IP","Status","Associated VM","Tenant"],
-        sorted.map((f: any) => [f.floating_ip_address,f.fixed_ip_address,f.status,f.server_name,
-          tenants.get(f.project_id)??f.project_id?.slice(0,8)]))}>
+        ["Floating IP","Fixed IP","Status","Associated VM","Server ID","Port ID","Tenant","ID"],
+        sorted.map((f: any) => [f.floating_ip_address, f.fixed_ip_address ?? "", f.status,
+          f.server_name ?? "", f.server_id ?? "", f.port_id ?? "",
+          tenants.get(f.project_id)??f.project_id?.slice(0,8), f.id]))}>
       <tr>{["Floating IP","Fixed IP","Status","Associated VM","Tenant"].map((h,i) =>
         <SortTh key={h} label={h} field={["floating_ip_address","fixed_ip_address","status","server_name",""][i]} sort={sort} toggle={toggle} />
       )}</tr>
@@ -559,9 +796,10 @@ function ImagesTable({ data, isLoading, search, tenantFilter }: any) {
     <>
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
         onExport={() => exportCsv("images.csv",
-          ["Name","Status","Visibility","Format","Size GB","VMs Using","Owner","Created"],
-          sorted.map((img: any) => [img.name,img.status,img.visibility,img.disk_format,
-            img.size_gb,(img.used_by_vms||[]).join(";"),img.owner?.slice(0,8),fmtDate(img.created_at)]))}>
+          ["Name","Status","Visibility","Format","Size GB","VMs Using","Protected","Owner","Created","ID"],
+          sorted.map((img: any) => [img.name, img.status, img.visibility, img.disk_format,
+            img.size_gb, (img.used_by_vms||[]).join(";"), img.is_protected ? "Yes" : "No",
+            img.owner?.slice(0,8), fmtDate(img.created_at), img.id]))}>
         <tr>{["Name","Status","Visibility","Format","Size","VMs Using","Created"].map((h,i) =>
           <SortTh key={h} label={h} field={["name","status","visibility","disk_format","size_gb","","created_at"][i]} sort={sort} toggle={toggle} />
         )}</tr>
@@ -627,10 +865,19 @@ function SecurityGroupsTable({ data, isLoading, search, tenantFilter, tenants }:
       )}
 
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
-        onExport={() => exportCsv("security_groups.csv",
-          ["Name","Description","Rules","Risky Rules","Tenant"],
-          sorted.map((sg: any) => [sg.name,sg.description,sg.rules?.length??0,sg.risky_rules,
-            tenants.get(sg.project_id)??sg.project_id?.slice(0,8)]))}>
+        onExport={() => {
+          exportCsv("security_groups.csv",
+            ["Name","Description","Rules","Risky Rules","Tenant","ID"],
+            sorted.map((sg: any) => [sg.name, sg.description, sg.rules?.length??0, sg.risky_rules,
+              tenants.get(sg.project_id)??sg.project_id?.slice(0,8), sg.id]));
+          exportCsv("security_group_rules.csv",
+            ["Group Name","Group ID","Direction","Protocol","Port Min","Port Max","CIDR","Ethertype","Risky"],
+            sorted.flatMap((sg: any) => (sg.rules||[]).map((r: any) => [
+              sg.name, sg.id, r.direction, r.protocol ?? "any",
+              r.port_range_min ?? "", r.port_range_max ?? "",
+              r.remote_ip_prefix ?? "", r.ethertype ?? "", r.risky ? "Yes" : "No",
+            ])));
+        }}>
         <tr>{["Name","Description","Rules","Risky","Tenant"].map((h,i) =>
           <SortTh key={h} label={h} field={["name","description","","risky_rules",""][i]} sort={sort} toggle={toggle} />
         )}</tr>
@@ -678,6 +925,81 @@ function SecurityGroupsTable({ data, isLoading, search, tenantFilter, tenants }:
             ))}
           </div>
           <DrawerRow label="ID" value={<span className="text-mono" style={{ fontSize: 10 }}>{drawer.id}</span>} />
+        </DetailDrawer>
+      )}
+    </>
+  );
+}
+
+// ── Clusters (Host Aggregates) ─────────────────────────────────────────────────
+
+function ClustersTable({ data, isLoading, search }: any) {
+  const rows = filterRows(data, search, "", ["name","availability_zone"]);
+  const { sorted, sort, toggle } = useSort<any>(rows);
+  const [drawer, setDrawer] = useState<any>(null);
+
+  return (
+    <>
+      <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
+        onExport={() => exportCsv("clusters.csv",
+          ["Name","Availability Zone","Host Count","Hosts","Metadata","Created","Updated","ID"],
+          sorted.map((c: any) => [
+            c.name, c.availability_zone ?? "", (c.hosts || []).length,
+            (c.hosts || []).join(";"),
+            Object.entries(c.metadata || {}).map(([k, v]) => `${k}=${v}`).join(";"),
+            fmtDate(c.created_at), fmtDate(c.updated_at), c.id,
+          ]))}>
+        <tr>
+          {[
+            { label: "Name",              field: "name" },
+            { label: "Availability Zone", field: "availability_zone" },
+            { label: "Hosts",             field: "" },
+            { label: "Metadata",          field: "" },
+            { label: "Updated",           field: "updated_at" },
+          ].map(({ label, field }) => (
+            <SortTh key={label} label={label} field={field} sort={sort} toggle={toggle} />
+          ))}
+        </tr>
+        {sorted.map((c: any) => (
+          <tr key={c.id} onClick={() => setDrawer(c)} style={{ cursor: "pointer" }}>
+            <td style={{ fontWeight: 500 }}>{c.name}</td>
+            <td>{c.availability_zone || <span className="text-muted">—</span>}</td>
+            <td>{(c.hosts || []).length}</td>
+            <td>
+              {Object.keys(c.metadata || {}).length > 0
+                ? <span className="text-muted" style={{ fontSize: 11 }}>{Object.keys(c.metadata).length} key{Object.keys(c.metadata).length !== 1 ? "s" : ""}</span>
+                : <span className="text-muted">—</span>}
+            </td>
+            <td>{fmtDate(c.updated_at)}</td>
+          </tr>
+        ))}
+      </TableWrap>
+
+      {drawer && (
+        <DetailDrawer title={drawer.name} subtitle="Cluster / Host Aggregate" onClose={() => setDrawer(null)}>
+          <DrawerRow label="Availability Zone" value={drawer.availability_zone || "—"} />
+          <DrawerRow label="Created"           value={fmtDate(drawer.created_at)} />
+          <DrawerRow label="Updated"           value={fmtDate(drawer.updated_at)} />
+          <DrawerRow label="ID"                value={<span className="text-mono" style={{ fontSize: 10 }}>{drawer.id}</span>} />
+
+          {Object.keys(drawer.metadata || {}).length > 0 && (
+            <>
+              <DrawerSection label="Metadata" />
+              {Object.entries(drawer.metadata).map(([k, v]) => (
+                <DrawerRow key={k} label={k} value={<span className="text-mono" style={{ fontSize: 11 }}>{String(v)}</span>} />
+              ))}
+            </>
+          )}
+
+          <DrawerSection label={`Hosts (${(drawer.hosts || []).length})`} />
+          {(drawer.hosts || []).length === 0
+            ? <p className="text-muted" style={{ fontSize: 12 }}>No hosts assigned</p>
+            : (drawer.hosts || []).map((h: string) => (
+                <div key={h} style={{ padding: "5px 0", borderBottom: "1px solid var(--gray-50)", fontSize: 12, fontFamily: "var(--font-mono)" }}>
+                  {h}
+                </div>
+              ))
+          }
         </DetailDrawer>
       )}
     </>

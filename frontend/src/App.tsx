@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   BarChart2,
+  BookOpen,
   Briefcase,
   Camera,
   ChevronDown,
@@ -11,6 +12,7 @@ import {
   Layers,
   Network,
   RefreshCw,
+  Rocket,
   Server,
   Settings as SettingsIcon,
   Sliders,
@@ -25,6 +27,8 @@ import Reclamation from "./pages/Reclamation";
 import RightSizing from "./pages/RightSizing";
 import Snapshots from "./pages/Snapshots";
 import Generate from "./pages/Generate";
+import AppCatalog from "./pages/AppCatalog";
+import Deployments from "./pages/Deployments";
 import Jobs from "./pages/Jobs";
 import Topology from "./pages/Topology";
 import SettingsAlerts from "./pages/settings/SettingsAlerts";
@@ -66,7 +70,8 @@ const NAV_SECTIONS: NavSection[] = [
         children: [{ path: "/capacity/plans", label: "What-If Plans" }] },
       { path: "/rightsizing", label: "Right-Sizing",    icon: Sliders   },
       { path: "/snapshots",   label: "Snapshots",       icon: Camera    },
-      { path: "/jobs",        label: "Jobs",            icon: Briefcase },
+      { path: "/jobs",        label: "Automation",      icon: Briefcase },
+      { path: "/deployments", label: "Deployments",     icon: Rocket    },
     ],
   },
   {
@@ -77,9 +82,10 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    id: "tools", label: "Tools", icon: Code2,
+    id: "tools", label: "Orchestration", icon: Code2,
     items: [
-      { path: "/generate", label: "Generate", icon: Code2 },
+      { path: "/generate", label: "App Builder", icon: Layers   },
+      { path: "/catalog",  label: "App Catalog", icon: BookOpen },
     ],
   },
   {
@@ -259,6 +265,8 @@ function Shell() {
           <Route path="/anomaly"           element={<Anomaly />}         />
           <Route path="/logs"              element={<Logs />}            />
           <Route path="/generate"          element={<Generate />}        />
+          <Route path="/catalog"           element={<AppCatalog />}      />
+          <Route path="/deployments"       element={<Deployments />}     />
           <Route path="/settings"          element={<Navigate to="/settings/connection" replace />} />
           <Route path="/settings/connection" element={<SettingsConnection />} />
           <Route path="/settings/ai"       element={<SettingsAI />}         />

@@ -7,6 +7,7 @@ router = APIRouter(prefix="/anomaly", tags=["anomaly"])
 
 @router.get("/")
 async def detect_anomalies():
+    """Return the latest anomaly detection results (metric drift and outlier analysis)."""
     data, _ = cache_get("anomaly:latest")
     if data is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "anomaly:latest"})

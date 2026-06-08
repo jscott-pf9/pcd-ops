@@ -23,6 +23,7 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 
 @router.get("/version")
 async def get_version():
+    """Return current git commit (short), branch name, and tag (if on an exact tag)."""
     commit = _git("rev-parse", "--short", "HEAD")
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     tag = _git("describe", "--tags", "--exact-match")
@@ -35,6 +36,7 @@ async def get_version():
 
 @router.get("/update/check")
 async def check_update():
+    """Check whether a newer version is available by running git fetch and comparing HEAD to upstream."""
     fetch = _git("fetch")
     if fetch.returncode != 0:
         raise HTTPException(status_code=503, detail=f"git fetch failed: {fetch.stderr.strip()}")
@@ -55,6 +57,7 @@ async def check_update():
 
 @router.get("/update/log")
 async def get_update_log():
+    """Return the stdout/stderr log from the most recent self-update run."""
     try:
         return {"log": _UPDATE_LOG.read_text()}
     except FileNotFoundError:
@@ -63,6 +66,7 @@ async def get_update_log():
 
 @router.post("/update")
 async def trigger_update():
+    """Trigger a self-update: runs deploy/scripts/update.sh detached (git pull + pip install + npm build + service restart)."""
     update_script = APP_DIR / "deploy/scripts/update.sh"
     if not update_script.exists():
         raise HTTPException(

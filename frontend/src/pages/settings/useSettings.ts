@@ -7,6 +7,9 @@ const EMPTY: AppSettings = {
   os_project_domain_name: "Default", os_region_name: "",
   prometheus_url: "", grafana_url: "", grafana_token: "",
   ai_backend: "ollama", ai_url: "", ai_model: "", ai_api_key: "",
+  ai_rightsizing_enabled: true, ai_anomaly_enabled: true,
+  ai_logs_enabled: true, ai_capacity_enabled: true,
+  ai_rightsizing_schedule: "daily@02:00", ai_anomaly_schedule: "hourly",
   job_run_retention_days: 30, report_retention_days: 30,
   hypervisor_ssh_user: "root", hypervisor_ssh_key_path: "", hypervisor_ssh_password: "",
   smtp_host: "", smtp_port: "587", smtp_user: "", smtp_password: "",
@@ -22,7 +25,7 @@ export function useSettings() {
     getSettings().then(setForm).catch(() => {});
   }, []);
 
-  function set(field: keyof AppSettings, value: string) {
+  function set(field: keyof AppSettings, value: string | boolean | number) {
     setForm(prev => ({ ...prev, [field]: value }));
     if (status !== "idle") setStatus("idle");
   }

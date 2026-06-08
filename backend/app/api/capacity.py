@@ -16,6 +16,7 @@ router = APIRouter(prefix="/capacity", tags=["capacity"])
 
 @router.get("/summary")
 async def capacity_summary():
+    """Return current capacity summary: vCPU, RAM, and storage totals with used/free/percent."""
     data, _ = cache_get("capacity:summary")
     if data is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "capacity:summary"})
@@ -24,6 +25,7 @@ async def capacity_summary():
 
 @router.get("/trends")
 async def capacity_trends():
+    """Return capacity trend data over a rolling window with per-resource time series and AI analysis."""
     data, _ = cache_get("capacity:trends")
     if data is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "capacity:trends"})
@@ -59,6 +61,7 @@ def _simulate(summary: dict, req: WhatIfRequest) -> dict:
 
 @router.post("/what-if")
 async def what_if(request: WhatIfRequest):
+    """Simulate the impact of adding resources; returns current vs projected utilization and whether it fits."""
     summary, _ = cache_get("capacity:summary")
     if summary is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "capacity:summary"})
@@ -73,6 +76,7 @@ class ParseRequest(BaseModel):
 
 @router.post("/plans/parse")
 async def parse_description(body: ParseRequest, ai: AIProvider = Depends(get_ai_provider)):
+    """Extract structured resource requirements (vCPUs, RAM, storage) from a natural language description."""
     prompt = (
         "Extract OpenStack compute resource requirements from the user's description.\n"
         "Return ONLY a valid JSON object — no markdown fences, no explanation.\n"
@@ -122,6 +126,7 @@ class PlanCreate(BaseModel):
 
 @router.get("/plans")
 async def list_plans():
+    """List capacity plans, each annotated with a live what-if simulation against current capacity."""
     plans = db.plan_list()
     summary, _ = cache_get("capacity:summary")
     # Annotate each plan with current fit status
@@ -141,6 +146,7 @@ async def list_plans():
 
 @router.post("/plans", status_code=201)
 async def create_plan(body: PlanCreate):
+    """Create a capacity plan and return it with a what-if simulation."""
     plan = db.plan_create(
         name=body.name,
         tenant_id=body.tenant_id,
@@ -164,4 +170,5 @@ async def create_plan(body: PlanCreate):
 
 @router.delete("/plans/{plan_id}", status_code=204)
 async def delete_plan(plan_id: int):
+    """Delete a capacity plan."""
     db.plan_delete(plan_id)

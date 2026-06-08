@@ -403,8 +403,10 @@ async def _run_capacity_report(config: dict) -> dict:
     from app.services.prometheus import prometheus_client
     from app.services.notifications import send_email
     from app.agent.collector import _clean_analysis, _series_from_range
+    from app.config import settings as _settings
 
     ai        = get_ai_provider()
+    ai_enabled = getattr(_settings, "ai_capacity_enabled", True)
     tenant_id = config.get("tenant_id") or None
     email_to  = config.get("email_to")  or None
 
@@ -514,16 +516,19 @@ async def _run_capacity_report(config: dict) -> dict:
             for t in tenants_report
         ],
     }
-    ai_text = _clean_analysis(await ai.analyze(
-        "Generate a concise capacity planning report for this Platform9 PCD cluster. "
-        "Cover: cluster utilization summary, which tenants are consuming the most resources, "
-        "which tenants (if any) are above the warning thresholds provided in the context, "
-        "and 3 specific recommendations. "
-        "IMPORTANT: Only reference thresholds and limits that are explicitly provided in the "
-        "context data. Do not invent or assume any thresholds, quotas, or limits. "
-        "No preamble, no markdown, plain sentences.",
-        ai_context,
-    ))
+    if ai_enabled:
+        ai_text = _clean_analysis(await ai.analyze(
+            "Generate a concise capacity planning report for this Platform9 PCD cluster. "
+            "Cover: cluster utilization summary, which tenants are consuming the most resources, "
+            "which tenants (if any) are above the warning thresholds provided in the context, "
+            "and 3 specific recommendations. "
+            "IMPORTANT: Only reference thresholds and limits that are explicitly provided in the "
+            "context data. Do not invent or assume any thresholds, quotas, or limits. "
+            "No preamble, no markdown, plain sentences.",
+            ai_context,
+        ))
+    else:
+        ai_text = "AI analysis disabled — enable in Settings → AI Backend."
 
     # ── Assemble and store report ──────────────────────────────────────────────
     report_id = str(uuid.uuid4())

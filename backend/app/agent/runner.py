@@ -1,12 +1,14 @@
 """
 Agent runner — orchestrates collection across all domains and logs each run.
 
-Fast domains (inventory, reclamation, capacity, snapshots) run every FAST_INTERVAL.
-Slow domains (rightsizing, anomaly — both require AI) run every SLOW_INTERVAL.
+Fast  (inventory, reclamation, capacity, snapshots, logs): every 15 min.
+Slow  (anomaly, capacity trends — 1 AI call each):         every 1 hour.
+Daily (right-sizing — 1 AI call per VM):                   every 24 hours.
 """
 
 import asyncio
 import logging
+from datetime import datetime
 
 from app.services import db
 from app.agent import collector
@@ -14,8 +16,22 @@ from app.agent import jobs as job_executor
 
 logger = logging.getLogger(__name__)
 
-FAST_INTERVAL = 15 * 60   # 15 minutes
-SLOW_INTERVAL = 60 * 60   # 1 hour
+
+def _ai_feature_due(cache_key: str, schedule: str, enabled: bool) -> bool:
+    """Return True if this AI feature is enabled and due to run per its schedule."""
+    if not enabled:
+        return False
+    from app.agent.jobs import next_run_at
+    meta = db.cache_meta()
+    last_ran = meta.get(cache_key)          # ISO string or None
+    next_run = next_run_at(schedule, last_ran)
+    if next_run is None:
+        return False
+    return datetime.utcnow() >= next_run
+
+FAST_INTERVAL  = 15 * 60        # 15 minutes
+SLOW_INTERVAL  = 60 * 60        # 1 hour
+DAILY_INTERVAL = 24 * 60 * 60  # 24 hours
 
 _is_running = False
 
@@ -47,20 +63,23 @@ async def run_fast() -> None:
 
 
 async def run_slow() -> None:
-    """Collect AI-powered analysis. Slow, runs less frequently."""
+    """Collect AI-powered analysis (anomaly, capacity trends). Runs hourly."""
     global _is_running
     if _is_running:
         logger.info("Agent already running — skipping slow run.")
         return
 
+    from app.config import settings
     _is_running = True
     run_id = db.run_start()
     try:
-        await asyncio.gather(
-            collector.collect_rightsizing(),
-            collector.collect_anomaly(),
-            collector.collect_capacity_trends(),
-        )
+        tasks = [collector.collect_capacity_trends()]
+        if _ai_feature_due("anomaly:latest", settings.ai_anomaly_schedule, settings.ai_anomaly_enabled):
+            tasks.append(collector.collect_anomaly())
+        else:
+            logger.info("Anomaly AI skipped (disabled or not yet due per schedule '%s').",
+                        settings.ai_anomaly_schedule)
+        await asyncio.gather(*tasks)
         db.run_finish(run_id, "success")
         logger.info("Slow collection run complete (run_id=%d).", run_id)
     except Exception as e:
@@ -70,10 +89,38 @@ async def run_slow() -> None:
         _is_running = False
 
 
+async def run_daily() -> None:
+    """Right-sizing AI analysis — gated by configured schedule."""
+    global _is_running
+    if _is_running:
+        logger.info("Agent already running — skipping daily run.")
+        return
+
+    from app.config import settings
+    if not _ai_feature_due("rightsizing:recommendations", settings.ai_rightsizing_schedule,
+                            settings.ai_rightsizing_enabled):
+        logger.info("Right-sizing AI skipped (disabled or not yet due per schedule '%s').",
+                    settings.ai_rightsizing_schedule)
+        return
+
+    _is_running = True
+    run_id = db.run_start()
+    try:
+        await collector.collect_rightsizing()
+        db.run_finish(run_id, "success")
+        logger.info("Daily collection run complete (run_id=%d).", run_id)
+    except Exception as e:
+        db.run_finish(run_id, "error", str(e))
+        logger.exception("Daily collection run failed (run_id=%d).", run_id)
+    finally:
+        _is_running = False
+
+
 async def run_all() -> None:
-    """Run both fast and slow collectors sequentially. Used for on-demand triggers."""
+    """Run all tiers sequentially. Used for on-demand triggers."""
     await run_fast()
     await run_slow()
+    await run_daily()
 
 
 async def is_running() -> bool:
@@ -83,15 +130,21 @@ async def is_running() -> bool:
 async def scheduler_loop() -> None:
     """
     Background loop started at app startup.
-    Runs fast collection every FAST_INTERVAL, slow every SLOW_INTERVAL.
-    Also runs an initial fast collection on startup so the UI has data immediately.
+    Fast (inventory, reclamation, etc.) every 15 min.
+    Slow (anomaly, capacity trends) every 1 hour.
+    Daily (right-sizing — N AI calls per VM) every 24 hours.
     """
-    logger.info("Agent scheduler starting. Fast=%ds, Slow=%ds", FAST_INTERVAL, SLOW_INTERVAL)
+    logger.info(
+        "Agent scheduler starting. Fast=%ds, Slow=%ds, Daily=%ds",
+        FAST_INTERVAL, SLOW_INTERVAL, DAILY_INTERVAL,
+    )
 
-    # Initial fast run on startup
+    # Initial runs on startup so the UI has data immediately
     await run_fast()
+    await run_daily()
 
     slow_countdown    = SLOW_INTERVAL
+    daily_countdown   = DAILY_INTERVAL
     job_check_interval = 5 * 60       # check jobs every 5 minutes
     cleanup_interval   = 24 * 60 * 60 # run retention cleanup daily
     job_countdown     = job_check_interval
@@ -101,11 +154,15 @@ async def scheduler_loop() -> None:
         await asyncio.sleep(FAST_INTERVAL)
         await run_fast()
         slow_countdown    -= FAST_INTERVAL
+        daily_countdown   -= FAST_INTERVAL
         job_countdown     -= FAST_INTERVAL
         cleanup_countdown -= FAST_INTERVAL
         if slow_countdown <= 0:
             await run_slow()
             slow_countdown = SLOW_INTERVAL
+        if daily_countdown <= 0:
+            await run_daily()
+            daily_countdown = DAILY_INTERVAL
         if job_countdown <= 0:
             await _run_due_jobs()
             job_countdown = job_check_interval

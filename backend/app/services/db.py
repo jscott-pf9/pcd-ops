@@ -93,6 +93,22 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS deployments (
+                id           TEXT PRIMARY KEY,
+                app_name     TEXT NOT NULL,
+                profile_id   INTEGER,
+                tenant_name  TEXT NOT NULL,
+                network_name TEXT,
+                key_pair     TEXT,
+                extra_vars   TEXT NOT NULL DEFAULT '{}',
+                hcl          TEXT NOT NULL,
+                tf_state     TEXT,
+                outputs      TEXT NOT NULL DEFAULT '{}',
+                status       TEXT NOT NULL DEFAULT 'deploying',
+                error_msg    TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            );
         """)
 
 
@@ -364,3 +380,78 @@ def saved_config_update(config_id: int, name: str | None, content: dict | None) 
 def saved_config_delete(config_id: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM saved_configs WHERE id = ?", (config_id,))
+
+
+# ── Deployments ────────────────────────────────────────────────────────────────
+
+def deployment_create(app_name: str, profile_id: int | None, tenant_name: str,
+                      network_name: str, key_pair: str, hcl: str,
+                      extra_vars: dict | None = None) -> dict:
+    import uuid as _uuid
+    dep_id = str(_uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO deployments
+               (id, app_name, profile_id, tenant_name, network_name, key_pair,
+                extra_vars, hcl, status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,'deploying',?,?)""",
+            (dep_id, app_name, profile_id, tenant_name, network_name, key_pair,
+             json.dumps(extra_vars or {}), hcl, now, now),
+        )
+        row = conn.execute("SELECT * FROM deployments WHERE id = ?", (dep_id,)).fetchone()
+    return _dep_row(row)
+
+
+def deployment_list(profile_id: int | None = None) -> list[dict]:
+    with _connect() as conn:
+        if profile_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM deployments WHERE profile_id = ? ORDER BY created_at DESC", (profile_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM deployments ORDER BY created_at DESC"
+            ).fetchall()
+    return [_dep_row(r) for r in rows]
+
+
+def deployment_get(dep_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM deployments WHERE id = ?", (dep_id,)).fetchone()
+    return _dep_row(row) if row else None
+
+
+def deployment_update(dep_id: str, *, status: str | None = None,
+                      tf_state: str | None = None, outputs: dict | None = None,
+                      error_msg: str | None = None) -> dict | None:
+    now = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        if status is not None:
+            conn.execute("UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?",
+                         (status, now, dep_id))
+        if tf_state is not None:
+            conn.execute("UPDATE deployments SET tf_state = ?, updated_at = ? WHERE id = ?",
+                         (tf_state, now, dep_id))
+        if outputs is not None:
+            conn.execute("UPDATE deployments SET outputs = ?, updated_at = ? WHERE id = ?",
+                         (json.dumps(_sanitize(outputs)), now, dep_id))
+        if error_msg is not None:
+            conn.execute("UPDATE deployments SET error_msg = ?, updated_at = ? WHERE id = ?",
+                         (error_msg, now, dep_id))
+        row = conn.execute("SELECT * FROM deployments WHERE id = ?", (dep_id,)).fetchone()
+    return _dep_row(row) if row else None
+
+
+def deployment_delete(dep_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM deployments WHERE id = ?", (dep_id,))
+
+
+def _dep_row(row) -> dict:
+    if row is None:
+        return None
+    r = dict(row)
+    r["extra_vars"] = json.loads(r.get("extra_vars") or "{}")
+    r["outputs"]    = json.loads(r.get("outputs")    or "{}")
+    return r

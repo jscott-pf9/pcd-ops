@@ -8,6 +8,7 @@ router = APIRouter(prefix="/rightsizing", tags=["rightsizing"])
 
 @router.get("/recommendations")
 async def rightsizing_recommendations():
+    """Return VM right-sizing recommendations with CPU/memory usage metrics and AI-generated analysis."""
     data, _ = cache_get("rightsizing:recommendations")
     if data is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "rightsizing:recommendations"})

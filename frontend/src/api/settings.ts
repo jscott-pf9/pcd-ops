@@ -30,6 +30,14 @@ export interface AppSettings {
   smtp_from?: string;
   alert_email_to?: string;
   webhook_url?: string;
+  // AI feature toggles
+  ai_rightsizing_enabled?: boolean;
+  ai_anomaly_enabled?: boolean;
+  ai_logs_enabled?: boolean;
+  ai_capacity_enabled?: boolean;
+  // AI analysis schedules
+  ai_rightsizing_schedule?: string;
+  ai_anomaly_schedule?: string;
 }
 
 export const getSettings = () => apiFetch<AppSettings>("/settings");

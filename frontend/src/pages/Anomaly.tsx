@@ -153,7 +153,7 @@ export default function Anomaly() {
                 {showFull ? "▲ Hide" : "▼ Show full analysis"}
               </button>
               {showFull && (
-                <div style={{ padding: "0 14px 14px", fontSize: 13, color: "var(--gray-700)", lineHeight: 1.7 }}>
+                <div style={{ padding: "0 14px 14px", fontSize: 13, color: "var(--gray-700)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
                   {data.analysis}
                 </div>
               )}

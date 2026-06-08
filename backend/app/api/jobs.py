@@ -8,7 +8,7 @@ from app.services import db
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
-JOB_TYPES = ["snapshot-cleanup", "snapshot-create", "snapshot-rotate", "resource-reclamation", "capacity-report"]
+JOB_TYPES = ["snapshot-cleanup", "snapshot-create", "snapshot-rotate", "resource-reclamation", "capacity-report", "rightsizing-resize"]
 
 
 class JobCreate(BaseModel):
@@ -36,11 +36,13 @@ def _annotate_job(job: dict) -> dict:
 
 @router.get("/")
 async def list_jobs():
+    """List all scheduled jobs with computed next_run_at and is_due fields."""
     return [_annotate_job(j) for j in db.job_list()]
 
 
 @router.post("/", status_code=201)
 async def create_job(body: JobCreate):
+    """Create a scheduled job (snapshot-cleanup, snapshot-create, snapshot-rotate, resource-reclamation, capacity-report, rightsizing-resize)."""
     if body.type not in JOB_TYPES:
         raise HTTPException(400, detail=f"Invalid job type. Must be one of: {JOB_TYPES}")
     return _annotate_job(db.job_create(body.name, body.type, body.schedule, body.config))
@@ -48,6 +50,7 @@ async def create_job(body: JobCreate):
 
 @router.put("/{job_id}")
 async def update_job(job_id: int, body: JobUpdate):
+    """Update a job's name, schedule, config, or enabled state."""
     job = db.job_get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
@@ -59,11 +62,13 @@ async def update_job(job_id: int, body: JobUpdate):
 
 @router.delete("/{job_id}", status_code=204)
 async def delete_job(job_id: int):
+    """Delete a job and its run history."""
     db.job_delete(job_id)
 
 
 @router.post("/{job_id}/run")
 async def trigger_job(job_id: int):
+    """Trigger a job to run immediately, regardless of its schedule."""
     job = db.job_get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
@@ -73,6 +78,7 @@ async def trigger_job(job_id: int):
 
 @router.get("/{job_id}/runs")
 async def job_runs(job_id: int, limit: int = 20):
+    """Return run history for a specific job (most recent first)."""
     job = db.job_get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
@@ -98,6 +104,7 @@ async def purge_all_runs(older_than_days: int = 30):
 
 @router.get("/types")
 async def job_types():
+    """Return job type metadata including labels, descriptions, and config_schema for each type."""
     return {
         "snapshot-cleanup": {
             "label": "Snapshot Cleanup",
@@ -145,6 +152,14 @@ async def job_types():
             "config_schema": {
                 "tenant_id": {"type": "tenant_select", "default": "", "label": "Tenant (blank = all)"},
                 "email_to":  {"type": "string",        "default": "", "label": "Email report to"},
+            },
+        },
+        "rightsizing-resize": {
+            "label": "Right-Sizing Resize",
+            "description": "Resize over-provisioned and idle VMs to their AI-suggested smaller flavor.",
+            "config_schema": {
+                "tenant_id":  {"type": "tenant_select", "default": "",                           "label": "Tenant (blank = all)"},
+                "dry_run":    {"type": "boolean",       "default": True,                         "label": "Dry run"},
             },
         },
     }

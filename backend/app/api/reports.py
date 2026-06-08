@@ -7,6 +7,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 @router.get("/{report_id}")
 async def get_report(report_id: str):
+    """Get a capacity report by ID including per-tenant data and AI analysis."""
     data = db.report_get(report_id)
     if data is None:
         raise HTTPException(404, detail="Report not found")
@@ -15,6 +16,7 @@ async def get_report(report_id: str):
 
 @router.delete("/{report_id}", status_code=204)
 async def delete_report(report_id: str):
+    """Delete a capacity report."""
     db.delete_report(report_id)
 
 

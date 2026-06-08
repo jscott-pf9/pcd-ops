@@ -464,3 +464,8 @@ tbody tr:hover td { background: var(--gray-50); }
   .nav-item span:not(.nav-ico) { display: none; }
   .nav-item { justify-content: center; padding: 10px 0; }
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

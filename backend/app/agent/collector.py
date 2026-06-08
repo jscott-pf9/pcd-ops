@@ -9,6 +9,7 @@ OpenStack SDK calls are blocking, so they run via asyncio.to_thread().
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -37,7 +38,8 @@ async def collect_inventory() -> None:
     conn = get_connection()
 
     (servers, hypervisors, volumes, networks, tenants,
-     floating_ips, images, security_groups, ports) = await asyncio.gather(
+     floating_ips, images, security_groups, ports, flavors_raw, keypairs_raw,
+     aggregates) = await asyncio.gather(
         asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True))),
         asyncio.to_thread(lambda: list(conn.compute.hypervisors(details=True))),
         asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True))),
@@ -47,6 +49,9 @@ async def collect_inventory() -> None:
         asyncio.to_thread(lambda: list(conn.image.images())),
         asyncio.to_thread(lambda: list(conn.network.security_groups())),
         asyncio.to_thread(lambda: list(conn.network.ports(device_owner="compute:nova"))),
+        asyncio.to_thread(lambda: list(conn.compute.flavors())),
+        asyncio.to_thread(lambda: list(conn.compute.keypairs())),
+        asyncio.to_thread(lambda: list(conn.compute.aggregates())),
     )
 
     db.cache_set("inventory:servers", [
@@ -67,23 +72,116 @@ async def collect_inventory() -> None:
         for s in servers
     ])
 
-    db.cache_set("inventory:hypervisors", [
-        {
-            "id": h.id,
-            "hostname": h.name,
-            "state": h.state,
-            "status": h.status,
-            "host_ip": h.host_ip,
-            "vcpus_total": h.vcpus,
-            "vcpus_used": h.vcpus_used,
-            "memory_mb_total": h.memory_size,
-            "memory_mb_used": h.memory_used,
-            "disk_gb_total": h.local_disk_size,
-            "disk_gb_used": h.local_disk_used,
-            "running_vms": h.running_vms,
-        }
+    # ── Per-hypervisor usage derived from server allocations ──────────────────
+    # Nova API ≥ 2.88 removed vcpus/memory/running_vms from the hypervisor
+    # detail endpoint; compute them from server flavor data as a fallback.
+    from collections import defaultdict as _dd
+    _hyp_vms: dict[str, int]   = _dd(int)
+    _hyp_vcpus: dict[str, int] = _dd(int)
+    _hyp_mem: dict[str, int]   = _dd(int)
+    for s in servers:
+        host = getattr(s, "hypervisor_hostname", None)
+        if not host:
+            continue
+        _hyp_vms[host] += 1
+        fl = s.flavor or {}
+        _hyp_vcpus[host] += fl.get("vcpus") or 0
+        _hyp_mem[host] += fl.get("ram") or 0
+
+    # ── Fetch individual hypervisor details for cpu_info ──────────────────────
+    # cpu_info is only returned by GET /os-hypervisors/{id} (the show endpoint),
+    # not by GET /os-hypervisors/detail (the list endpoint).
+    _hyp_detail_raw = await asyncio.gather(*[
+        asyncio.to_thread(lambda hid=h.id: conn.compute.get_hypervisor(hid))
         for h in hypervisors
-    ])
+    ], return_exceptions=True)
+    _hyp_detail: dict[str, any] = {
+        h.id: d for h, d in zip(hypervisors, _hyp_detail_raw)
+        if not isinstance(d, Exception)
+    }
+
+    # ── SSH hardware collection (NICs + physical RAM) ──────────────────────────
+    from app.services.ssh import collect_host_hardware
+    from app.config import settings as _cfg
+    _ssh_user     = _cfg.hypervisor_ssh_user or "root"
+    _ssh_key      = _cfg.hypervisor_ssh_key_path or ""
+    _ssh_password = _cfg.hypervisor_ssh_password or ""
+    # Only attempt SSH when credentials are present; avoids false "unreachable"
+    # badges when SSH is simply not configured.
+    _ssh_configured = bool(_ssh_key or _ssh_password)
+
+    _up_hyps = [h for h in hypervisors if h.state == "up" and h.host_ip] if _ssh_configured else []
+    _hw_results = await asyncio.gather(*[
+        asyncio.to_thread(collect_host_hardware, h.host_ip, _ssh_user, _ssh_key, _ssh_password)
+        for h in _up_hyps
+    ], return_exceptions=True)
+    _hw_by_host: dict[str, dict] = {
+        h.name: (r if isinstance(r, dict) else {"connected": False, "nic_count": None, "ram_mb": None})
+        for h, r in zip(_up_hyps, _hw_results)
+    }
+    _ssh_attempted: set[str] = {h.name for h in _up_hyps}
+
+    # ── Parse cpu_info JSON ────────────────────────────────────────────────────
+    def _parse_cpu_info(h) -> dict:
+        # Prefer the individually-fetched detail which carries cpu_info
+        src = _hyp_detail.get(h.id, h)
+        raw = getattr(src, "cpu_info", None) or getattr(h, "cpu_info", None)
+        if not raw:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+
+    hyp_records = []
+    for h in hypervisors:
+        ci    = _parse_cpu_info(h)
+        topo  = ci.get("topology") or {}
+        sockets = topo.get("sockets")
+        cores   = topo.get("cores")
+        threads = topo.get("threads")
+        logical = (sockets * cores * threads) if (sockets and cores and threads) else None
+
+        hw              = _hw_by_host.get(h.name, {})
+        ssh_ok          = (hw.get("connected") if h.name in _ssh_attempted else None)
+        nic_count       = hw.get("nic_count")
+        ram_mb_ssh      = hw.get("ram_mb")
+        os_version      = hw.get("os_version")
+        pending_patches = hw.get("pending_patches")
+
+        hyp_records.append({
+            "id":               h.id,
+            "hostname":         h.name,
+            "state":            h.state,
+            "status":           h.status,
+            "host_ip":          h.host_ip,
+            # Physical specs
+            "cpu_vendor":       ci.get("vendor"),
+            "cpu_model":        ci.get("model"),
+            "cpu_arch":         ci.get("arch"),
+            "cpu_sockets":      sockets,
+            "cpu_cores":        cores,
+            "cpu_threads":      threads,
+            "cpu_logical":      logical,
+            # Nova 2.88+ removed memory_mb from API; fall back to SSH /proc/meminfo
+            "memory_mb_total":  h.memory_size or ram_mb_ssh or None,
+            "nic_count":        nic_count,
+            "ssh_ok":           ssh_ok,
+            "os_version":       os_version,
+            "pending_patches":  pending_patches,
+            "hypervisor_type":  getattr(h, "hypervisor_type", None),
+            "hypervisor_version": getattr(h, "hypervisor_version", None),
+            # Utilisation (Nova 2.88+ may omit; derived from server data as fallback)
+            "vcpus_total":      h.vcpus or logical or None,
+            "vcpus_used":       h.vcpus_used if h.vcpus_used is not None else _hyp_vcpus.get(h.name),
+            "memory_mb_used":   h.memory_used if h.memory_used is not None else _hyp_mem.get(h.name),
+            "disk_gb_total":    h.local_disk_size or None,
+            "disk_gb_used":     h.local_disk_used or None,
+            "running_vms":      h.running_vms if h.running_vms is not None else _hyp_vms.get(h.name, 0),
+        })
+    db.cache_set("inventory:hypervisors", hyp_records)
 
     db.cache_set("inventory:volumes", [
         {
@@ -189,6 +287,29 @@ async def collect_inventory() -> None:
         })
     db.cache_set("inventory:security_groups", sg_list)
 
+    db.cache_set("inventory:flavors", sorted([
+        {"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram, "disk_gb": f.disk or 0}
+        for f in flavors_raw
+    ], key=lambda f: (f["vcpus"], f["ram_mb"])))
+
+    db.cache_set("inventory:keypairs", sorted([
+        {"name": kp.name, "fingerprint": kp.fingerprint or "", "type": getattr(kp, "type", "ssh") or "ssh"}
+        for kp in keypairs_raw
+    ], key=lambda k: k["name"]))
+
+    db.cache_set("inventory:clusters", sorted([
+        {
+            "id":                agg.id,
+            "name":              agg.name,
+            "availability_zone": agg.availability_zone,
+            "hosts":             list(agg.hosts or []),
+            "metadata":          {k: v for k, v in (agg.metadata or {}).items() if k != "availability_zone"},
+            "created_at":        agg.created_at,
+            "updated_at":        agg.updated_at,
+        }
+        for agg in aggregates
+    ], key=lambda a: a["name"]))
+
     active = sum(1 for s in servers if s.status == "ACTIVE")
     vcpus_used = sum(h.vcpus_used or 0 for h in hypervisors)
     vcpus_total = sum(h.vcpus or 0 for h in hypervisors)
@@ -201,6 +322,7 @@ async def collect_inventory() -> None:
         "hypervisors": {"total": len(hypervisors)},
         "volumes": {"total": len(volumes), "total_tb": round(volume_tb, 2)},
         "networks": {"total": len(networks)},
+        "clusters": {"total": len(aggregates)},
         "vcpus": {"used": vcpus_used, "total": vcpus_total},
         "memory_gb": {"used": mem_used_gb, "total": mem_total_gb},
     })
@@ -736,7 +858,7 @@ async def collect_rightsizing() -> None:
             classification = "right-sized"
             risk = "low"
 
-        # AI insight for all VMs that have metrics
+        # AI insight only for VMs that need attention — skip right-sized to save GPU
         _prompts = {
             "memory-pressure":  ("RAM is critically high. Identify the likely cause (memory leak, insufficient "
                                  "allocation, or genuine growth) and recommend the most urgent action."),
@@ -744,13 +866,13 @@ async def collect_rightsizing() -> None:
                                  "causes this and recommend whether to upsize or optimise the workload first."),
             "overprovisioned":  ("Both CPU and RAM are very lightly used. Assess whether this is a steady-state "
                                  "workload or seasonal, and recommend a specific smaller flavor if appropriate."),
-            "right-sized":      ("Resources are balanced. Note any usage trends worth watching and confirm whether "
-                                 "the current flavor is a good long-term fit given the workload pattern."),
             "idle":             ("The VM shows near-zero activity. Determine whether it's a cold-standby, "
                                  "misconfigured, or genuinely unused, and recommend the appropriate action."),
+            # "right-sized" intentionally omitted — no action needed, saves GPU
         }
         analysis = None
-        if classification in _prompts:
+        from app.config import settings as _settings
+        if classification in _prompts and getattr(_settings, "ai_rightsizing_enabled", True):
             try:
                 analysis = _clean_analysis(await ai.analyze(
                     f"Right-sizing analysis for this PCD VM — 2 plain sentences. {_prompts[classification]} "
@@ -826,10 +948,16 @@ def _parse_findings(text: str) -> list[dict]:
     """Extract structured findings from AI analysis text."""
     import re
     findings = []
-    # Match lines like: "- VM: ..., Metric: ..., Severity: high, Description: ..."
-    # or numbered lists with severity keywords
     severity_pattern = re.compile(r'\b(critical|high|medium|low)\b', re.IGNORECASE)
-    vm_pattern       = re.compile(r'\b(instance-[0-9a-f]+|vm-[\w-]+|[\w-]+-\d+)\b')
+    vm_pattern = re.compile(
+        r'\b('
+        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        r'|instance-[\w-]+'
+        r'|vm-[\w-]+'
+        r'|[\w][\w-]*-\d+'
+        r')\b',
+        re.IGNORECASE,
+    )
 
     for line in text.split('\n'):
         line = line.strip().lstrip('•-*0123456789. ')
@@ -847,6 +975,10 @@ def _parse_findings(text: str) -> list[dict]:
 
 
 async def collect_anomaly() -> None:
+    from app.config import settings as _settings
+    if not getattr(_settings, "ai_anomaly_enabled", True):
+        logger.info("Anomaly AI analysis disabled — skipping.")
+        return
     logger.info("Collecting anomaly analysis (AI)…")
     ai = get_ai_provider()
     from app.services.notifications import send_alert
@@ -875,6 +1007,16 @@ async def collect_anomaly() -> None:
                 domain_maxes[d] = max(vals)
         metric_data[name] = domain_maxes
 
+    # Replace UUID domain keys with VM names so the AI outputs human-readable names
+    server_list, _ = db.cache_get("inventory:servers")
+    uuid_to_name = {s["id"]: s["name"] for s in (server_list or [])}
+    for metric_name in list(metric_data.keys()):
+        if isinstance(metric_data[metric_name], dict):
+            metric_data[metric_name] = {
+                uuid_to_name.get(d, d): v
+                for d, v in metric_data[metric_name].items()
+            }
+
     analysis = _clean_analysis(await ai.analyze(
         f"You are analyzing {LOOKBACK_HOURS}-hour PCD cluster metrics. "
         "Identify anomalies, unusual spikes, or concerning patterns. "
@@ -885,6 +1027,17 @@ async def collect_anomaly() -> None:
     ))
 
     findings = _parse_findings(analysis or "")
+
+    # Belt-and-suspenders: replace any UUID that slipped through in the instance field
+    import re as _re
+    _uuid_re = _re.compile(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+        _re.IGNORECASE,
+    )
+    for f in findings:
+        if f.get("instance") and _uuid_re.match(f["instance"]):
+            f["instance"] = uuid_to_name.get(f["instance"], f["instance"])
+
     high_sev = [f for f in findings if f["severity"] in ("high", "critical")]
 
     # Alert if high-severity findings and notifications are configured

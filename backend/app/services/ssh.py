@@ -66,20 +66,89 @@ def _service_from_path(path: str) -> str:
     return _SERVICE_LABELS.get(name, name[:20])
 
 
+def _ssh_client(host: str, user: str, key_path: str, password: str) -> paramiko.SSHClient:
+    """Open and return a connected SSHClient. Caller is responsible for close()."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    kwargs: dict = {"username": user, "timeout": 10}
+    if key_path and os.path.exists(os.path.expanduser(key_path)):
+        kwargs["key_filename"] = os.path.expanduser(key_path)
+    elif password:
+        kwargs["password"] = password
+    client.connect(host, **kwargs)
+    return client
+
+
+def collect_host_hardware(host: str, user: str, key_path: str, password: str) -> dict:
+    """Collect physical hardware facts over one SSH connection.
+
+    Returns::
+        {
+            "connected":      bool,
+            "nic_count":      int | None,
+            "ram_mb":         int | None,
+            "os_version":     str | None,  # e.g. "Ubuntu 22.04.3 LTS"
+            "pending_patches": int | None, # packages awaiting upgrade
+        }
+    """
+    result: dict = {
+        "connected": False, "nic_count": None, "ram_mb": None,
+        "os_version": None, "pending_patches": None,
+    }
+    client = None
+    try:
+        client = _ssh_client(host, user, key_path, password)
+        result["connected"] = True
+
+        # Physical NICs only: /sys/class/net/<iface>/device exists only for real hardware
+        _, stdout, _ = client.exec_command(
+            "find /sys/class/net/*/device -maxdepth 0 2>/dev/null | wc -l", timeout=10
+        )
+        out = stdout.read().decode("utf-8", errors="replace").strip()
+        if out.isdigit():
+            result["nic_count"] = int(out)
+
+        # Physical RAM: MemTotal from /proc/meminfo (kB → MB)
+        _, stdout, _ = client.exec_command(
+            "awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null", timeout=10
+        )
+        out = stdout.read().decode("utf-8", errors="replace").strip()
+        if out.isdigit():
+            result["ram_mb"] = int(out) // 1024
+
+        # OS version from /etc/os-release (works on Ubuntu + RHEL/Rocky)
+        _, stdout, _ = client.exec_command(
+            "awk -F= '/^PRETTY_NAME/{gsub(/\"/,\"\"); print $2}' /etc/os-release 2>/dev/null",
+            timeout=10,
+        )
+        out = stdout.read().decode("utf-8", errors="replace").strip()
+        if out:
+            result["os_version"] = out
+
+        # Pending patches: try apt first, fall back to dnf/yum
+        _, stdout, _ = client.exec_command(
+            "apt list --upgradable 2>/dev/null | tail -n +2 | wc -l || "
+            "dnf check-update -q 2>/dev/null | grep -cE '^[a-zA-Z0-9_-]+\\.' || echo 0",
+            timeout=30,
+        )
+        out = stdout.read().decode("utf-8", errors="replace").strip()
+        if out.isdigit():
+            result["pending_patches"] = int(out)
+
+    except Exception as e:
+        logger.warning("Hardware collection on %s failed: %s", host, e)
+    finally:
+        if client:
+            client.close()
+    return result
+
+
 def collect_host_logs(host: str, user: str, key_path: str, password: str) -> list[dict]:
     """SSH to host, tail each log file, return structured entries."""
     entries = []
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    connect_kwargs: dict = {"username": user, "timeout": 10}
-    if key_path and os.path.exists(os.path.expanduser(key_path)):
-        connect_kwargs["key_filename"] = os.path.expanduser(key_path)
-    elif password:
-        connect_kwargs["password"] = password
-
+    client = None
     try:
-        client.connect(host, **connect_kwargs)
+        client = _ssh_client(host, user, key_path, password)
         for path, n_lines in LOG_PATHS:
             try:
                 _, stdout, _ = client.exec_command(
@@ -101,6 +170,7 @@ def collect_host_logs(host: str, user: str, key_path: str, password: str) -> lis
     except Exception as e:
         logger.warning("SSH to %s failed: %s", host, e)
     finally:
-        client.close()
+        if client:
+            client.close()
 
     return entries

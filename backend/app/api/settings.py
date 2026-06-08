@@ -24,10 +24,19 @@ class SettingsPayload(BaseModel):
     ai_url: str = ""
     ai_model: str = ""
     ai_api_key: str = ""
+    # AI feature toggles
+    ai_rightsizing_enabled: bool = True
+    ai_anomaly_enabled: bool = True
+    ai_logs_enabled: bool = True
+    ai_capacity_enabled: bool = True
+    # AI analysis schedules
+    ai_rightsizing_schedule: str = "daily@02:00"
+    ai_anomaly_schedule: str = "hourly"
 
 
 @router.get("/settings")
 async def get_settings():
+    """Return all runtime settings; password, token, and API key fields are masked with '***'."""
     def mask(field: str) -> str:
         val = getattr(settings, field, "")
         return "***" if val else ""
@@ -47,11 +56,18 @@ async def get_settings():
         "ai_url": settings.ai_url,
         "ai_model": settings.ai_model,
         "ai_api_key": mask("ai_api_key"),
+        "ai_rightsizing_enabled":  getattr(settings, "ai_rightsizing_enabled", True),
+        "ai_anomaly_enabled":      getattr(settings, "ai_anomaly_enabled", True),
+        "ai_logs_enabled":         getattr(settings, "ai_logs_enabled", True),
+        "ai_capacity_enabled":     getattr(settings, "ai_capacity_enabled", True),
+        "ai_rightsizing_schedule": getattr(settings, "ai_rightsizing_schedule", "daily@02:00"),
+        "ai_anomaly_schedule":     getattr(settings, "ai_anomaly_schedule", "hourly"),
     }
 
 
 @router.put("/settings")
 async def update_settings(payload: SettingsPayload):
+    """Update runtime settings; fields with value '***' or '' for secrets are preserved from the current config."""
     stored = settings_store.load()
     incoming = payload.model_dump()
 
@@ -59,7 +75,10 @@ async def update_settings(payload: SettingsPayload):
         # Skip masked sentinel — keep whatever is already stored/in-memory
         if key in _SECRETS and value in ("***", ""):
             continue
-        if value != "":
+        # Booleans are always saved (False is a valid value, not "blank")
+        if isinstance(value, bool):
+            stored[key] = value
+        elif value != "":
             stored[key] = value
         elif key not in _SECRETS:
             # Allow blanking non-secret fields

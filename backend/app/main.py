@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, anomaly, capacity, generate, inventory, jobs, logs, reclamation, reports, rightsizing, settings, snapshots, system
+from app.api import agent, anomaly, capacity, deployments, generate, inventory, jobs, logs, reclamation, reports, rightsizing, settings, snapshots, system
 from app.services.db import init_db
 
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +48,7 @@ for router in (
     jobs.router,
     reports.router,
     generate.router,
+    deployments.router,
 ):
     app.include_router(router, prefix="/api")
 

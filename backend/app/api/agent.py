@@ -10,6 +10,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 @router.get("/status")
 async def status():
+    """Return agent runner status, domain cache metadata, and recent runs."""
     return {
         "is_running": runner._is_running,
         "domains": db.cache_meta(),
@@ -19,9 +20,10 @@ async def status():
 
 @router.post("/trigger")
 async def trigger(slow: bool = False):
-    """
-    Trigger an on-demand collection run.
-    ?slow=true also runs the AI-powered collectors (right-sizing, anomaly).
+    """Trigger an on-demand collection run.
+
+    ?slow=true runs all tiers including AI collectors (anomaly, capacity trends, right-sizing).
+    Default (slow=false) runs only fast collectors (inventory, snapshots, logs, reclamation).
     """
     if runner._is_running:
         return {"triggered": False, "reason": "already running"}
@@ -34,4 +36,5 @@ async def trigger(slow: bool = False):
 
 @router.get("/runs")
 async def runs(limit: int = 50):
+    """Return recent agent run history (most recent first)."""
     return db.get_runs(limit)

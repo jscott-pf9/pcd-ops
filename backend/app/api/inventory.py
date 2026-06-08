@@ -16,21 +16,25 @@ def _require(key: str):
 
 @router.get("/servers")
 async def list_servers():
+    """Return all compute instances with status, flavor, hypervisor, and project info."""
     return _require("inventory:servers")
 
 
 @router.get("/hypervisors")
 async def list_hypervisors():
+    """Return all hypervisors with CPU/RAM/disk capacity and current utilization."""
     return _require("inventory:hypervisors")
 
 
 @router.get("/volumes")
 async def list_volumes():
+    """Return all Cinder volumes with size, status, and attachment info."""
     return _require("inventory:volumes")
 
 
 @router.get("/networks")
 async def list_networks():
+    """Return all Neutron networks with external/shared flags and project ownership."""
     return _require("inventory:networks")
 
 
@@ -38,26 +42,31 @@ _HIDDEN_TENANTS = {"admin", "service"}
 
 @router.get("/tenants")
 async def list_tenants():
+    """Return all projects/tenants (admin and service tenants excluded)."""
     return [t for t in _require("inventory:tenants") if t.get("name", "").lower() not in _HIDDEN_TENANTS]
 
 
 @router.get("/summary")
 async def summary():
+    """Return an inventory summary: server counts, volume sizes, floating IP usage, and image count."""
     return _require("inventory:summary")
 
 
 @router.get("/floating_ips")
 async def list_floating_ips():
+    """Return all floating IPs with association status and project info."""
     return _require("inventory:floating_ips")
 
 
 @router.get("/images")
 async def list_images():
+    """Return all Glance images with visibility, size, and disk format."""
     return _require("inventory:images")
 
 
 @router.get("/security_groups")
 async def list_security_groups():
+    """Return all security groups with their rules."""
     return _require("inventory:security_groups")
 
 
@@ -102,3 +111,16 @@ async def topology():
             edges.append({"id": f"e:vm:{s['id']}->net:{net_id}", "source": f"vm:{s['id']}", "target": f"net:{net_id}", "type": "network"})
 
     return {"nodes": nodes, "edges": edges}
+
+
+@router.get("/clusters")
+async def list_clusters():
+    """Return PCD cluster names and metadata."""
+    return _require("inventory:clusters")
+
+
+@router.get("/keypairs")
+async def list_keypairs():
+    """Return all SSH key pairs registered in Nova."""
+    data, _ = cache_get("inventory:keypairs")
+    return data or []

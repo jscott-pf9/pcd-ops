@@ -41,8 +41,11 @@ interface JobTypeSchema {
 
 const TYPE_ICONS: Record<string, string> = {
   "snapshot-cleanup":     "📸",
+  "snapshot-create":      "🗂️",
+  "snapshot-rotate":      "🔄",
   "resource-reclamation": "♻️",
   "capacity-report":      "📊",
+  "rightsizing-resize":   "⚡",
 };
 
 const INTERVALS = ["", "hourly", "daily", "weekly", "monthly"] as const;
