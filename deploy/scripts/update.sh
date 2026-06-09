@@ -17,7 +17,12 @@ npm ci --prefer-offline -q
 npm run build
 
 echo "=== Restarting service ==="
-# sudo is allowed via /etc/sudoers.d/pcd-ops (set up during provisioning)
-sudo systemctl restart pcd-ops
+# sudo is allowed via /etc/sudoers.d/pcd-ops (set up during provisioning).
+# Detect init system: OpenRC on Alpine, systemd on Ubuntu/Debian.
+if command -v rc-service >/dev/null 2>&1; then
+  sudo rc-service pcd-ops restart
+else
+  sudo systemctl restart pcd-ops
+fi
 
 echo "=== Done ==="

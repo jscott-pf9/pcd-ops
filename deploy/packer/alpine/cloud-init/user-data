@@ -1,0 +1,21 @@
+#cloud-config
+# Temporary credentials used only during the Packer image build.
+# provision-alpine.sh locks this password at the end.
+
+# Install sudo before Packer's SSH provisioner runs.
+# Alpine's minimal cloud image does not ship with sudo pre-installed.
+packages:
+  - sudo
+  - bash
+
+ssh_pwauth: true
+chpasswd:
+  list: |
+    alpine:packer-build-temp
+  expire: false
+users:
+  - name: alpine
+    groups: [wheel]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/ash
+    lock_passwd: false

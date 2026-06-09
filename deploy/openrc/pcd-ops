@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+
+description="PCD Ops backend (uvicorn)"
+
+command="/opt/pcd-ops/deploy/openrc/run-uvicorn.sh"
+command_user="pcd-ops"
+command_background=true
+pidfile="/run/pcd-ops.pid"
+output_log="/var/log/pcd-ops/uvicorn.log"
+error_log="/var/log/pcd-ops/uvicorn.log"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  checkpath --directory --owner pcd-ops:pcd-ops --mode 0755 /var/log/pcd-ops
+}
