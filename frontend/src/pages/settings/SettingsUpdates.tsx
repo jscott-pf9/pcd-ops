@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { checkForUpdate, getUpdateLog, getVersion, triggerUpdate, type UpdateCheck, type VersionInfo } from "../../api/system";
+import { checkForUpdate, getUpdateLog, getVersion, rebootAppliance, restartService, triggerUpdate, type UpdateCheck, type VersionInfo } from "../../api/system";
 import { apiFetch } from "../../api/client";
 import { useSettings } from "./useSettings";
 import { Fieldset, SaveRow } from "./SettingsConnection";
@@ -105,9 +105,92 @@ export default function SettingsUpdates() {
         )}
       </div>
 
+      {/* ── Appliance Controls ── */}
+      <ApplianceControls />
+
       {/* ── Data Retention ── */}
       <DataRetentionSection />
     </div>
+  );
+}
+
+function ApplianceControls() {
+  const [restartPhase, setRestartPhase] = useState<"idle" | "restarting" | "done" | "error">("idle");
+  const [rebootConfirm, setRebootConfirm] = useState(false);
+  const [rebooting, setRebooting]         = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function handleRestart() {
+    setRestartPhase("restarting");
+    try {
+      await restartService();
+    } catch {
+      setRestartPhase("error");
+      return;
+    }
+    // Poll until the service comes back
+    await new Promise<void>(r => setTimeout(r, 3000));
+    pollRef.current = setInterval(async () => {
+      try {
+        if ((await fetch("/api/health")).ok) {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setRestartPhase("done");
+          setTimeout(() => setRestartPhase("idle"), 3000);
+        }
+      } catch (_) {}
+    }, 1500);
+  }
+
+  async function handleReboot() {
+    setRebooting(true);
+    setRebootConfirm(false);
+    try { await rebootAppliance(); } catch (_) {}
+    // The VM will go offline; nothing more to poll
+  }
+
+  return (
+    <Fieldset title="Appliance Controls">
+      <p style={{ fontSize: 12, color: "var(--gray-600)", marginBottom: 12 }}>
+        Restart the app service without updating code, or reboot the entire VM.
+      </p>
+
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: 8 }}>
+        {/* Restart App */}
+        <button
+          className="btn btn-secondary"
+          disabled={restartPhase === "restarting"}
+          onClick={handleRestart}
+        >
+          {restartPhase === "restarting" ? "Restarting…" : "Restart App"}
+        </button>
+        {restartPhase === "done"  && <span className="text-success" style={{ fontSize: 13 }}>Service restarted</span>}
+        {restartPhase === "error" && <span className="text-danger"  style={{ fontSize: 13 }}>Restart failed</span>}
+      </div>
+
+      {/* Reboot Appliance — two-step confirm */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+        {!rebootConfirm && !rebooting && (
+          <button className="btn btn-secondary" onClick={() => setRebootConfirm(true)}>
+            Reboot Appliance
+          </button>
+        )}
+        {rebootConfirm && (
+          <>
+            <span style={{ fontSize: 13, color: "var(--gray-700)" }}>
+              This will reboot the VM. The page will be unreachable for ~30s.
+            </span>
+            <button className="btn btn-danger" onClick={handleReboot}>Confirm Reboot</button>
+            <button className="btn btn-secondary" onClick={() => setRebootConfirm(false)}>Cancel</button>
+          </>
+        )}
+        {rebooting && (
+          <span style={{ fontSize: 13, color: "var(--gray-500)" }}>
+            Rebooting… reload the page in ~30 seconds.
+          </span>
+        )}
+      </div>
+    </Fieldset>
   );
 }
 

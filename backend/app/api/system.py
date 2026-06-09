@@ -119,6 +119,26 @@ async def check_connections():
     return result
 
 
+@router.post("/restart")
+async def restart_service():
+    """Restart the pcd-ops backend service without updating code."""
+    if Path("/sbin/rc-service").exists():
+        cmd = ["sudo", "/sbin/rc-service", "pcd-ops", "restart"]
+    else:
+        cmd = ["sudo", "systemctl", "restart", "pcd-ops"]
+    subprocess.Popen(cmd, start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"status": "restarting"}
+
+
+@router.post("/reboot")
+async def reboot_appliance():
+    """Reboot the appliance VM (response returns before the reboot completes)."""
+    subprocess.Popen(["sudo", "/sbin/reboot"], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"status": "rebooting"}
+
+
 @router.post("/update")
 async def trigger_update():
     """Trigger a self-update: runs deploy/scripts/update.sh detached (git pull + pip install + npm build + service restart)."""

@@ -20,3 +20,9 @@ export const triggerUpdate = () =>
   apiFetch<{ status: string }>("/system/update", { method: "POST" });
 
 export const getUpdateLog = () => apiFetch<{ log: string }>("/system/update/log");
+
+export const restartService = () =>
+  apiFetch<{ status: string }>("/system/restart", { method: "POST" });
+
+export const rebootAppliance = () =>
+  apiFetch<{ status: string }>("/system/reboot", { method: "POST" });
