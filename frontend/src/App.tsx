@@ -72,7 +72,6 @@ const NAV_SECTIONS: NavSection[] = [
       { path: "/rightsizing", label: "Right-Sizing",    icon: Sliders   },
       { path: "/snapshots",   label: "Snapshots",       icon: Camera    },
       { path: "/jobs",        label: "Automation",      icon: Briefcase },
-      { path: "/deployments", label: "Deployments",     icon: Rocket    },
     ],
   },
   {
@@ -85,8 +84,9 @@ const NAV_SECTIONS: NavSection[] = [
   {
     id: "tools", label: "Orchestration", icon: Code2,
     items: [
-      { path: "/generate", label: "App Builder", icon: Layers   },
-      { path: "/catalog",  label: "App Catalog", icon: BookOpen },
+      { path: "/generate",     label: "App Builder",     icon: Layers   },
+      { path: "/catalog",      label: "App Catalog",     icon: BookOpen },
+      { path: "/deployments",  label: "App Deployments", icon: Rocket   },
     ],
   },
   {
