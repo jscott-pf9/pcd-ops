@@ -109,17 +109,17 @@ Key metric families confirmed live in this environment:
 `services/ai/base.py` defines the `AIProvider` ABC. Implementations live in `services/ai/`. The active provider is resolved at startup from the `AI_BACKEND` env var and injected via `dependencies.py`. When adding a new provider: subclass `AIProvider`, register it in `dependencies.py`.
 
 ### Deployment (`deploy/`)
-Production runs on a dedicated VM (no Docker). The image is a qcow2 built with Packer, uploaded to Glance, then deployed via Terraform or `deploy.sh`.
+Production runs as a dedicated Alpine Linux appliance VM. The image is a qcow2 built with Packer, uploaded to PCD via `pcdctl`, and deployed via Terraform or the PCD UI.
 
-**Build image:** `deploy/build-image.sh` — runs Packer (`deploy/packer/pcd-ops.pkr.hcl`) to produce `deploy/packer/output/pcd-ops.qcow2`. Provisions nginx + systemd + Python venv + built frontend into the image.
+**Build image:** `deploy/build-image.sh` — runs Packer (`deploy/packer/alpine/pcd-ops-alpine.pkr.hcl`) to produce `deploy/packer/alpine/output/pcd-ops-alpine.qcow2`. Provisions nginx + OpenRC + Python venv + built frontend into the image.
 
-**Deploy VM:** `cd deploy/terraform && ./deploy.sh` (Terraform) or `deploy/deploy.sh` (OpenStack CLI). Boots from the `pcd-ops` Glance image. Cloud-init writes an empty `.env`; operator fills in credentials via the Settings page.
+**Deploy VM:** `cd deploy/terraform && ./deploy.sh` (Terraform) or launch from PCD UI after uploading the image with `pcdctl image create`. Cloud-init writes an empty `.env`; operator fills in credentials via the Settings page.
 
 **Runtime on VM:**
 - nginx on port 80 — serves `frontend/dist/` and proxies `/api/` to uvicorn
-- systemd unit `pcd-ops` — uvicorn on `127.0.0.1:8000`
-- `.env` at `/opt/pcd-ops/.env`, loaded by the systemd `EnvironmentFile`
+- OpenRC service `pcd-ops` — uvicorn on `127.0.0.1:8000`
+- `.env` at `/opt/pcd-ops/.env`, sourced by `deploy/openrc/run-uvicorn.sh`
 
-**Self-update:** Settings → Software → "Check for Updates" / "Update & Restart". Backend calls `deploy/scripts/update.sh` (`git pull` + `pip install` + `npm build` + `systemctl restart`). The script runs detached so it survives the service restart.
+**Self-update:** Settings → Software → "Check for Updates" / "Update & Restart". Backend calls `deploy/scripts/update.sh` (`git pull` + `pip install` + `npm build` + service restart). The script runs detached so it survives the service restart.
 
 **Appliance management principle:** The Alpine image does **not** run sshd. All VM-level operations (restart service, force update, view logs, network info, emergency shell, reboot, shutdown) are accessible through the TUI console at `deploy/scripts/appliance-console.sh`, which runs on tty1 in place of the standard getty. When adding any operation that would previously require SSH, add it to the TUI instead — either in the main menu or under Advanced Options.

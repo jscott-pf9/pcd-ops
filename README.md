@@ -78,7 +78,7 @@ apt install qemu-system-x86 qemu-utils
 git clone https://github.com/jscott-pf9/pcd-ops.git
 cd pcd-ops
 
-./deploy/build-image-alpine.sh
+./deploy/build-image.sh
 # Output: deploy/packer/alpine/output/pcd-ops-alpine.qcow2
 # Build time: ~5 minutes with KVM acceleration
 ```

@@ -1,34 +1,30 @@
 #!/usr/bin/env bash
-# Build the pcd-ops qcow2 image using Packer + QEMU.
-# Output: deploy/packer/output/pcd-ops.qcow2
+# Build the pcd-ops appliance qcow2 image using Packer + QEMU (Alpine Linux).
+# Output: deploy/packer/alpine/output/pcd-ops-alpine.qcow2
 #
 # Prerequisites:
 #   apt install qemu-system-x86 qemu-utils   (or equivalent)
-#   packer init deploy/packer/
+#   packer >= 1.6 (QEMU builder is built-in)
 #
 # Usage:
 #   ./deploy/build-image.sh
-#   ./deploy/build-image.sh -var github_repo=git@github.com:your-org/pcd-ops.git
+#   ./deploy/build-image.sh -var github_repo=git@github.com:jscott-pf9/pcd-ops.git
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PACKER_DIR="$SCRIPT_DIR/packer"
+PACKER_DIR="$SCRIPT_DIR/packer/alpine"
 
 cd "$PACKER_DIR"
 
-if [[ ! -d ".packer.d" ]] && ! packer plugins installed 2>/dev/null | grep -q qemu; then
-  echo "Initialising Packer plugins..."
-  packer init .
-fi
+echo "Building pcd-ops-alpine.qcow2 ..."
+packer build "$@" pcd-ops-alpine.pkr.hcl
 
-echo "Building pcd-ops.qcow2 ..."
-packer build "$@" pcd-ops.pkr.hcl
-
-OUTPUT="$PACKER_DIR/output/pcd-ops.qcow2"
+OUTPUT="$PACKER_DIR/output/pcd-ops-alpine.qcow2"
 echo ""
 echo "Image built: $OUTPUT"
 echo ""
-echo "Upload to Glance:"
-echo "  openstack image create pcd-ops \\"
-echo "    --disk-format qcow2 --container-format bare \\"
-echo "    --file $OUTPUT"
+echo "Upload to PCD:"
+echo "  pcdctl image create --insecure \\"
+echo "    --container-format bare --disk-format qcow2 \\"
+echo "    --property os_type=Linux --public \\"
+echo "    --file $OUTPUT pcd-ops"
