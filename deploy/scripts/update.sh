@@ -16,7 +16,16 @@ cd "$APP_DIR/frontend"
 npm ci --prefer-offline -q
 npm run build
 
-echo "=== Restarting service ==="
+echo "=== Reloading nginx config ==="
+# Apply any nginx config changes from the updated repo (e.g. new cache headers).
+# -s reload is a graceful reload — no dropped connections.
+if command -v rc-service >/dev/null 2>&1; then
+  sudo nginx -s reload 2>/dev/null || true
+else
+  sudo nginx -s reload 2>/dev/null || true
+fi
+
+echo "=== Restarting backend service ==="
 # sudo is allowed via /etc/sudoers.d/pcd-ops (set up during provisioning).
 # Detect init system: OpenRC on Alpine, systemd on Ubuntu/Debian.
 if command -v rc-service >/dev/null 2>&1; then

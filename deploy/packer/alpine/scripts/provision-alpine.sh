@@ -56,7 +56,8 @@ rc-update add nginx default
 
 echo "=== Configuring sudo for self-update ==="
 chmod +x "$APP_DIR/deploy/scripts/update.sh"
-echo "pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops restart" > /etc/sudoers.d/pcd-ops
+printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops restart\n' > /etc/sudoers.d/pcd-ops
+printf 'pcd-ops ALL=(ALL) NOPASSWD: /usr/sbin/nginx -s reload\n' >> /etc/sudoers.d/pcd-ops
 chmod 440 /etc/sudoers.d/pcd-ops
 
 echo "=== Writing empty .env template ==="
