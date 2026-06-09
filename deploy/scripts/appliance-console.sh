@@ -105,6 +105,7 @@ draw_advanced() {
   printf "  ${W}│${N}            ADVANCED OPTIONS                   ${W}│${N}\n"
   printf "  ${W}+────────────────────────────────────────────────+${N}\n"
   printf "  ${W}│${N}  ${Y}[U]${N}  Force app update (git pull + rebuild)  ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[P]${N}  Patch OS (apk update + upgrade)        ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[L]${N}  View app logs                          ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[N]${N}  Network info                           ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[X]${N}  Emergency shell                        ${W}│${N}\n"
@@ -128,6 +129,22 @@ do_force_update() {
     printf "\n  ${G}Update completed successfully.${N}\n"
   else
     printf "\n  ${R}Update failed — check output above for errors.${N}\n"
+  fi
+
+  press_any_key
+}
+
+do_patch_os() {
+  printf "${CLS}"
+  printf "\n  ${W}Patch Alpine Linux${N}\n"
+  printf "  ${D}Running: apk update && apk upgrade${N}\n"
+  printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
+
+  apk update && apk upgrade
+  if [ $? -eq 0 ]; then
+    printf "\n  ${G}OS patch complete.${N}\n"
+  else
+    printf "\n  ${R}OS patch failed — check output above for errors.${N}\n"
   fi
 
   press_any_key
@@ -177,6 +194,7 @@ advanced_menu() {
     KEY=$(read_key)
     case "$KEY" in
       u) do_force_update ;;
+      p) do_patch_os ;;
       l) do_view_logs ;;
       n) do_network_info ;;
       x) do_emergency_shell ;;
