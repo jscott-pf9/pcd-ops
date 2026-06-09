@@ -3,6 +3,12 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.services import settings_store
+from app.services.openstack import reset_connection
+
+_OS_FIELDS = {
+    "os_auth_url", "os_username", "os_password",
+    "os_project_name", "os_user_domain_name", "os_project_domain_name", "os_region_name",
+}
 
 router = APIRouter()
 
@@ -86,8 +92,14 @@ async def update_settings(payload: SettingsPayload):
 
     settings_store.save(stored)
 
+    os_changed = False
     for key, value in stored.items():
         if hasattr(settings, key):
+            if key in _OS_FIELDS and getattr(settings, key) != value:
+                os_changed = True
             setattr(settings, key, value)
+
+    if os_changed:
+        reset_connection()
 
     return {"status": "saved"}

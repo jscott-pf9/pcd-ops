@@ -5,6 +5,17 @@ from app.config import settings
 _conn: openstack.connection.Connection | None = None
 
 
+def reset_connection() -> None:
+    """Drop the cached OpenStack connection; next call to get_connection() will reconnect."""
+    global _conn
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+    _conn = None
+
+
 def get_connection() -> openstack.connection.Connection:
     global _conn
     if _conn is None:
