@@ -21,17 +21,7 @@ provider "openstack" {
 
 resource "openstack_networking_secgroup_v2" "pcd_ops" {
   name        = "${var.vm_name}-sg"
-  description = "Allow SSH and pcd-ops app ports"
-}
-
-resource "openstack_networking_secgroup_rule_v2" "ssh" {
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "tcp"
-  port_range_min    = 22
-  port_range_max    = 22
-  remote_ip_prefix  = "0.0.0.0/0"
-  security_group_id = openstack_networking_secgroup_v2.pcd_ops.id
+  description = "Allow HTTP access to pcd-ops web UI"
 }
 
 resource "openstack_networking_secgroup_rule_v2" "http" {
@@ -61,7 +51,6 @@ resource "openstack_compute_instance_v2" "pcd_ops" {
   name            = var.vm_name
   image_id        = data.openstack_images_image_v2.pcd_ops.id
   flavor_id       = data.openstack_compute_flavor_v2.flavor.id
-  key_pair        = var.key_pair
   security_groups = [openstack_networking_secgroup_v2.pcd_ops.name]
 
   network {

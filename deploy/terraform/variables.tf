@@ -61,9 +61,4 @@ variable "network_name" {
   default     = "locallan"
 }
 
-variable "key_pair" {
-  description = "Nova key pair name for SSH access"
-  type        = string
-  default     = "jscott-sshkey"
-}
 

@@ -10,7 +10,6 @@ os_project_domain_name = "Default"
 os_region_name         = "RegionOne"
 
 vm_name      = "pcd-ops"
-image_name   = "pcd-ops"   # Glance image built by deploy/build-image.sh
+image_name   = "pcd-ops"   # image uploaded via pcdctl image create
 flavor_name  = "m1.medium"
 network_name = "locallan"
-key_pair     = "jscott-sshkey"
