@@ -1,7 +1,9 @@
+import asyncio
 import os
 import subprocess
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -62,6 +64,59 @@ async def get_update_log():
         return {"log": _UPDATE_LOG.read_text()}
     except FileNotFoundError:
         return {"log": ""}
+
+
+@router.get("/connections")
+async def check_connections():
+    """Test live connectivity to OpenStack and Grafana; returns ok/error per service."""
+    from app.config import settings as _settings
+
+    result = {
+        "openstack": {"ok": False, "error": None, "configured": False},
+        "grafana":   {"ok": False, "error": None, "configured": False},
+    }
+
+    # ── OpenStack ──────────────────────────────────────────────────────────────
+    if _settings.os_auth_url and _settings.os_username:
+        result["openstack"]["configured"] = True
+        try:
+            import openstack as _os
+            conn = _os.connect(
+                auth_url=_settings.os_auth_url,
+                username=_settings.os_username,
+                password=_settings.os_password,
+                project_name=_settings.os_project_name,
+                user_domain_name=_settings.os_user_domain_name,
+                project_domain_name=_settings.os_project_domain_name,
+                region_name=_settings.os_region_name or None,
+            )
+            await asyncio.to_thread(conn.authorize)
+            result["openstack"]["ok"] = True
+        except Exception as exc:
+            result["openstack"]["error"] = str(exc)[:300]
+    else:
+        result["openstack"]["error"] = "Not configured — set Auth URL and Username"
+
+    # ── Grafana ────────────────────────────────────────────────────────────────
+    if _settings.grafana_url and _settings.grafana_token:
+        result["grafana"]["configured"] = True
+        try:
+            url = _settings.grafana_url.rstrip("/") + "/api/health"
+            async with httpx.AsyncClient(verify=False, timeout=10) as client:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {_settings.grafana_token}"},
+                )
+            if resp.status_code == 200:
+                result["grafana"]["ok"] = True
+            else:
+                result["grafana"]["error"] = f"HTTP {resp.status_code}"
+        except Exception as exc:
+            result["grafana"]["error"] = str(exc)[:300]
+    else:
+        result["grafana"]["error"] = "Not configured — set Grafana URL and Token"
+
+    return result
 
 
 @router.post("/update")

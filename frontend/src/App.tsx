@@ -34,6 +34,7 @@ import Topology from "./pages/Topology";
 import SettingsAlerts from "./pages/settings/SettingsAlerts";
 import SettingsConnection from "./pages/settings/SettingsConnection";
 import SettingsAI from "./pages/settings/SettingsAI";
+import SettingsStatus from "./pages/settings/SettingsStatus";
 import SettingsUpdates from "./pages/settings/SettingsUpdates";
 
 // ── Nav data types ─────────────────────────────────────────────────────────────
@@ -92,6 +93,7 @@ const NAV_SECTIONS: NavSection[] = [
     id: "settings", label: "Settings", icon: SettingsIcon,
     // No icons on settings children — renders as nav-child style
     items: [
+      { path: "/settings/status",     label: "System Status" },
       { path: "/settings/connection", label: "PCD & Metrics" },
       { path: "/settings/ai",         label: "AI Backend"    },
       { path: "/settings/alerts",     label: "Alerts"        },
@@ -267,11 +269,12 @@ function Shell() {
           <Route path="/generate"          element={<Generate />}        />
           <Route path="/catalog"           element={<AppCatalog />}      />
           <Route path="/deployments"       element={<Deployments />}     />
-          <Route path="/settings"          element={<Navigate to="/settings/connection" replace />} />
-          <Route path="/settings/connection" element={<SettingsConnection />} />
-          <Route path="/settings/ai"       element={<SettingsAI />}         />
-          <Route path="/settings/alerts"   element={<SettingsAlerts />}     />
-          <Route path="/settings/updates"  element={<SettingsUpdates />}    />
+          <Route path="/settings"            element={<Navigate to="/settings/status" replace />} />
+          <Route path="/settings/status"     element={<SettingsStatus />}       />
+          <Route path="/settings/connection" element={<SettingsConnection />}   />
+          <Route path="/settings/ai"         element={<SettingsAI />}           />
+          <Route path="/settings/alerts"     element={<SettingsAlerts />}       />
+          <Route path="/settings/updates"    element={<SettingsUpdates />}      />
         </Routes>
       </main>
     </div>
