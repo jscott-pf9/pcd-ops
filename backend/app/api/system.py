@@ -88,7 +88,7 @@ async def check_connections():
                 project_name=_settings.os_project_name,
                 user_domain_name=_settings.os_user_domain_name,
                 project_domain_name=_settings.os_project_domain_name,
-                region_name=_settings.os_region_name or None,
+                interface="public",
             )
             await asyncio.to_thread(conn.authorize)
             result["openstack"]["ok"] = True
