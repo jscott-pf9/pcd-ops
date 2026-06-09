@@ -168,9 +168,6 @@ function AgentPanel() {
       {/* Domain cache table */}
       <div style={{ marginBottom: 12 }}>
         {DOMAIN_GROUPS.map(group => {
-          const collected = group.keys.filter(k => domains[k]);
-          const missing   = group.keys.filter(k => !domains[k]);
-          const hasAny    = collected.length > 0;
 
           return (
             <div key={group.label} style={{ marginBottom: 8 }}>
