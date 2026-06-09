@@ -68,7 +68,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/reclamation", label: "Reclamation",     icon: RefreshCw },
       { path: "/capacity",    label: "Capacity Planning", icon: BarChart2,
-        children: [{ path: "/capacity/plans", label: "What-If Plans" }] },
+        children: [{ path: "/capacity/plans", label: "Forecast Plans" }] },
       { path: "/rightsizing", label: "Right-Sizing",    icon: Sliders   },
       { path: "/snapshots",   label: "Snapshots",       icon: Camera    },
       { path: "/jobs",        label: "Automation",      icon: Briefcase },

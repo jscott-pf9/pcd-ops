@@ -75,7 +75,7 @@ export default function CapacityPlans() {
 
   return (
     <div>
-      <h1>What-If Plans</h1>
+      <h1>Forecast Plans</h1>
 
       {/* ── Create form ── */}
       <div className="card" style={{ marginBottom: "1rem" }}>
