@@ -1,10 +1,11 @@
 #!/bin/sh
 # PCD Ops Appliance Console
 # Runs on tty1 as the getty replacement (configured in /etc/inittab).
-# Provides a minimal appliance-style TUI — status, URL, and basic controls.
-# Runs as root under init; no sudo needed for reboot/restart.
+# This is the primary management interface — the appliance does not run sshd.
+# Runs as root under init; no sudo needed for system operations.
 
 export TERM=linux
+APP_DIR="/opt/pcd-ops"
 
 # ── ANSI colors ───────────────────────────────────────────────────────────────
 G='\033[0;32m'   # green
@@ -31,7 +32,7 @@ get_status() {
 }
 
 get_version() {
-  git -C /opt/pcd-ops rev-parse --short HEAD 2>/dev/null || echo "unknown"
+  git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown"
 }
 
 get_alpine_ver() {
@@ -42,13 +43,17 @@ read_key() {
   stty -echo -icanon min 1 time 0 2>/dev/null
   KEY=$(dd if=/dev/tty bs=1 count=1 2>/dev/null)
   stty echo icanon 2>/dev/null
-  # Normalise to lowercase
   printf '%s' "$KEY" | tr '[:upper:]' '[:lower:]'
 }
 
-# ── Draw the appliance UI ─────────────────────────────────────────────────────
+press_any_key() {
+  printf "\n  ${D}Press any key to return to menu...${N}"
+  read_key >/dev/null
+}
 
-draw() {
+# ── Main menu ─────────────────────────────────────────────────────────────────
+
+draw_main() {
   IP=$(get_ip)
   VER=$(get_version)
   ALPINE=$(get_alpine_ver)
@@ -67,29 +72,116 @@ draw() {
   printf "  ${W}+────────────────────────────────────────────────+${N}\n"
   printf "  ${W}│${N}            APPLIANCE MAIN MENU               ${W}│${N}\n"
   printf "  ${W}+────────────────────────────────────────────────+${N}\n"
-  printf "  ${W}│${N}  ${Y}[L]${N}  Login shell                            ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[R]${N}  Restart app                            ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[B]${N}  Reboot appliance                       ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[S]${N}  Shutdown                               ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[A]${N}  Advanced options                       ${W}│${N}\n"
   printf "  ${W}+────────────────────────────────────────────────+${N}\n"
   printf "\n"
   printf "  Press a key to select an option...\n"
 }
 
+# ── Advanced menu ─────────────────────────────────────────────────────────────
+
+draw_advanced() {
+  IP=$(get_ip)
+  VER=$(get_version)
+
+  printf "${CLS}"
+  printf "\n"
+  printf "  ${W}PCD Ops${N} ${D}Advanced Options${N} ${D}| Build: ${VER}${N}\n"
+  printf "\n"
+  printf "  ${W}+────────────────────────────────────────────────+${N}\n"
+  printf "  ${W}│${N}            ADVANCED OPTIONS                   ${W}│${N}\n"
+  printf "  ${W}+────────────────────────────────────────────────+${N}\n"
+  printf "  ${W}│${N}  ${Y}[U]${N}  Force app update (git pull + rebuild)  ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[L]${N}  View app logs                          ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[N]${N}  Network info                           ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[X]${N}  Emergency shell                        ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[B]${N}  Back to main menu                      ${W}│${N}\n"
+  printf "  ${W}+────────────────────────────────────────────────+${N}\n"
+  printf "\n"
+  printf "  Press a key to select an option...\n"
+}
+
+# ── Advanced actions ──────────────────────────────────────────────────────────
+
+do_force_update() {
+  printf "${CLS}"
+  printf "\n  ${W}Force App Update${N}\n"
+  printf "  ${D}Running: git pull + pip install + npm build + restart${N}\n"
+  printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
+
+  # Run update.sh as the pcd-ops user (same as normal update flow)
+  # The script handles the service restart at the end.
+  if su -s /bin/sh pcd-ops -c "PCD_OPS_DIR=$APP_DIR $APP_DIR/deploy/scripts/update.sh"; then
+    printf "\n  ${G}Update completed successfully.${N}\n"
+  else
+    printf "\n  ${R}Update failed — check output above for errors.${N}\n"
+  fi
+
+  press_any_key
+}
+
+do_view_logs() {
+  printf "${CLS}"
+  printf "\n  ${W}App Logs${N} ${D}— /var/log/pcd-ops/uvicorn.log${N}\n"
+  printf "  ${D}Showing last 40 lines. Press F to follow (q to quit), any key to return.${N}\n"
+  printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
+
+  # less +F: opens in follow mode; q exits back to here
+  if [ -f /var/log/pcd-ops/uvicorn.log ]; then
+    less +F /var/log/pcd-ops/uvicorn.log
+  else
+    printf "  ${Y}Log file not found — service may not have run yet.${N}\n"
+    press_any_key
+  fi
+}
+
+do_network_info() {
+  printf "${CLS}"
+  printf "\n  ${W}Network Information${N}\n"
+  printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
+  ip -4 addr show 2>/dev/null
+  printf "\n"
+  ip route show 2>/dev/null
+  press_any_key
+}
+
+do_emergency_shell() {
+  printf "${CLS}"
+  printf "\n  ${W}Emergency Shell${N}\n"
+  printf "\n"
+  printf "  ${Y}Warning:${N} This drops to a root shell.\n"
+  IP=$(get_ip)
+  printf "  Use the web interface at ${W}http://${IP:-<ip>}/${N} for configuration.\n"
+  printf "  Type ${D}exit${N} when done to return to the appliance menu.\n\n"
+  /bin/sh
+}
+
+# ── Advanced loop ─────────────────────────────────────────────────────────────
+
+advanced_menu() {
+  while true; do
+    draw_advanced
+    KEY=$(read_key)
+    case "$KEY" in
+      u) do_force_update ;;
+      l) do_view_logs ;;
+      n) do_network_info ;;
+      x) do_emergency_shell ;;
+      b) return ;;
+    esac
+  done
+}
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 while true; do
-  draw
-
+  draw_main
   KEY=$(read_key)
 
   case "$KEY" in
-    l)
-      printf "\033[2J\033[H"
-      printf "\n  ${W}Login shell${N} — type ${D}exit${N} to return to the appliance menu.\n\n"
-      /bin/login
-      ;;
-
     r)
       printf "\n  ${Y}Restarting pcd-ops…${N}\n"
       rc-service pcd-ops restart
@@ -104,6 +196,10 @@ while true; do
     s)
       printf "\n  ${R}Shutting down in 3 seconds — press Ctrl+C to cancel.${N}\n"
       sleep 3 && poweroff
+      ;;
+
+    a)
+      advanced_menu
       ;;
 
     *)

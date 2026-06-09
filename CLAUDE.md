@@ -121,3 +121,5 @@ Production runs on a dedicated VM (no Docker). The image is a qcow2 built with P
 - `.env` at `/opt/pcd-ops/.env`, loaded by the systemd `EnvironmentFile`
 
 **Self-update:** Settings → Software → "Check for Updates" / "Update & Restart". Backend calls `deploy/scripts/update.sh` (`git pull` + `pip install` + `npm build` + `systemctl restart`). The script runs detached so it survives the service restart.
+
+**Appliance management principle:** The Alpine image does **not** run sshd. All VM-level operations (restart service, force update, view logs, network info, emergency shell, reboot, shutdown) are accessible through the TUI console at `deploy/scripts/appliance-console.sh`, which runs on tty1 in place of the standard getty. When adding any operation that would previously require SSH, add it to the TUI instead — either in the main menu or under Advanced Options.

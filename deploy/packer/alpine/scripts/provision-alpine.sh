@@ -70,10 +70,12 @@ sed -i "s|tty1::respawn:.*|tty1::respawn:$APP_DIR/deploy/scripts/appliance-conso
 echo "=== Writing empty .env template ==="
 su -s /bin/sh pcd-ops -c "cp $APP_DIR/.env.example $APP_DIR/.env"
 
+echo "=== Removing sshd (management is via TUI console, not SSH) ==="
+apk del openssh 2>/dev/null || true
+
 echo "=== Cleaning up ==="
 rm -rf /var/cache/apk/*
 
-# Lock the build-time password — SSH key is the only way in on deployed VMs
 passwd -l alpine
 
 echo "=== Provisioning complete ==="
