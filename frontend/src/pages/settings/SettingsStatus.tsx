@@ -44,8 +44,12 @@ function friendlyKey(k: string): string {
 }
 
 function timeAgo(iso: string): string {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 60)  return `${diff}s ago`;
+  // SQLite stores timestamps as "YYYY-MM-DD HH:MM:SS" with no timezone marker.
+  // Browsers parse bare strings as local time; append Z to force UTC interpretation.
+  const normalized = /Z|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso.replace(" ", "T") + "Z";
+  const diff = Math.floor((Date.now() - new Date(normalized).getTime()) / 1000);
+  if (diff < 0)    return "just now";
+  if (diff < 60)   return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   return `${Math.floor(diff / 3600)}h ago`;
 }
