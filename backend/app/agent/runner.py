@@ -36,6 +36,17 @@ DAILY_INTERVAL = 24 * 60 * 60  # 24 hours
 _is_running = False
 
 
+async def _gather_named(tasks: list[tuple[str, object]]) -> list[str]:
+    """Run named coroutine tasks concurrently; return a list of 'name: error' strings for any that fail."""
+    results = await asyncio.gather(*(coro for _, coro in tasks), return_exceptions=True)
+    errors = []
+    for (name, _), result in zip(tasks, results):
+        if isinstance(result, BaseException):
+            logger.error("Collector '%s' failed", name, exc_info=result)
+            errors.append(f"{name}: {result}")
+    return errors
+
+
 async def run_fast() -> None:
     """Collect infrastructure data (no AI). Fast, runs frequently."""
     global _is_running
@@ -46,15 +57,19 @@ async def run_fast() -> None:
     _is_running = True
     run_id = db.run_start()
     try:
-        await asyncio.gather(
-            collector.collect_inventory(),
-            collector.collect_reclamation(),
-            collector.collect_capacity(),
-            collector.collect_snapshots(),
-            collector.collect_logs(),
-        )
-        db.run_finish(run_id, "success")
-        logger.info("Fast collection run complete (run_id=%d).", run_id)
+        errors = await _gather_named([
+            ("inventory",   collector.collect_inventory()),
+            ("reclamation", collector.collect_reclamation()),
+            ("capacity",    collector.collect_capacity()),
+            ("snapshots",   collector.collect_snapshots()),
+            ("logs",        collector.collect_logs()),
+        ])
+        if errors:
+            db.run_finish(run_id, "error", "; ".join(errors))
+            logger.error("Fast collection run failed (run_id=%d): %s", run_id, errors)
+        else:
+            db.run_finish(run_id, "success")
+            logger.info("Fast collection run complete (run_id=%d).", run_id)
     except Exception as e:
         db.run_finish(run_id, "error", str(e))
         logger.exception("Fast collection run failed (run_id=%d).", run_id)
@@ -73,15 +88,19 @@ async def run_slow() -> None:
     _is_running = True
     run_id = db.run_start()
     try:
-        tasks = [collector.collect_capacity_trends()]
+        tasks = [("capacity_trends", collector.collect_capacity_trends())]
         if _ai_feature_due("anomaly:latest", settings.ai_anomaly_schedule, settings.ai_anomaly_enabled):
-            tasks.append(collector.collect_anomaly())
+            tasks.append(("anomaly", collector.collect_anomaly()))
         else:
             logger.info("Anomaly AI skipped (disabled or not yet due per schedule '%s').",
                         settings.ai_anomaly_schedule)
-        await asyncio.gather(*tasks)
-        db.run_finish(run_id, "success")
-        logger.info("Slow collection run complete (run_id=%d).", run_id)
+        errors = await _gather_named(tasks)
+        if errors:
+            db.run_finish(run_id, "error", "; ".join(errors))
+            logger.error("Slow collection run failed (run_id=%d): %s", run_id, errors)
+        else:
+            db.run_finish(run_id, "success")
+            logger.info("Slow collection run complete (run_id=%d).", run_id)
     except Exception as e:
         db.run_finish(run_id, "error", str(e))
         logger.exception("Slow collection run failed (run_id=%d).", run_id)

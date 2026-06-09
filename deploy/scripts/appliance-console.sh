@@ -43,6 +43,16 @@ read_key() {
   stty -echo -icanon min 1 time 0 2>/dev/null
   KEY=$(dd if=/dev/tty bs=1 count=1 2>/dev/null)
   stty echo icanon 2>/dev/null
+  # Arrow/function keys send ESC sequences (e.g. \033[B for down arrow).
+  # Reading 1 byte at a time means the trailing B would match [B]oot next loop.
+  # Detect ESC and drain the rest of the sequence so it becomes a no-op.
+  KEYCODE=$(printf '%s' "$KEY" | od -An -tx1 | tr -d ' \n')
+  if [ "$KEYCODE" = "1b" ]; then
+    stty -echo -icanon min 0 time 1 2>/dev/null
+    dd if=/dev/tty bs=8 count=1 2>/dev/null >/dev/null
+    stty echo icanon 2>/dev/null
+    KEY=""
+  fi
   printf '%s' "$KEY" | tr '[:upper:]' '[:lower:]'
 }
 
@@ -126,12 +136,12 @@ do_force_update() {
 do_view_logs() {
   printf "${CLS}"
   printf "\n  ${W}App Logs${N} ${D}— /var/log/pcd-ops/uvicorn.log${N}\n"
-  printf "  ${D}Showing last 40 lines. Press F to follow (q to quit), any key to return.${N}\n"
+  printf "  ${D}Last 100 lines. Press q to exit, then any key to return to menu.${N}\n"
   printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
 
-  # less +F: opens in follow mode; q exits back to here
   if [ -f /var/log/pcd-ops/uvicorn.log ]; then
-    less +F /var/log/pcd-ops/uvicorn.log
+    tail -n 100 /var/log/pcd-ops/uvicorn.log | less
+    press_any_key
   else
     printf "  ${Y}Log file not found — service may not have run yet.${N}\n"
     press_any_key

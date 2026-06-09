@@ -148,7 +148,7 @@ function AgentPanel() {
     <Fieldset title="Collection Agent">
       {/* Status row */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <Dot state={isRunning ? "checking" : Object.keys(domains).length > 0 ? "ok" : "unknown"} />
+        <Dot state={isRunning ? "checking" : lastRun?.status === "error" ? "error" : Object.keys(domains).length > 0 ? "ok" : "unknown"} />
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--gray-800)" }}>
           {isRunning ? "Running…" : "Idle"}
         </span>
@@ -158,12 +158,33 @@ function AgentPanel() {
             {lastRun.status === "error" && (
               <span style={{ color: "var(--red)" }}> (error)</span>
             )}
+            {lastRun.status === "success" && (
+              <span style={{ color: "var(--green)" }}> (ok)</span>
+            )}
           </span>
         )}
         {!lastRun && !isRunning && (
           <span style={{ fontSize: 12, color: "var(--gray-400)" }}>— never run</span>
         )}
       </div>
+
+      {/* Error detail */}
+      {lastRun?.status === "error" && lastRun.error && (
+        <div style={{
+          fontSize: 12,
+          color: "var(--red)",
+          background: "var(--red-50, #fff5f5)",
+          border: "1px solid var(--red-100, #fed7d7)",
+          borderRadius: 6,
+          padding: "8px 10px",
+          marginBottom: 12,
+          fontFamily: "monospace",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-all",
+        }}>
+          {lastRun.error}
+        </div>
+      )}
 
       {/* Domain cache table */}
       <div style={{ marginBottom: 12 }}>

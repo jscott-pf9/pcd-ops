@@ -9,11 +9,12 @@ echo "=== Pulling latest code ==="
 git -C "$APP_DIR" pull
 
 echo "=== Updating Python dependencies ==="
-"$APP_DIR/backend/.venv/bin/pip" install -e "$APP_DIR/backend" -q
+"$APP_DIR/backend/.venv/bin/pip" install -e "$APP_DIR/backend"
 
 echo "=== Rebuilding frontend ==="
 cd "$APP_DIR/frontend"
-npm ci --prefer-offline -q
+export CI=true
+npm ci --prefer-offline
 npm run build
 
 echo "=== Reloading nginx config ==="
