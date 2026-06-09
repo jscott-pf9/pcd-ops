@@ -171,12 +171,12 @@ from unittest.mock import patch, MagicMock
 def test_get_connection_passes_region_name(monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "os_auth_url", "https://example.com/keystone/v3")
-    monkeypatch.setattr(settings, "os_region_name", "dallas")
+    monkeypatch.setattr(settings, "os_region_name", "RegionOne")
     with patch("openstack.connect", return_value=MagicMock()) as mock_connect:
         import app.services.openstack as os_svc
         os_svc._conn = None
         os_svc.get_connection()
-        assert mock_connect.call_args.kwargs.get("region_name") == "dallas"
+        assert mock_connect.call_args.kwargs.get("region_name") == "RegionOne"
 
 def test_get_connection_omits_region_name_when_empty(monkeypatch):
     from app.config import settings
