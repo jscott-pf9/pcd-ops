@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../../api/client";
 import { useAgentStatus, useTriggerAgent } from "../../api/agent";
 import { Fieldset } from "./SettingsConnection";
@@ -72,36 +71,38 @@ function Dot({ state }: { state: "ok" | "error" | "unknown" | "checking" }) {
 // ── Connection panel ───────────────────────────────────────────────────────────
 
 function ConnectionPanel() {
-  const [enabled, setEnabled] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [result, setResult]     = useState<ConnectionsResult | null>(null);
+  const [fetchErr, setFetchErr] = useState<string | null>(null);
 
-  const { data, isFetching, refetch } = useQuery<ConnectionsResult>({
-    queryKey: ["system", "connections"],
-    queryFn: () => apiFetch<ConnectionsResult>("/system/connections"),
-    enabled,
-    staleTime: 0,
-  });
-
-  function test() {
-    setEnabled(true);
-    // If already enabled, just refetch
-    if (enabled) refetch();
+  async function test() {
+    setChecking(true);
+    setFetchErr(null);
+    try {
+      const data = await apiFetch<ConnectionsResult>("/system/connections");
+      setResult(data);
+    } catch (e) {
+      setFetchErr(String(e));
+    } finally {
+      setChecking(false);
+    }
   }
 
   const row = (label: string, svc?: ServiceStatus) => {
-    const state = isFetching ? "checking" : !svc ? "unknown" : svc.ok ? "ok" : "error";
+    const state = checking ? "checking" : !result ? "unknown" : svc?.ok ? "ok" : "error";
     return (
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 0",
         borderBottom: "1px solid var(--gray-50)" }}>
         <Dot state={state} />
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 600, fontSize: 13, color: "var(--gray-800)" }}>{label}</div>
-          {svc && !svc.ok && svc.error && (
-            <div style={{ fontSize: 12, color: "var(--red)", marginTop: 2 }}>{svc.error}</div>
-          )}
           {svc?.ok && (
             <div style={{ fontSize: 12, color: "var(--green)", marginTop: 2 }}>Connected</div>
           )}
-          {!data && !isFetching && (
+          {result && !svc?.ok && svc?.error && (
+            <div style={{ fontSize: 12, color: "var(--red)", marginTop: 2 }}>{svc.error}</div>
+          )}
+          {!result && !checking && (
             <div style={{ fontSize: 12, color: "var(--gray-400)", marginTop: 2 }}>Not tested yet</div>
           )}
         </div>
@@ -111,19 +112,22 @@ function ConnectionPanel() {
 
   return (
     <Fieldset title="Connection Status">
-      {row("PCD / OpenStack", data?.openstack)}
-      {row("Grafana / Prometheus", data?.grafana)}
+      {row("PCD / OpenStack", result?.openstack)}
+      {row("Grafana / Prometheus", result?.grafana)}
       <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
-        <button className="btn btn-secondary" onClick={test} disabled={isFetching}
+        <button className="btn btn-secondary" onClick={test} disabled={checking}
           style={{ fontSize: 12 }}>
-          {isFetching ? "Testing…" : "Test Connections"}
+          {checking ? "Testing…" : "Test Connections"}
         </button>
-        {data && !isFetching && (
+        {result && !checking && (
           <span style={{ fontSize: 12, color: "var(--gray-400)" }}>
-            {data.openstack.ok && data.grafana.ok
+            {result.openstack.ok && result.grafana.ok
               ? "All connections OK"
               : "Check Settings → PCD & Metrics"}
           </span>
+        )}
+        {fetchErr && (
+          <span style={{ fontSize: 12, color: "var(--red)" }}>{fetchErr}</span>
         )}
       </div>
     </Fieldset>
