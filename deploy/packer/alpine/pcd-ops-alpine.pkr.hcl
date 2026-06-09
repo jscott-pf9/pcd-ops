@@ -6,6 +6,11 @@ variable "github_repo" {
   default     = "https://github.com/jscott-pf9/pcd-ops.git"
 }
 
+variable "version" {
+  description = "Release version string — injected by build-image.sh from git describe"
+  default     = "dev"
+}
+
 variable "output_dir" {
   default = "output"
 }
@@ -17,8 +22,8 @@ source "qemu" "pcd-ops-alpine" {
   disk_image   = true
   format       = "qcow2"
 
-  output_directory = var.output_dir
-  vm_name          = "pcd-ops-alpine.qcow2"
+  output_directory = "${var.output_dir}/${var.version}"
+  vm_name          = "pcd-ops-${var.version}.qcow2"
 
   disk_size = "20G"
   memory    = 4096

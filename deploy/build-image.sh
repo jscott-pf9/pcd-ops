@@ -14,12 +14,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKER_DIR="$SCRIPT_DIR/packer/alpine"
 
+# Derive version from git tag (e.g. v0.2.1); fall back to short commit if untagged
+VERSION=$(git -C "$SCRIPT_DIR" describe --tags --exact-match 2>/dev/null \
+          || git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null \
+          || echo "dev")
+
+echo "Version: $VERSION"
+
 cd "$PACKER_DIR"
 
-echo "Building pcd-ops-alpine.qcow2 ..."
-packer build "$@" pcd-ops-alpine.pkr.hcl
+echo "Building pcd-ops-${VERSION}.qcow2 ..."
+# -force overwrites any existing output directory for this version
+packer build -force -var "version=${VERSION}" "$@" pcd-ops-alpine.pkr.hcl
 
-OUTPUT="$PACKER_DIR/output/pcd-ops-alpine.qcow2"
+OUTPUT="$PACKER_DIR/output/${VERSION}/pcd-ops-${VERSION}.qcow2"
+IMAGE_NAME="pcd-ops-${VERSION}"
+
 echo ""
 echo "Image built: $OUTPUT"
 echo ""
@@ -27,4 +37,4 @@ echo "Upload to PCD:"
 echo "  pcdctl image create --insecure \\"
 echo "    --container-format bare --disk-format qcow2 \\"
 echo "    --property os_type=Linux --public \\"
-echo "    --file $OUTPUT pcd-ops"
+echo "    --file $OUTPUT ${IMAGE_NAME}"
