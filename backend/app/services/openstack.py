@@ -19,7 +19,7 @@ def reset_connection() -> None:
 def get_connection() -> openstack.connection.Connection:
     global _conn
     if _conn is None:
-        _conn = openstack.connect(
+        kwargs = dict(
             auth_url=settings.os_auth_url,
             username=settings.os_username,
             password=settings.os_password,
@@ -29,4 +29,7 @@ def get_connection() -> openstack.connection.Connection:
             # Force public endpoints — PCD's catalog internal URLs are k8s-only.
             interface="public",
         )
+        if settings.os_region_name:
+            kwargs["region_name"] = settings.os_region_name
+        _conn = openstack.connect(**kwargs)
     return _conn
