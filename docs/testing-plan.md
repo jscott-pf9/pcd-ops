@@ -157,6 +157,66 @@ Test the deterministic endpoint (no AI):
 - `GET /api/agent/status` → 200, has `is_running` field
 - `POST /api/agent/trigger` → 200 (may return `triggered: false` if already running — ok)
 
+### `test_openstack.py` — connection regression tests
+
+These guard two bugs that caused collection to silently hit the wrong OpenStack region:
+
+**Bug 1 — region not forwarded to SDK.**  
+When `os_region_name` is set, the SDK must receive it or it picks an arbitrary region from the
+multi-region service catalog (regression: `pure-lab` endpoints used instead of `dallas`).
+
+```python
+from unittest.mock import patch, MagicMock
+
+def test_get_connection_passes_region_name(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "os_auth_url", "https://example.com/keystone/v3")
+    monkeypatch.setattr(settings, "os_region_name", "dallas")
+    with patch("openstack.connect", return_value=MagicMock()) as mock_connect:
+        import app.services.openstack as os_svc
+        os_svc._conn = None
+        os_svc.get_connection()
+        assert mock_connect.call_args.kwargs.get("region_name") == "dallas"
+
+def test_get_connection_omits_region_name_when_empty(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "os_region_name", "")
+    with patch("openstack.connect", return_value=MagicMock()) as mock_connect:
+        import app.services.openstack as os_svc
+        os_svc._conn = None
+        os_svc.get_connection()
+        assert "region_name" not in mock_connect.call_args.kwargs
+```
+
+**Bug 2 — stale connection after credential change.**  
+`PUT /settings` must drop `_conn` when OS fields change; otherwise the old connection
+(pointing at the old endpoint) is reused until the service restarts.
+
+```python
+def test_settings_update_resets_openstack_connection(monkeypatch):
+    import app.services.openstack as os_svc
+    from app.config import settings
+    monkeypatch.setattr(settings, "os_auth_url", "https://old.example.com/keystone/v3")
+    os_svc._conn = MagicMock()          # simulate a live cached connection
+
+    with patch("openstack.connect", return_value=MagicMock()):
+        from httpx import AsyncClient
+        from app.main import app
+        import asyncio
+        async def _put():
+            async with AsyncClient(app=app, base_url="http://test") as c:
+                r = await c.put("/api/settings", json={
+                    "os_auth_url": "https://new.example.com/keystone/v3",
+                    "os_username": "admin",
+                })
+                assert r.status_code == 200
+        asyncio.get_event_loop().run_until_complete(_put())
+
+    assert os_svc._conn is None         # must have been cleared
+```
+
+Place both tests in `tests/backend/unit/test_openstack.py`.
+
 ---
 
 ## Frontend tests (Vitest)
