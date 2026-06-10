@@ -235,8 +235,12 @@ a:hover { color: var(--blue-hover); }
 
 /* ── Page content ─────────────────────────────────────────────────────────── */
 .page {
-  padding: 16px 22px 32px;
+  padding: 16px 22px calc(38px + 32px);   /* collapsed footer height + original bottom */
   width: 100%;
+}
+
+body.footer-expanded .page {
+  padding-bottom: calc(238px + 32px);     /* expanded footer (38px header + 200px body) */
 }
 .page h1 {
   font-size: 20px;

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import EventFooter from "./components/EventFooter";
 import {
   AlertTriangle,
   BarChart2,
@@ -290,6 +291,7 @@ export default function App() {
         <Sidebar />
         <Shell />
       </div>
+      <EventFooter />
     </BrowserRouter>
   );
 }

@@ -299,6 +299,7 @@ export default function Snapshots() {
   const deleteSnapshot = useMutation({
     mutationFn: (id: string) => apiFetch(`/snapshots/${id}`, { method: "DELETE" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["snapshots"] }),
+    onError: (err: Error) => alert(`Delete failed: ${err.message}`),
   });
 
   const filtered = (snapshots ?? []).filter(s =>

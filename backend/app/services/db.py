@@ -8,7 +8,7 @@ agent_runs   — audit log of every collection run.
 import json
 import math
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +92,16 @@ def init_db() -> None:
                 content    TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS app_events (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp  TEXT NOT NULL,
+                level      TEXT NOT NULL DEFAULT 'info',
+                event_type TEXT NOT NULL,
+                title      TEXT NOT NULL,
+                detail     TEXT,
+                component  TEXT,
+                tenant     TEXT
             );
             CREATE TABLE IF NOT EXISTS deployments (
                 id           TEXT PRIMARY KEY,
@@ -275,6 +285,114 @@ def get_runs(limit: int = 20) -> list[dict]:
             "SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def event_log(event_type: str, title: str, level: str = "info",
+              detail: str | None = None, component: str | None = None,
+              tenant: str | None = None) -> None:
+    """Log a user-initiated or system action to the app_events table."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO app_events (timestamp, level, event_type, title, detail, component, tenant)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (datetime.utcnow().isoformat(), level, event_type, title, detail, component, tenant),
+        )
+
+
+_DEPLOY_LEVEL = {
+    "deploying": "running",
+    "running":   "success",
+    "stopped":   "info",
+    "destroyed": "info",
+    "error":     "error",
+}
+
+
+def get_recent_events(limit: int = 100) -> list[dict]:
+    """Return a unified, timestamp-sorted event list from all event sources."""
+    events: list[dict] = []
+
+    with _connect() as conn:
+        # Agent collection runs
+        for r in conn.execute(
+            "SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT 40"
+        ).fetchall():
+            events.append({
+                "id":         f"agent:{r['id']}",
+                "event_type": "agent_run",
+                "level":      r["status"],
+                "title":      f"Collection run #{r['id']}",
+                "detail":     r["error"],
+                "component":  "Agent",
+                "tenant":     None,
+                "timestamp":  r["started_at"],
+            })
+
+        # Job runs (joined with job name/type)
+        for r in conn.execute("""
+            SELECT jr.*, j.name AS job_name, j.type AS job_type
+            FROM job_runs jr
+            LEFT JOIN jobs j ON j.id = jr.job_id
+            ORDER BY jr.started_at DESC LIMIT 40
+        """).fetchall():
+            events.append({
+                "id":         f"job:{r['id']}",
+                "event_type": "job_run",
+                "level":      r["status"],
+                "title":      r["job_name"] or r["job_type"] or f"Job #{r['job_id']}",
+                "detail":     r["error"],
+                "component":  r["job_type"] or "Job",
+                "tenant":     None,
+                "timestamp":  r["started_at"],
+            })
+
+        # Deployments — use updated_at as the event timestamp
+        for r in conn.execute(
+            "SELECT * FROM deployments ORDER BY updated_at DESC LIMIT 30"
+        ).fetchall():
+            events.append({
+                "id":         f"deploy:{r['id']}",
+                "event_type": "deployment",
+                "level":      _DEPLOY_LEVEL.get(r["status"], "info"),
+                "title":      r["app_name"],
+                "detail":     r["error_msg"],
+                "component":  "Deployment",
+                "tenant":     r["tenant_name"],
+                "timestamp":  r["updated_at"],
+            })
+
+        # Capacity reports
+        for r in conn.execute(
+            "SELECT id, created_at FROM capacity_reports ORDER BY created_at DESC LIMIT 20"
+        ).fetchall():
+            events.append({
+                "id":         f"report:{r['id']}",
+                "event_type": "report",
+                "level":      "info",
+                "title":      "Capacity report generated",
+                "detail":     None,
+                "component":  "Capacity",
+                "tenant":     None,
+                "timestamp":  r["created_at"],
+            })
+
+        # User-initiated / system actions
+        for r in conn.execute(
+            "SELECT * FROM app_events ORDER BY timestamp DESC LIMIT 60"
+        ).fetchall():
+            events.append({
+                "id":         f"evt:{r['id']}",
+                "event_type": r["event_type"],
+                "level":      r["level"],
+                "title":      r["title"],
+                "detail":     r["detail"],
+                "component":  r["component"],
+                "tenant":     r["tenant"],
+                "timestamp":  r["timestamp"],
+            })
+
+    events.sort(key=lambda e: e["timestamp"] or "", reverse=True)
+    return events[:limit]
 
 
 # ── Capacity Reports ───────────────────────────────────────────────────────────
