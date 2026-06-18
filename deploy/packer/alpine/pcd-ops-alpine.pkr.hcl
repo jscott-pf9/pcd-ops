@@ -6,6 +6,11 @@ variable "github_repo" {
   default     = "https://github.com/jscott-pf9/pcd-ops.git"
 }
 
+variable "github_branch" {
+  description = "Git branch to clone"
+  default     = "main"
+}
+
 variable "version" {
   description = "Release version string — injected by build-image.sh from git describe"
   default     = "dev"
@@ -46,7 +51,7 @@ build {
   sources = ["source.qemu.pcd-ops-alpine"]
 
   provisioner "shell" {
-    environment_vars = ["GITHUB_REPO=${var.github_repo}"]
+    environment_vars = ["GITHUB_REPO=${var.github_repo}", "GITHUB_BRANCH=${var.github_branch}"]
     # Run as root so apk, rc-update, adduser, etc. work without per-line sudo.
     # The script uses `su -s /bin/sh pcd-ops -c` where it needs the service user.
     execute_command = "sudo sh -c '{{ .Vars }} {{ .Path }}'"

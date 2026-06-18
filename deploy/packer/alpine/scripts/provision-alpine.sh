@@ -33,7 +33,7 @@ addgroup -S pcd-ops
 adduser -S -D -h "$APP_DIR" -s /sbin/nologin -G pcd-ops pcd-ops
 
 echo "=== Cloning repository ==="
-git clone "$GITHUB_REPO" "$APP_DIR"
+git clone --branch "${GITHUB_BRANCH:-main}" "$GITHUB_REPO" "$APP_DIR"
 chown -R pcd-ops:pcd-ops "$APP_DIR"
 
 echo "=== Setting up Python virtual environment ==="

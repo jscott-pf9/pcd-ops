@@ -19,13 +19,16 @@ VERSION=$(git -C "$SCRIPT_DIR" describe --tags --exact-match 2>/dev/null \
           || git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null \
           || echo "dev")
 
-echo "Version: $VERSION"
+# Pass the current branch so Packer clones the right code
+BRANCH=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+
+echo "Version: $VERSION  Branch: $BRANCH"
 
 cd "$PACKER_DIR"
 
 echo "Building pcd-ops-${VERSION}.qcow2 ..."
 # -force overwrites any existing output directory for this version
-packer build -force -var "version=${VERSION}" "$@" pcd-ops-alpine.pkr.hcl
+packer build -force -var "version=${VERSION}" -var "github_branch=${BRANCH}" "$@" pcd-ops-alpine.pkr.hcl
 
 OUTPUT="$PACKER_DIR/output/${VERSION}/pcd-ops-${VERSION}.qcow2"
 IMAGE_NAME="pcd-ops-${VERSION}"
