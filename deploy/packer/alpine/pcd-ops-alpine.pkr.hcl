@@ -38,11 +38,10 @@ source "qemu" "pcd-ops-alpine" {
   headless     = true
   machine_type = "q35"
 
-  # UEFI firmware — CODE is read-only; VARS is a per-build writable copy.
-  qemuargs = [
-    ["-drive", "if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd"],
-    ["-drive", "if=pflash,format=raw,unit=1,file=${path.root}/ovmf-vars-tmp.fd"],
-  ]
+  # UEFI firmware — plugin handles pflash setup without displacing the disk drive.
+  # ovmf-vars-tmp.fd is a writable copy made by build-image.sh before Packer starts.
+  efi_firmware_code = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+  efi_firmware_vars = "${path.root}/ovmf-vars-tmp.fd"
 
   # NoCloud datasource — provides SSH credentials for Packer during build.
   # The alpine user password is locked at the end of provision-alpine.sh.
