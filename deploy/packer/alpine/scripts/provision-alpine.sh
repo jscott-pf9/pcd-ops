@@ -24,7 +24,7 @@ apk add --no-cache \
   nginx git curl bash sudo \
   python3 py3-pip \
   gcc musl-dev python3-dev libffi-dev openssl-dev \
-  nodejs npm
+  nodejs npm gum
 
 echo "=== Creating pcd-ops service user ==="
 # Create group first; busybox adduser -S does not auto-create a matching group.
@@ -57,6 +57,7 @@ rc-update add nginx default
 echo "=== Configuring sudo for self-update ==="
 chmod +x "$APP_DIR/deploy/scripts/update.sh"
 chmod +x "$APP_DIR/deploy/scripts/appliance-console.sh"
+chmod +x "$APP_DIR/deploy/scripts/appliance-console-gum.sh"
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops restart\n' > /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /usr/sbin/nginx -s reload\n'        >> /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/reboot\n'                     >> /etc/sudoers.d/pcd-ops
@@ -65,7 +66,7 @@ chmod 440 /etc/sudoers.d/pcd-ops
 echo "=== Configuring appliance console on tty1 ==="
 # Replace the standard getty on tty1 with the appliance TUI.
 # 'respawn' means init restarts the script after it exits (e.g. after login shell).
-sed -i "s|tty1::respawn:.*|tty1::respawn:$APP_DIR/deploy/scripts/appliance-console.sh|" /etc/inittab
+sed -i "s|tty1::respawn:.*|tty1::respawn:$APP_DIR/deploy/scripts/appliance-console-gum.sh|" /etc/inittab
 
 echo "=== Writing empty .env template ==="
 su -s /bin/sh pcd-ops -c "cp $APP_DIR/.env.example $APP_DIR/.env"

@@ -358,6 +358,8 @@ async def collect_reclamation() -> None:
             "project_id": s.project_id,
             "updated_at": s.updated_at,
             "attached_disk_gb": attached_gb.get(s.id, 0),
+            "vcpus": (s.flavor or {}).get("vcpus") or 0,
+            "ram_mb": (s.flavor or {}).get("ram") or 0,
         }
         for s in all_servers
         if s.status in ("SHUTOFF", "ERROR", "SHELVED_OFFLOADED")
