@@ -26,6 +26,12 @@ echo "Version: $VERSION  Branch: $BRANCH"
 
 cd "$PACKER_DIR"
 
+# UEFI pflash unit=1 must be writable — copy system VARS to a local file Packer can modify.
+# Cleaned up after the build regardless of success/failure.
+OVMF_VARS_TMP="$PACKER_DIR/ovmf-vars-tmp.fd"
+cp /usr/share/OVMF/OVMF_VARS_4M.fd "$OVMF_VARS_TMP"
+trap "rm -f '$OVMF_VARS_TMP'" EXIT
+
 echo "Building pcd-ops-${VERSION}.qcow2 ..."
 # -force overwrites any existing output directory for this version
 packer build -force -var "version=${VERSION}" -var "github_branch=${BRANCH}" "$@" pcd-ops-alpine.pkr.hcl

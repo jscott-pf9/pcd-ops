@@ -59,21 +59,11 @@ source "qemu" "pcd-ops-alpine" {
 build {
   sources = ["source.qemu.pcd-ops-alpine"]
 
-  # Copy a writable OVMF VARS file before the VM starts (pflash unit=1 must be writable).
-  provisioner "shell-local" {
-    inline = ["cp /usr/share/OVMF/OVMF_VARS_4M.fd ${path.root}/ovmf-vars-tmp.fd"]
-  }
-
   provisioner "shell" {
     environment_vars = ["GITHUB_REPO=${var.github_repo}", "GITHUB_BRANCH=${var.github_branch}"]
     # Run as root so apk, rc-update, adduser, etc. work without per-line sudo.
     # The script uses `su -s /bin/sh pcd-ops -c` where it needs the service user.
     execute_command = "sudo sh -c '{{ .Vars }} {{ .Path }}'"
     script          = "scripts/provision-alpine.sh"
-  }
-
-  # Clean up the temporary VARS file after the build.
-  post-processor "shell-local" {
-    inline = ["rm -f ${path.root}/ovmf-vars-tmp.fd"]
   }
 }
