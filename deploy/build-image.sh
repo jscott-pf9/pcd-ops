@@ -33,6 +33,13 @@ packer build -force -var "version=${VERSION}" -var "github_branch=${BRANCH}" "$@
 OUTPUT="$PACKER_DIR/output/${VERSION}/pcd-ops-${VERSION}.qcow2"
 IMAGE_NAME="pcd-ops-${VERSION}"
 
+# Nova's format inspector (oslo_utils) rejects qcow2 images that have MBR boot
+# signatures in unexpected positions. Re-encode as a clean qcow2 to avoid this.
+echo "Re-encoding qcow2 to strip MBR safety-check trigger..."
+CLEAN="${OUTPUT%.qcow2}-upload.qcow2"
+qemu-img convert -f qcow2 -O qcow2 "$OUTPUT" "$CLEAN"
+mv "$CLEAN" "$OUTPUT"
+
 echo ""
 echo "Image built: $OUTPUT"
 echo ""
