@@ -11,12 +11,10 @@ BOLD='\033[1m'
 DIM='\033[2m'
 GRN='\033[92m'    # bright green
 RED='\033[91m'    # bright red
-BLU='\033[34m'    # blue
 BBLU='\033[94m'   # bright blue
 WHT='\033[97m'    # bright white
 YEL='\033[93m'    # bright yellow
 BGBLU='\033[44m'  # bg blue (for title bar)
-BGRST='\033[49m'  # bg reset
 
 # gum color indices (ANSI 0-15, safe for TERM=linux)
 C_BLUE="4"
@@ -52,7 +50,7 @@ term_cols() {
 }
 
 center_text() {
-  # center_text TEXT [WIDTH]
+  # center_text TEXT [WIDTH]  — TEXT must be plain (no ANSI) for length calc
   local TEXT="$1"
   local COLS="${2:-$(term_cols)}"
   local LEN=${#TEXT}
@@ -63,16 +61,16 @@ center_text() {
 
 hline() {
   local COLS=$(term_cols)
-  local CHAR="${1:- }"
+  local CHAR="${1:--}"
   printf "${DIM}"
   printf '%*s' "$COLS" '' | tr ' ' "$CHAR"
   printf "${RST}\n"
 }
 
-# ── Header (printed directly to tty, never captured) ─────────────────────────
+# ── Main header — always called DIRECTLY (never inside $()) ──────────────────
 
 draw_header() {
-  local IP VER ALPINE COLS TITLE_LEN PAD
+  local IP VER ALPINE COLS TITLE PAD INFO_PAD FIELD_W INFO_W
 
   IP=$(get_ip)
   VER=$(get_version)
@@ -81,50 +79,65 @@ draw_header() {
 
   clear
 
-  # ── Title bar: blue bg, full width ───────────────────────────────────────
-  local TITLE="  PCD Ops  —  Platform9 Operations Dashboard  "
-  TITLE_LEN=${#TITLE}
-  PAD=$(( (COLS - TITLE_LEN) / 2 ))
+  # ── Title bar: blue bg, full width ─────────────────────────────────────
+  TITLE="  PCD Ops  |  Platform9 Operations Dashboard  "
+  local TLEN=${#TITLE}
+  PAD=$(( (COLS - TLEN) / 2 ))
   [ "$PAD" -lt 0 ] && PAD=0
-
   printf "${BGBLU}${WHT}${BOLD}"
-  printf "%*s%s%*s" "$PAD" "" "$TITLE" $(( COLS - TITLE_LEN - PAD )) ""
-  printf "${RST}\n"
+  printf "%*s%s%*s" "$PAD" "" "$TITLE" $(( COLS - TLEN - PAD )) ""
+  printf "${RST}\n\n"
 
-  printf "\n"
-
-  # ── Status ────────────────────────────────────────────────────────────────
+  # ── Service status ──────────────────────────────────────────────────────
   if is_running; then
-    center_text "${GRN}${BOLD}●  Service Running${RST}" "$COLS"
+    local STATUS_TXT="●  Service Running"
+    local STATUS_CLR="${GRN}${BOLD}"
   else
-    center_text "${RED}${BOLD}●  Service Stopped${RST}" "$COLS"
+    local STATUS_TXT="●  Service Stopped"
+    local STATUS_CLR="${RED}${BOLD}"
   fi
+  local SLEN=${#STATUS_TXT}
+  local SPAD=$(( (COLS - SLEN) / 2 ))
+  [ "$SPAD" -lt 0 ] && SPAD=0
+  printf "%*s${STATUS_CLR}%s${RST}\n\n" "$SPAD" "" "$STATUS_TXT"
 
-  printf "\n"
-
-  # ── Info block, centered ─────────────────────────────────────────────────
-  local FIELD_W=12
-  local INFO_W=$(( FIELD_W + 30 ))
-  local INFO_PAD=$(( (COLS - INFO_W) / 2 ))
+  # ── Info block ──────────────────────────────────────────────────────────
+  FIELD_W=12
+  INFO_W=$(( FIELD_W + 32 ))
+  INFO_PAD=$(( (COLS - INFO_W) / 2 ))
   [ "$INFO_PAD" -lt 2 ] && INFO_PAD=2
 
-  printf "%*s${DIM}%-${FIELD_W}s${RST}${BOLD}%s${RST}\n" \
-    "$INFO_PAD" "" "IP Address" "${IP:-not assigned}"
-  printf "%*s${DIM}%-${FIELD_W}s${RST}${BOLD}%s${RST}\n" \
-    "$INFO_PAD" "" "Web" "http://${IP:-<not assigned>}/"
-  printf "%*s${DIM}%-${FIELD_W}s${RST}Alpine v${ALPINE}  |  Build: ${VER}\n" \
-    "$INFO_PAD" "" "System"
+  local WEB="http://${IP:-<not assigned>}/"
+  printf "%*s${DIM}%-${FIELD_W}s${RST} ${BOLD}%s${RST}\n" \
+    "$INFO_PAD" "" "IP Address:" "${IP:-not assigned}"
+  printf "%*s${DIM}%-${FIELD_W}s${RST} ${BOLD}%s${RST}\n" \
+    "$INFO_PAD" "" "Web URL:" "$WEB"
+  printf "%*s${DIM}%-${FIELD_W}s${RST} Alpine v${ALPINE}  |  Build: ${VER}\n" \
+    "$INFO_PAD" "" "System:"
 
   printf "\n"
   hline "-"
   printf "\n"
 }
 
-# ── Menus (gum choose captures to stdout; header is already on screen) ────────
+# ── Advanced header — also called directly ────────────────────────────────────
 
-show_main_menu() {
-  draw_header
+draw_advanced_header() {
+  local COLS=$(term_cols)
+  clear
+  printf "\n"
+  local TXT="Advanced Options"
+  local TLEN=${#TXT}
+  local PAD=$(( (COLS - TLEN) / 2 ))
+  [ "$PAD" -lt 0 ] && PAD=0
+  printf "%*s${BBLU}${BOLD}%s${RST}\n\n" "$PAD" "" "$TXT"
+  hline "-"
+  printf "\n"
+}
 
+# ── Menu functions — only run gum choose (safe to capture with $()) ───────────
+
+pick_main_menu() {
   gum choose \
     --header "   APPLIANCE MENU" \
     --header.foreground "$C_BLUE" \
@@ -139,14 +152,7 @@ show_main_menu() {
     "  Advanced Options"
 }
 
-show_advanced_menu() {
-  clear
-  printf "\n"
-  center_text "${BBLU}${BOLD}Advanced Options${RST}"
-  printf "\n"
-  hline "-"
-  printf "\n"
-
+pick_advanced_menu() {
   gum choose \
     --header "   Select an option" \
     --header.foreground "$C_DIM" \
@@ -207,10 +213,11 @@ do_shutdown() {
 }
 
 do_force_update() {
+  local COLS=$(term_cols)
   clear
   printf "\n"
-  center_text "${BBLU}${BOLD}Force App Update${RST}"
-  printf "\n"
+  local TXT="Force App Update"
+  printf "%*s${BBLU}${BOLD}%s${RST}\n\n" "$(( (COLS - ${#TXT}) / 2 ))" "" "$TXT"
   hline "-"
   printf "\n  ${DIM}git pull + pip install + npm build + service restart${RST}\n\n"
 
@@ -219,15 +226,15 @@ do_force_update() {
   else
     printf "\n  ${RED}${BOLD}✗  Update failed — see output above.${RST}\n"
   fi
-
   pause
 }
 
 do_patch_os() {
+  local COLS=$(term_cols)
   clear
   printf "\n"
-  center_text "${BBLU}${BOLD}Patch Alpine Linux${RST}"
-  printf "\n"
+  local TXT="Patch Alpine Linux"
+  printf "%*s${BBLU}${BOLD}%s${RST}\n\n" "$(( (COLS - ${#TXT}) / 2 ))" "" "$TXT"
   hline "-"
   printf "\n  ${DIM}apk update && apk upgrade${RST}\n\n"
 
@@ -237,14 +244,15 @@ do_patch_os() {
   else
     printf "\n  ${RED}${BOLD}✗  OS patch failed — see output above.${RST}\n"
   fi
-
   pause
 }
 
 do_view_logs() {
+  local COLS=$(term_cols)
   clear
   printf "\n"
-  center_text "${BBLU}${BOLD}App Logs${RST}"
+  local TXT="App Logs"
+  printf "%*s${BBLU}${BOLD}%s${RST}\n" "$(( (COLS - ${#TXT}) / 2 ))" "" "$TXT"
   printf "\n  ${DIM}/var/log/pcd-ops/uvicorn.log — last 100 lines. Press q to exit.${RST}\n"
   hline "-"
 
@@ -253,15 +261,15 @@ do_view_logs() {
   else
     printf "\n  ${YEL}Log file not found — service may not have started yet.${RST}\n"
   fi
-
   pause
 }
 
 do_network_info() {
+  local COLS=$(term_cols)
   clear
   printf "\n"
-  center_text "${BBLU}${BOLD}Network Information${RST}"
-  printf "\n"
+  local TXT="Network Information"
+  printf "%*s${BBLU}${BOLD}%s${RST}\n\n" "$(( (COLS - ${#TXT}) / 2 ))" "" "$TXT"
   hline "-"
   printf "\n"
   ip -4 addr show 2>/dev/null
@@ -271,10 +279,11 @@ do_network_info() {
 }
 
 do_emergency_shell() {
+  local COLS=$(term_cols)
   clear
   printf "\n"
-  center_text "${RED}${BOLD}Emergency Shell${RST}"
-  printf "\n"
+  local TXT="Emergency Shell"
+  printf "%*s${RED}${BOLD}%s${RST}\n\n" "$(( (COLS - ${#TXT}) / 2 ))" "" "$TXT"
   hline "-"
   printf "\n  ${YEL}Dropping to root shell. Type ${BOLD}exit${RST}${YEL} to return to the appliance menu.${RST}\n\n"
   /bin/sh
@@ -284,7 +293,8 @@ do_emergency_shell() {
 
 advanced_loop() {
   while true; do
-    CHOICE=$(show_advanced_menu)
+    draw_advanced_header          # draws directly to terminal
+    CHOICE=$(pick_advanced_menu)  # captures only the selection
     case "$CHOICE" in
       *"Force App Update"*)  do_force_update ;;
       *"Patch OS"*)          do_patch_os ;;
@@ -299,7 +309,8 @@ advanced_loop() {
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 while true; do
-  CHOICE=$(show_main_menu)
+  draw_header              # draws directly to terminal — never captured
+  CHOICE=$(pick_main_menu) # $() only captures gum's selection text
   case "$CHOICE" in
     *"Restart App"*)       do_restart ;;
     *"Reboot Appliance"*)  do_reboot ;;
