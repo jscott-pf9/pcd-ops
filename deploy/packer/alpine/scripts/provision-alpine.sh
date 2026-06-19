@@ -39,9 +39,12 @@ chown -R pcd-ops:pcd-ops "$APP_DIR"
 echo "=== Setting up Python virtual environment ==="
 su -s /bin/sh pcd-ops -c "python3 -m venv $APP_DIR/backend/.venv"
 su -s /bin/sh pcd-ops -c "$APP_DIR/backend/.venv/bin/pip install -e $APP_DIR/backend -q"
+apk del gcc musl-dev python3-dev libffi-dev openssl-dev
 
 echo "=== Building frontend ==="
 su -s /bin/sh pcd-ops -c "cd $APP_DIR/frontend && npm ci -q && npm run build"
+rm -rf "$APP_DIR/frontend/node_modules"
+su -s /bin/sh pcd-ops -c "npm cache clean --force 2>/dev/null || true"
 
 echo "=== Installing OpenRC init script ==="
 cp "$APP_DIR/deploy/openrc/pcd-ops" /etc/init.d/pcd-ops
@@ -76,6 +79,18 @@ apk del openssh 2>/dev/null || true
 
 echo "=== Cleaning up ==="
 rm -rf /var/cache/apk/*
+rm -rf "$APP_DIR/.git"
+# pip cache lives under pcd-ops HOME ($APP_DIR) — biggest single space consumer
+rm -rf "$APP_DIR/.cache"
+rm -rf /root/.cache
+# npm caches
+rm -rf /root/.npm /home/pcd-ops/.npm
+# Python bytecode — regenerated on first run, saves ~30-50 MB
+find "$APP_DIR/backend/.venv" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "$APP_DIR/backend" -name "*.pyc" -delete 2>/dev/null || true
+# Strip debug symbols from compiled extensions (~10-20 MB)
+find "$APP_DIR/backend/.venv" -name "*.so" -exec strip --strip-debug {} \; 2>/dev/null || true
+rm -rf /tmp/*
 
 passwd -l alpine
 
