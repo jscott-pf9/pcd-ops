@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     alert_email_to: str = ""
     webhook_url:   str = ""
 
+    # GitHub feedback — token needs issues:write scope on the target repo
+    github_token: str = ""
+    github_repo:  str = ""  # e.g. "platform9/pcd-ops"
+
 
 settings = Settings()
 

@@ -11,6 +11,7 @@ import {
   FileText,
   type LucideIcon,
   Layers,
+  MessageSquarePlus,
   Network,
   RefreshCw,
   Rocket,
@@ -37,6 +38,7 @@ import SettingsConnection from "./pages/settings/SettingsConnection";
 import SettingsAI from "./pages/settings/SettingsAI";
 import SettingsStatus from "./pages/settings/SettingsStatus";
 import SettingsUpdates from "./pages/settings/SettingsUpdates";
+import Feedback from "./pages/Feedback";
 
 // ── Nav data types ─────────────────────────────────────────────────────────────
 
@@ -221,6 +223,16 @@ function Sidebar() {
           );
         })}
       </div>
+
+      <div className="sidebar-footer">
+        <Link
+          to="/feedback"
+          className={`sidebar-footer-link${loc.pathname === "/feedback" ? " active" : ""}`}
+        >
+          <MessageSquarePlus size={14} />
+          <span>Feedback</span>
+        </Link>
+      </div>
     </nav>
   );
 }
@@ -231,6 +243,7 @@ function Shell() {
   const loc = useLocation();
 
   const crumb = (() => {
+    if (loc.pathname === "/feedback") return "Feedback";
     for (const sec of NAV_SECTIONS) {
       for (const item of sec.items) {
         // Check sub-children first
@@ -270,6 +283,7 @@ function Shell() {
           <Route path="/generate"          element={<Generate />}        />
           <Route path="/catalog"           element={<AppCatalog />}      />
           <Route path="/deployments"       element={<Deployments />}     />
+          <Route path="/feedback"              element={<Feedback />}            />
           <Route path="/settings"            element={<Navigate to="/settings/status" replace />} />
           <Route path="/settings/status"     element={<SettingsStatus />}       />
           <Route path="/settings/connection" element={<SettingsConnection />}   />

@@ -107,6 +107,26 @@ a:hover { color: var(--blue-hover); }
   gap: 1px;
 }
 
+.sidebar-footer {
+  padding: 8px;
+  border-top: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+.sidebar-footer-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-500);
+  transition: background .12s, color .12s;
+}
+.sidebar-footer-link:hover { background: var(--gray-50); color: var(--gray-700); }
+.sidebar-footer-link.active { background: var(--blue-50, #eff6ff); color: var(--blue-primary); }
+
 /* ── Section toggle button ─────────────────────────────────────────────────── */
 .nav-group { margin-bottom: 2px; }
 
