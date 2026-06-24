@@ -120,6 +120,188 @@ def init_db() -> None:
                 updated_at   TEXT NOT NULL
             );
         """)
+    _seed_default_roles(_connect())
+
+
+_DEFAULT_ROLES = [
+    {
+        "name": "NGINX Web Server",
+        "description": "Installs NGINX, opens HTTP/HTTPS firewall ports.",
+        "yaml": """\
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - nginx
+  - ufw
+runcmd:
+  - ufw allow 'Nginx Full'
+  - ufw --force enable
+  - systemctl enable nginx
+  - systemctl start nginx""",
+    },
+    {
+        "name": "Apache Web Server",
+        "description": "Installs Apache2 with mod_ssl, opens HTTP/HTTPS.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - apache2
+  - ufw
+runcmd:
+  - a2enmod ssl
+  - ufw allow 'Apache Full'
+  - ufw --force enable
+  - systemctl enable apache2
+  - systemctl start apache2""",
+    },
+    {
+        "name": "PostgreSQL Database",
+        "description": "Installs PostgreSQL, enables service, opens port 5432.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - postgresql
+  - postgresql-contrib
+  - ufw
+runcmd:
+  - systemctl enable postgresql
+  - systemctl start postgresql
+  - ufw allow 5432/tcp""",
+    },
+    {
+        "name": "MariaDB Database",
+        "description": "Installs MariaDB, sets root password, opens port 3306.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - mariadb-server
+  - ufw
+runcmd:
+  - systemctl enable mariadb
+  - systemctl start mariadb
+  - mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'changeme'; FLUSH PRIVILEGES;"
+  - ufw allow 3306/tcp""",
+    },
+    {
+        "name": "Redis Cache",
+        "description": "Installs Redis, binds to all interfaces, opens port 6379.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - redis-server
+  - ufw
+runcmd:
+  - sed -i 's/^bind 127.0.0.1 ::1/bind 0.0.0.0/' /etc/redis/redis.conf
+  - sed -i 's/^# requirepass foobared/requirepass changeme/' /etc/redis/redis.conf
+  - systemctl enable redis-server
+  - systemctl start redis-server
+  - ufw allow 6379/tcp""",
+    },
+    {
+        "name": "Docker Host",
+        "description": "Installs Docker CE and Compose plugin; adds ubuntu user to docker group.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker ubuntu""",
+    },
+    {
+        "name": "Kubernetes Node (k3s)",
+        "description": "Installs k3s single-node cluster; kubeconfig world-readable.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - curl
+runcmd:
+  - curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+  - systemctl enable k3s""",
+    },
+    {
+        "name": "Monitoring (Prometheus + Grafana)",
+        "description": "Installs Prometheus on :9090 and Grafana on :3000.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - prometheus
+  - ufw
+runcmd:
+  - wget -q -O /tmp/grafana.deb https://dl.grafana.com/oss/release/grafana_10.4.2_amd64.deb
+  - dpkg -i /tmp/grafana.deb || apt-get -f install -y
+  - systemctl enable prometheus grafana-server
+  - systemctl start prometheus grafana-server
+  - ufw allow 9090/tcp
+  - ufw allow 3000/tcp""",
+    },
+    {
+        "name": "VPN Gateway (WireGuard)",
+        "description": "Installs WireGuard, enables IP forwarding, opens UDP 51820.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - wireguard
+  - ufw
+runcmd:
+  - wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+  - echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+  - sysctl -p
+  - ufw allow 51820/udp
+  - ufw --force enable""",
+    },
+    {
+        "name": "Load Balancer (HAProxy)",
+        "description": "Installs HAProxy and opens ports 80 and 443.",
+        "yaml": """\
+#cloud-config
+package_update: true
+packages:
+  - haproxy
+  - ufw
+runcmd:
+  - systemctl enable haproxy
+  - systemctl start haproxy
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable""",
+    },
+]
+
+
+def _seed_default_roles(conn: sqlite3.Connection) -> None:
+    """Insert built-in sample roles that don't already exist (by name)."""
+    existing = {
+        row[0].lower()
+        for row in conn.execute("SELECT name FROM saved_configs WHERE type = 'role'").fetchall()
+    }
+    now = datetime.utcnow().isoformat()
+    inserted = False
+    for role in _DEFAULT_ROLES:
+        if role["name"].lower() in existing:
+            continue
+        content = json.dumps({"description": role["description"], "yaml": role["yaml"]})
+        conn.execute(
+            "INSERT INTO saved_configs (name, type, content, created_at, updated_at) VALUES (?,?,?,?,?)",
+            (role["name"], "role", content, now, now),
+        )
+        inserted = True
+    if inserted:
+        conn.commit()
 
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
