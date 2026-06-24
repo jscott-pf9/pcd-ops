@@ -76,12 +76,26 @@ function DeployModal({ profile, hcl, profileId, onClose, onDeployed }: {
   const fullHcl = `# terraform.tfvars\n${tfvars}\n\n# main.tf\n${hcl}`;
 
   function copy() {
-    navigator.clipboard.writeText(fullHcl);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(fullHcl).catch(() => copyFallback(fullHcl));
+    } else {
+      copyFallback(fullHcl);
+    }
     setCopied(true); setTimeout(() => setCopied(false), 2000);
   }
 
+  function copyFallback(text: string) {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed"; el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  }
+
   async function runDeploy() {
-    if (!tenantName || !network || !keyPair) return;
+    if (!tenantName || !networkOk || !keyPair) return;
     setDeploying(true); setDeployLog([]); setDeployDone(null);
 
     try {
