@@ -118,9 +118,10 @@ draw_header() {
     box_row_c "●  Service Stopped" "${RED}${BOLD}"
   fi
   box_row ""
+  box_row "  Version:     ${VER}"
   box_row "  IP Address:  ${IP:-not assigned}"
   box_row "  Web URL:     http://${IP:-<not assigned>}/"
-  box_row "  System:      Alpine v${ALPINE}  |  Build: ${VER}" "${DIM}"
+  box_row "  System:      Alpine Linux v${ALPINE}" "${DIM}"
   box_mid
 }
 

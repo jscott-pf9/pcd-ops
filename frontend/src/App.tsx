@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "./api/client";
 import EventFooter from "./components/EventFooter";
 import {
   AlertTriangle,
@@ -119,6 +121,12 @@ function sectionContainsActive(sec: NavSection, pathname: string) {
 
 function Sidebar() {
   const loc = useLocation();
+  const { data: ver } = useQuery({
+    queryKey: ["version"],
+    queryFn: () => apiFetch<{ tag: string | null; commit: string }>("/version"),
+    staleTime: Infinity,
+  });
+  const versionLabel = ver?.tag ?? (ver?.commit ? ver.commit : null);
 
   // Start with all sections containing the active path expanded
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -154,6 +162,7 @@ function Sidebar() {
         <div className="brand-stack">
           <span className="brand-name">PCD Ops</span>
           <span className="brand-sub">Platform9</span>
+          {versionLabel && <span style={{ fontSize: 10, color: "var(--gray-400)", marginTop: 1 }}>{versionLabel}</span>}
         </div>
       </div>
 
