@@ -5,6 +5,7 @@ import { Briefcase } from "lucide-react";
 import { apiFetch } from "../api/client";
 import DataFreshness from "../components/DataFreshness";
 import { useTenants } from "../api/tenants";
+import { getSettings } from "../api/settings";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,9 @@ export default function RightSizing() {
     queryFn: () => apiFetch("/rightsizing/recommendations"),
   });
 
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 60_000 });
+  const aiDisabled = settings?.ai_rightsizing_enabled === false;
+
   const counts: Record<string, number> = { all: recs.length };
   for (const r of recs) counts[r.classification] = (counts[r.classification] ?? 0) + 1;
 
@@ -83,6 +87,12 @@ export default function RightSizing() {
           <DataFreshness domainKey="rightsizing:recommendations" slow />
         </div>
       </div>
+
+      {aiDisabled && (
+        <div className="alert alert-info" style={{ marginBottom: 14 }}>
+          AI insights are disabled — VMs are classified from metrics only, with no narrative analysis.
+        </div>
+      )}
 
       {isLoading && !recs.length && <p className="text-muted">Collecting metrics…</p>}
 

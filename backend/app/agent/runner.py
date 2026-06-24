@@ -116,9 +116,8 @@ async def run_daily() -> None:
         return
 
     from app.config import settings
-    if not _ai_feature_due("rightsizing:recommendations", settings.ai_rightsizing_schedule,
-                            settings.ai_rightsizing_enabled):
-        logger.info("Right-sizing AI skipped (disabled or not yet due per schedule '%s').",
+    if not _ai_feature_due("rightsizing:recommendations", settings.ai_rightsizing_schedule, True):
+        logger.info("Right-sizing collection skipped (not yet due per schedule '%s').",
                     settings.ai_rightsizing_schedule)
         return
 
