@@ -121,6 +121,7 @@ def init_db() -> None:
             );
         """)
     _seed_default_roles(_connect())
+    _seed_default_sg_templates(_connect())
 
 
 _DEFAULT_ROLES = [
@@ -283,6 +284,96 @@ runcmd:
 ]
 
 
+_DEFAULT_SG_TEMPLATES = [
+    {
+        "name": "Web Server (HTTP/HTTPS)",
+        "description": "Opens ports 80 and 443 for public web traffic.",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 80,  "port_max": 80,  "cidr": "0.0.0.0/0"},
+            {"direction": "ingress", "protocol": "tcp", "port_min": 443, "port_max": 443, "cidr": "0.0.0.0/0"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",  "port_max": "",  "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "SSH Access",
+        "description": "Allows SSH on port 22 from anywhere (restrict CIDR in production).",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 22, "port_max": 22, "cidr": "0.0.0.0/0"},
+            {"direction": "egress",  "protocol": "",    "port_min": "", "port_max": "", "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "PostgreSQL",
+        "description": "Allows PostgreSQL access on port 5432 from internal network.",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 5432, "port_max": 5432, "cidr": "10.0.0.0/8"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "MySQL / MariaDB",
+        "description": "Allows MySQL/MariaDB access on port 3306 from internal network.",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 3306, "port_max": 3306, "cidr": "10.0.0.0/8"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "Redis",
+        "description": "Allows Redis access on port 6379 from internal network.",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 6379, "port_max": 6379, "cidr": "10.0.0.0/8"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "Load Balancer",
+        "description": "HTTP, HTTPS, and health-check ports for a load balancer.",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 80,   "port_max": 80,   "cidr": "0.0.0.0/0"},
+            {"direction": "ingress", "protocol": "tcp", "port_min": 443,  "port_max": 443,  "cidr": "0.0.0.0/0"},
+            {"direction": "ingress", "protocol": "tcp", "port_min": 8080, "port_max": 8080, "cidr": "10.0.0.0/8"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "Kubernetes Node",
+        "description": "API server (6443), kubelet (10250), and node-port range (30000-32767).",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 6443,  "port_max": 6443,  "cidr": "10.0.0.0/8"},
+            {"direction": "ingress", "protocol": "tcp", "port_min": 10250, "port_max": 10250, "cidr": "10.0.0.0/8"},
+            {"direction": "ingress", "protocol": "tcp", "port_min": 30000, "port_max": 32767, "cidr": "0.0.0.0/0"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",    "port_max": "",    "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "Monitoring (Prometheus + Grafana)",
+        "description": "Prometheus scrape (9090) and Grafana UI (3000) from internal network.",
+        "rules": [
+            {"direction": "ingress", "protocol": "tcp", "port_min": 9090, "port_max": 9090, "cidr": "10.0.0.0/8"},
+            {"direction": "ingress", "protocol": "tcp", "port_min": 3000, "port_max": 3000, "cidr": "10.0.0.0/8"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "WireGuard VPN",
+        "description": "WireGuard UDP on 51820 from anywhere.",
+        "rules": [
+            {"direction": "ingress", "protocol": "udp", "port_min": 51820, "port_max": 51820, "cidr": "0.0.0.0/0"},
+            {"direction": "egress",  "protocol": "",    "port_min": "",    "port_max": "",    "cidr": "0.0.0.0/0"},
+        ],
+    },
+    {
+        "name": "ICMP (Ping)",
+        "description": "Allows ICMP ping from anywhere.",
+        "rules": [
+            {"direction": "ingress", "protocol": "icmp", "port_min": "", "port_max": "", "cidr": "0.0.0.0/0"},
+            {"direction": "egress",  "protocol": "icmp", "port_min": "", "port_max": "", "cidr": "0.0.0.0/0"},
+        ],
+    },
+]
+
+
 def _seed_default_roles(conn: sqlite3.Connection) -> None:
     """Insert built-in sample roles that don't already exist (by name)."""
     existing = {
@@ -298,6 +389,27 @@ def _seed_default_roles(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT INTO saved_configs (name, type, content, created_at, updated_at) VALUES (?,?,?,?,?)",
             (role["name"], "role", content, now, now),
+        )
+        inserted = True
+    if inserted:
+        conn.commit()
+
+
+def _seed_default_sg_templates(conn: sqlite3.Connection) -> None:
+    """Insert built-in sample SG templates that don't already exist (by name)."""
+    existing = {
+        row[0].lower()
+        for row in conn.execute("SELECT name FROM saved_configs WHERE type = 'sg-template'").fetchall()
+    }
+    now = datetime.utcnow().isoformat()
+    inserted = False
+    for tpl in _DEFAULT_SG_TEMPLATES:
+        if tpl["name"].lower() in existing:
+            continue
+        content = json.dumps({"description": tpl["description"], "rules": tpl["rules"]})
+        conn.execute(
+            "INSERT INTO saved_configs (name, type, content, created_at, updated_at) VALUES (?,?,?,?,?)",
+            (tpl["name"], "sg-template", content, now, now),
         )
         inserted = True
     if inserted:
