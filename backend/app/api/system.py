@@ -25,14 +25,23 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 
 @router.get("/version")
 async def get_version():
-    """Return current git commit (short), branch name, and tag (if on an exact tag)."""
+    """Return version from version file (written at image build time) or git, plus git metadata."""
+    # version file is written during Packer provisioning; git may not be present
+    version_file = APP_DIR / "version"
+    file_ver = version_file.read_text().strip() if version_file.exists() else None
+
     commit = _git("rev-parse", "--short", "HEAD")
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
-    tag = _git("describe", "--tags", "--exact-match")
+    tag    = _git("describe", "--tags", "--exact-match")
+
+    resolved_tag = (
+        tag.stdout.strip() if tag.returncode == 0
+        else file_ver or None
+    )
     return {
-        "commit": commit.stdout.strip() if commit.returncode == 0 else "unknown",
+        "commit": commit.stdout.strip() if commit.returncode == 0 else (file_ver or "unknown"),
         "branch": branch.stdout.strip() if branch.returncode == 0 else "unknown",
-        "tag": tag.stdout.strip() if tag.returncode == 0 else None,
+        "tag": resolved_tag,
     }
 
 

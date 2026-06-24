@@ -77,9 +77,12 @@ su -s /bin/sh pcd-ops -c "cp $APP_DIR/.env.example $APP_DIR/.env"
 echo "=== Removing sshd (management is via TUI console, not SSH) ==="
 apk del openssh 2>/dev/null || true
 
+echo "=== Writing version file ==="
+echo "${PCD_OPS_VERSION:-unknown}" > "$APP_DIR/version"
+chown pcd-ops:pcd-ops "$APP_DIR/version"
+
 echo "=== Cleaning up ==="
 rm -rf /var/cache/apk/*
-rm -rf "$APP_DIR/.git"
 # pip cache lives under pcd-ops HOME ($APP_DIR) — biggest single space consumer
 rm -rf "$APP_DIR/.cache"
 rm -rf /root/.cache

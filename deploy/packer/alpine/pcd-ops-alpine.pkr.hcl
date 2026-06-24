@@ -59,7 +59,7 @@ build {
   sources = ["source.qemu.pcd-ops-alpine"]
 
   provisioner "shell" {
-    environment_vars = ["GITHUB_REPO=${var.github_repo}", "GITHUB_BRANCH=${var.github_branch}"]
+    environment_vars = ["GITHUB_REPO=${var.github_repo}", "GITHUB_BRANCH=${var.github_branch}", "PCD_OPS_VERSION=${var.version}"]
     # Run as root so apk, rc-update, adduser, etc. work without per-line sudo.
     # The script uses `su -s /bin/sh pcd-ops -c` where it needs the service user.
     execute_command = "sudo sh -c '{{ .Vars }} {{ .Path }}'"

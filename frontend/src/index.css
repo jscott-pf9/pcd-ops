@@ -83,6 +83,7 @@ a:hover { color: var(--blue-hover); }
   padding: 12px 14px;
   border-bottom: 1px solid var(--gray-100);
   text-decoration: none;
+  flex-shrink: 0;
 }
 .sidebar-mark {
   width: 36px; height: 36px;
