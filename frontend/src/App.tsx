@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "./api/client";
+import { getSettings } from "./api/settings";
 import EventFooter from "./components/EventFooter";
 import {
   AlertTriangle,
@@ -250,6 +251,15 @@ function Sidebar() {
 
 function Shell() {
   const loc = useLocation();
+  const { data: settings, isSuccess } = useQuery({
+    queryKey: ["settings"],
+    queryFn: getSettings,
+    staleTime: 60_000,
+  });
+  const unconfigured = isSuccess && !settings?.os_auth_url;
+  if (unconfigured && loc.pathname !== "/settings/connection") {
+    return <Navigate to="/settings/connection" replace />;
+  }
 
   const crumb = (() => {
     if (loc.pathname === "/feedback") return "Feedback";

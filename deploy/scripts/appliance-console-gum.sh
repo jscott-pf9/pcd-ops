@@ -136,9 +136,7 @@ draw_advanced_header() {
 # ── Menu functions — only gum choose, safe to capture with $() ───────────────
 
 pick_main_menu() {
-  local M=$(( $(box_pad) + 1 ))
   gum choose \
-    --margin "1 0 0 $M" \
     --header "  APPLIANCE MENU" \
     --header.foreground "$C_BLUE" \
     --header.bold \
@@ -153,9 +151,7 @@ pick_main_menu() {
 }
 
 pick_advanced_menu() {
-  local M=$(( $(box_pad) + 1 ))
   gum choose \
-    --margin "1 0 0 $M" \
     --header "  Select an option" \
     --header.foreground "$C_DIM" \
     --cursor ">  " \
