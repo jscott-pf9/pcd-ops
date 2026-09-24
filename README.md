@@ -1,3 +1,5 @@
+<img src="logo.svg" alt="PCD Ops" width="72" height="72">
+
 # PCD Ops
 
 An operations dashboard for [Platform9 Private Cloud Director (PCD)](https://platform9.com/private-cloud-director/). Provides day-to-day operational visibility and automated actions across your PCD environment.

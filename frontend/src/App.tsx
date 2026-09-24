@@ -22,6 +22,7 @@ import {
   Settings as SettingsIcon,
   Sliders,
 } from "lucide-react";
+import PcdOpsMark from "./assets/PcdOpsMark";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import Anomaly from "./pages/Anomaly";
 import Capacity from "./pages/Capacity";
@@ -159,7 +160,7 @@ function Sidebar() {
   return (
     <nav className="sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-mark"><Layers size={16} /></div>
+        <div className="sidebar-mark"><PcdOpsMark size={36} /></div>
         <div className="brand-stack">
           <span className="brand-name">PCD Ops</span>
           <span className="brand-sub">Platform9</span>

@@ -88,12 +88,11 @@ a:hover { color: var(--blue-hover); }
 .sidebar-mark {
   width: 36px; height: 36px;
   border-radius: 8px;
-  background: var(--blue-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: #fff;
+  overflow: hidden;
 }
 .brand-stack { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .brand-name  { font-size: 14px; font-weight: 700; color: var(--gray-900); letter-spacing: -.01em; }

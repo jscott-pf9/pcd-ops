@@ -25,6 +25,7 @@ frontend/.vite/
 
 # Packer build output
 deploy/packer/output/
+deploy/packer/alpine/output/
 *.qcow2
 
 # Terraform
