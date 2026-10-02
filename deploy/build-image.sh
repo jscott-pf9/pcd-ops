@@ -49,11 +49,11 @@ mv "$CLEAN" "$OUTPUT"
 echo ""
 echo "Image built: $OUTPUT"
 echo ""
+# The image is hybrid BIOS+UEFI (bios_grub + ESP), so no hw_firmware_type
+# property is needed — it boots under SeaBIOS or OVMF.
 echo "Upload to PCD:"
 echo "  pcdctl image create --insecure \\"
 echo "    --container-format bare --disk-format qcow2 \\"
 echo "    --property os_type=Linux \\"
-echo "    --property hw_firmware_type=uefi \\"
-echo "    --property hw_machine_type=q35 \\"
 echo "    --public \\"
 echo "    --file $OUTPUT ${IMAGE_NAME}"

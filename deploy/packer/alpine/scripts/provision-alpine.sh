@@ -26,6 +26,20 @@ apk add --no-cache \
   gcc musl-dev python3-dev libffi-dev openssl-dev \
   nodejs npm gum
 
+echo "=== Installing GRUB for legacy BIOS boot ==="
+# The Alpine UEFI cloud image ships GRUB for UEFI only (grubx64.efi) and has
+# zeroed MBR boot code, so it won't boot when PCD launches it with SeaBIOS
+# (the default, or when the hypervisor has no OVMF). Add a bios_grub partition
+# in the free gap before the ESP (sectors 40-1023) and install the i386-pc
+# target too, giving a hybrid BIOS+UEFI disk like the Ubuntu cloud images.
+# grub.cfg is platform-agnostic, so both loaders share it.
+ROOT_PART=$(awk '$2 == "/" { print $1 }' /proc/mounts)
+ROOT_DISK=$(echo "$ROOT_PART" | sed 's/[0-9]*$//')
+apk add --no-cache grub-bios sgdisk
+sgdisk -a 1 -n 3:40:1023 -t 3:EF02 -c 3:BIOS "$ROOT_DISK"
+grub-install --target=i386-pc --boot-directory=/boot "$ROOT_DISK"
+apk del sgdisk
+
 echo "=== Creating pcd-ops service user ==="
 # Create group first; busybox adduser -S does not auto-create a matching group.
 addgroup -S pcd-ops

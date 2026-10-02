@@ -1,6 +1,8 @@
 # Alpine 3.21 UEFI + cloud-init build for pcd-ops.
 # Uses UEFI (GPT) instead of BIOS/MBR so the image passes oslo.utils
 # GPTInspector safety checks on modern OpenStack (PCD 2024+).
+# provision-alpine.sh also installs GRUB i386-pc into a bios_grub partition,
+# making the final image hybrid BIOS+UEFI so it boots without hw_firmware_type.
 # Packer 1.10+ — QEMU builder is built-in, no required_plugins block needed.
 
 variable "github_repo" {
