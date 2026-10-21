@@ -86,7 +86,9 @@ echo "=== Configuring appliance console on tty1 ==="
 sed -i "s|tty1::respawn:.*|tty1::respawn:$APP_DIR/deploy/scripts/appliance-console-gum.sh|" /etc/inittab
 
 echo "=== Writing empty .env template ==="
-su -s /bin/sh pcd-ops -c "cp $APP_DIR/.env.example $APP_DIR/.env"
+# Every assignment is commented out: run-uvicorn.sh sources this AFTER the
+# catalog's /etc/pcd-app/config.env, so a live KEY=value here would clobber it.
+su -s /bin/sh pcd-ops -c "sed 's/^\([A-Z_][A-Z0-9_]*=\)/# \1/' $APP_DIR/.env.example > $APP_DIR/.env"
 
 echo "=== Removing sshd (management is via TUI console, not SSH) ==="
 apk del openssh 2>/dev/null || true
@@ -94,6 +96,18 @@ apk del openssh 2>/dev/null || true
 echo "=== Writing version file ==="
 echo "${PCD_OPS_VERSION:-unknown}" > "$APP_DIR/version"
 chown pcd-ops:pcd-ops "$APP_DIR/version"
+
+echo "=== Fixing cloud-init datasource_list ==="
+# Alpine 3.21's stock cloud.cfg repeats datasource_list and the last one
+# ("NoCloud" only) wins, so on Nova cloud-init never reads the config drive and
+# user-data (incl. the catalog's /etc/pcd-app/config.env) is ignored. A drop-in
+# restores the OpenStack sources. Written now, so this Packer build (NoCloud
+# seed) is unaffected; it applies from the image's first real boot.
+cat > /etc/cloud/cloud.cfg.d/99_pcd_datasource.cfg <<'CLOUDCFG'
+datasource_list: ['ConfigDrive', 'OpenStack', 'NoCloud', 'None']
+CLOUDCFG
+# Forget the Packer build's NoCloud instance so first boot starts clean.
+cloud-init clean --logs
 
 echo "=== Cleaning up ==="
 rm -rf /var/cache/apk/*
