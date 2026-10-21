@@ -73,9 +73,13 @@ elapsed=$(( $(date +%s) - start ))
 if curl -sf -o /dev/null "http://127.0.0.1:$PORT/api/health"; then
   healthy=1
   echo "==> /api/health: 200 after ${elapsed}s: $(curl -s "http://127.0.0.1:$PORT/api/health")"
-  echo "==> /api/settings (AI fields):"
-  curl -s "http://127.0.0.1:$PORT/api/settings" \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(f"    {k}={d[k]!r}") for k in ("ai_backend","ai_url","ai_model")]'
+  # Everything else needs a PCD login (APPLIANCE_STANDARD §7); the connection comes from config.env.
+  echo "==> /api/auth/session: $(curl -s "http://127.0.0.1:$PORT/api/auth/session")"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/settings")
+  echo "==> /api/settings without a login: HTTP $code (expect 401)"
+  [ "$code" = 401 ] || healthy=
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/login")
+  echo "==> /login (SPA): HTTP $code"
 else
   echo "==> /api/health: no answer after ${elapsed}s (HTTP $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/health"))"
 fi

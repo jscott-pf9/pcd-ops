@@ -2,7 +2,7 @@
   "schema_version": "0.2",
   "id": "pcd-ops",
   "name": "PCD Ops",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "publisher": "Platform9",
   "repo": "https://github.com/jscott-pf9/pcd-ops",
   "tagline": "Reclamation, right-sizing and capacity planning.",
@@ -23,14 +23,17 @@
     "format": "qcow2",
     "source": {
       "type": "github_release",
-      "tag": "v0.4.3",
-      "asset": "pcd-ops-0.4.3.qcow2",
-      "checksum": "sha256:d435e38bde20cd6e15ab040bb0071eee792ddaef9e53f4027002f60ec1d33336"
+      "tag": "v0.5.0",
+      "asset": "pcd-ops-0.5.0.qcow2",
+      "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     },
     "min_disk_gb": 20,
     "properties": {
       "os_type": "linux",
-      "hw_disk_bus": "virtio"
+      "hw_disk_bus": "virtio",
+      "hw_firmware_type": "uefi",
+      "hw_machine_type": "q35",
+      "os_secure_boot": "disabled"
     }
   },
   "requirements": {
@@ -40,7 +43,11 @@
   },
   "network": {
     "port_security": true,
-    "floating_ip": "optional"
+    "floating_ip": "optional",
+    "addressing": [
+      "dhcp",
+      "static"
+    ]
   },
   "ports": [
     {
@@ -113,7 +120,7 @@
       "icon": "chart"
     }
   },
-  "post_deploy_notes": "Open the web UI and enter PCD and Grafana details (and the Claude API key, if used) under Settings. AI settings from the install form are defaults; anything saved on the Settings page wins. The appliance has no sshd; manage it from the VM console menu.",
+  "post_deploy_notes": "Open the URL and log in with your PCD account; you need the admin role in the project PCD Ops was installed into. The first admin to log in authorizes background access (one click, no passwords), then enters Grafana details and, if used, the Claude API key under Settings. AI settings from the install form are defaults that Settings can change. The appliance serves plain HTTP and has no sshd; manage it from the VM console menu.",
   "todo": [
     "Move repo to github.com/platform9."
   ]

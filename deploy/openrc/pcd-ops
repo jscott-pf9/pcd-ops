@@ -16,4 +16,5 @@ depend() {
 
 start_pre() {
   checkpath --directory --owner pcd-ops:pcd-ops --mode 0755 /var/log/pcd-ops
+  checkpath --directory --owner pcd-ops:pcd-ops --mode 0700 /var/lib/pcd-ops
 }

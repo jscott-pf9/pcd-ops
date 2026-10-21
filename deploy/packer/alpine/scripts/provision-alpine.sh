@@ -60,6 +60,11 @@ su -s /bin/sh pcd-ops -c "cd $APP_DIR/frontend && npm ci -q && npm run build"
 rm -rf "$APP_DIR/frontend/node_modules"
 su -s /bin/sh pcd-ops -c "npm cache clean --force 2>/dev/null || true"
 
+echo "=== Creating state directory ==="
+# Per-install secrets (Fernet key, encrypted application credential) live here, created at
+# first use — never in the image (APPLIANCE_STANDARD §7.5).
+install -d -m 0700 -o pcd-ops -g pcd-ops /var/lib/pcd-ops
+
 echo "=== Installing OpenRC init script ==="
 cp "$APP_DIR/deploy/openrc/pcd-ops" /etc/init.d/pcd-ops
 chmod 755 /etc/init.d/pcd-ops
@@ -75,6 +80,7 @@ echo "=== Configuring sudo for self-update ==="
 chmod +x "$APP_DIR/deploy/scripts/update.sh"
 chmod +x "$APP_DIR/deploy/scripts/appliance-console.sh"
 chmod +x "$APP_DIR/deploy/scripts/appliance-console-gum.sh"
+chmod +x "$APP_DIR/deploy/scripts/reset-setup.sh"
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops restart\n' > /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /usr/sbin/nginx -s reload\n'        >> /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/reboot\n'                     >> /etc/sudoers.d/pcd-ops
@@ -122,6 +128,19 @@ find "$APP_DIR/backend" -name "*.pyc" -delete 2>/dev/null || true
 # Strip debug symbols from compiled extensions (~10-20 MB)
 find "$APP_DIR/backend/.venv" -name "*.so" -exec strip --strip-debug {} \; 2>/dev/null || true
 rm -rf /tmp/*
+
+echo "=== Checking that no credentials are baked in ==="
+# Only tracked files are cloned, so creds/ (gitignored) never gets here; fail loudly if that
+# changes, or if any file carries an OpenStack password (an rc file, a filled-in .env).
+if [ -e "$APP_DIR/creds" ] || [ -n "$(ls -A /var/lib/pcd-ops)" ]; then
+  echo "ERROR: credentials or per-install state found in the image" >&2
+  exit 1
+fi
+if grep -rIlE '^[[:space:]]*(export[[:space:]]+)?OS_PASSWORD=[^[:space:]]' "$APP_DIR" \
+     --exclude-dir=.git --exclude-dir=.venv --exclude-dir=node_modules; then
+  echo "ERROR: the files above contain an OpenStack password" >&2
+  exit 1
+fi
 
 passwd -l alpine
 

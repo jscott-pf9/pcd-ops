@@ -157,11 +157,12 @@ pick_advanced_menu() {
     --cursor ">  " \
     --cursor.foreground "$C_YELLOW" \
     --selected.foreground "$C_WHITE" \
-    --height 8 \
+    --height 9 \
     "  Force App Update  (git pull + rebuild)" \
     "  Patch OS  (apk update + upgrade)" \
     "  View App Logs" \
     "  Network Info" \
+    "  Reset Setup  (forget background access)" \
     "  Emergency Shell" \
     "  Back"
 }
@@ -275,6 +276,20 @@ do_network_info() {
   pause
 }
 
+do_reset_setup() {
+  if gum confirm \
+    --prompt.foreground "$C_WHITE" \
+    --affirmative "Reset" \
+    --negative "Cancel" \
+    --default=false \
+    "Forget background access and log everyone out? The next admin to log in sets it up again."; then
+    printf "\n"
+    "$APP_DIR/deploy/scripts/reset-setup.sh"
+    printf "\n  ${GRN}${BOLD}✓  Setup reset.${RST}\n"
+    pause
+  fi
+}
+
 do_emergency_shell() {
   clear
   printf "\n"
@@ -297,6 +312,7 @@ advanced_loop() {
       *"Patch OS"*)          do_patch_os ;;
       *"View App Logs"*)     do_view_logs ;;
       *"Network Info"*)      do_network_info ;;
+      *"Reset Setup"*)       do_reset_setup ;;
       *"Emergency Shell"*)   do_emergency_shell ;;
       *"Back"*|"")           return ;;
     esac

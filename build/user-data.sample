@@ -10,6 +10,8 @@ write_files:
     PCD_INSTANCE_NAME='pcd-ops-test'
     PCD_REGION='lab'
     PCD_PROJECT_ID='local-test'
+    PCD_PROJECT_NAME='service'
+    PCD_AUTH_URL='https://pcd.example.com/keystone/v3'
     AI_BACKEND='ollama'
     AI_URL='http://10.0.0.9:11434'
     AI_MODEL='qwen2.5:14b'

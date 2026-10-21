@@ -2,13 +2,26 @@
 
 
 
-**Version:** 0.1.0  
+**Version:** 0.5.0  
 **Base URL:** `/api`  
-**Auth:** None (internal service — restrict at the network layer)
+**Auth:** PCD login (session cookie). See *Authentication* below.
 
 ---
 
 ## Common Patterns
+
+### Authentication
+
+Every `/api/` endpoint needs a session from `POST /api/auth/login` (a PCD username,
+password and domain; the admin role in the install project), except `GET /api/health`,
+`/api/auth/*`, and `POST /api/access/connection` before a Keystone URL is known.
+
+- **No session:** **401** `{"detail": "login required"}`.
+- **Setup not finished** (no background access authorized): **409**
+  `{"setup_required": true}` from everything but `/api/auth/*` and `/api/access*`.
+- **Writes** (`POST`, `PUT`, `PATCH`, `DELETE`) need an `X-Requested-With` header, or get **403**.
+- **Calls to PCD** made by a request run with the logged-in user's token; the scheduler's
+  collectors and scheduled jobs use the background application credential.
 
 ### Cache-backed reads
 
@@ -36,7 +49,10 @@ object on a `data:` line:
 |--------|---------|
 | 400 | Bad request (invalid parameters or unparseable input) |
 | 404 | Resource not found |
-| 409 | Conflict (operation in progress or invalid state transition) |
+| 401 | Not logged in |
+| 403 | Write without the `X-Requested-With` header |
+| 409 | Conflict (operation in progress or invalid state transition), or `{"setup_required": true}` |
+| 429 | Too many login attempts (5 a minute per client IP) |
 | 422 | Validation error (FastAPI request model mismatch) |
 | 503 | Cache miss — collector not yet run, or AI feature disabled |
 
@@ -44,10 +60,14 @@ object on a `data:` line:
 
 ## Table of Contents
 
+- [Access](#access)
 - [Agent](#agent)
 - [Anomaly](#anomaly)
+- [Auth](#auth)
 - [Capacity](#capacity)
 - [Deployments](#deployments)
+- [Events](#events)
+- [Feedback](#feedback)
 - [Generate](#generate)
 - [Inventory](#inventory)
 - [Jobs](#jobs)
@@ -58,6 +78,56 @@ object on a `data:` line:
 - [Rightsizing](#rightsizing)
 - [Snapshots](#snapshots)
 - [System](#system)
+
+---
+
+## Access
+
+### **GET** `/api/access`
+
+Connection (from config.env, read-only), background access and setup state.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/access/connection`
+
+Only for installs without config.env: tell PCD Ops which PCD to log in to. Refused
+
+once a Keystone URL is known; change it by redeploying, or reset setup from the console.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `auth_url` | string | yes | — | Auth Url |
+| `project_name` | string | yes | — | Project Name |
+| `region` | string | no | `""` | Region |
+| `project_domain` | string | no | `"Default"` | Project Domain |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/access/authorize`
+
+Mint an application credential from the logged-in admin's token (install project,
+
+roles [admin], unrestricted false), store it encrypted and switch background work to it.
+Any previous credential is then deleted in Keystone.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/access/revoke`
+
+Delete the application credential in Keystone with the current admin's token, then
+
+wipe the local copy. Background work stops until someone authorizes it again.
+
+**Response:** 200 — Successful Response  
 
 ---
 
@@ -73,7 +143,7 @@ Return agent runner status, domain cache metadata, and recent runs.
 
 ### **POST** `/api/agent/trigger`
 
-Trigger an on-demand collection run.
+Trigger an on-demand collection run, as the logged-in user.
 
 ?slow=true runs all tiers including AI collectors (anomaly, capacity trends, right-sizing).
 Default (slow=false) runs only fast collectors (inventory, snapshots, logs, reclamation).
@@ -107,6 +177,40 @@ Return recent agent run history (most recent first).
 ### **GET** `/api/anomaly/`
 
 Return the latest anomaly detection results (metric drift and outlier analysis).
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Auth
+
+### **POST** `/api/auth/login`
+
+Authenticate against PCD Keystone and start a session (5 attempts a minute per IP).
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `username` | string | yes | — | Username |
+| `password` | string | yes | — | Password |
+| `domain` | string | no | `"Default"` | Domain |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/auth/logout`
+
+End the session.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/auth/session`
+
+Who is logged in, and what the UI should show next (login, setup or the app).
 
 **Response:** 200 — Successful Response  
 
@@ -299,6 +403,50 @@ Refresh deployment status by querying OpenStack for VM states.
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `dep_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Events
+
+### **GET** `/api/events`
+
+List Events
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `limit` | query | integer | no | `100` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Feedback
+
+### **POST** `/api/feedback`
+
+Submit Feedback
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | yes | — | Type |
+| `title` | string | yes | — | Title |
+| `description` | string | yes | — | Description |
+| `name` | string | yes | — | Name |
+| `email` | string | yes | — | Email |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/feedback/configured`
+
+Returns whether GitHub feedback is configured so the frontend can show/hide the form.
 
 **Response:** 200 — Successful Response  
 
@@ -773,7 +921,7 @@ Delete a job and its run history.
 
 ### **POST** `/api/jobs/{job_id}/run`
 
-Trigger a job to run immediately, regardless of its schedule.
+Trigger a job to run immediately, regardless of its schedule, as the logged-in user.
 
 **Parameters**
 
@@ -898,7 +1046,7 @@ Paste-and-analyze: accepts raw log lines, returns AI summary.
 
 ### **GET** `/api/settings`
 
-Return all runtime settings; password, token, and API key fields are masked with '***'.
+Return the app settings; token and API key fields are masked with '***'.
 
 **Response:** 200 — Successful Response  
 
@@ -912,13 +1060,6 @@ Update runtime settings; fields with value '***' or '' for secrets are preserved
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `os_auth_url` | string | no | `""` | Os Auth Url |
-| `os_username` | string | no | `""` | Os Username |
-| `os_password` | string | no | `""` | Os Password |
-| `os_project_name` | string | no | `""` | Os Project Name |
-| `os_user_domain_name` | string | no | `"Default"` | Os User Domain Name |
-| `os_project_domain_name` | string | no | `"Default"` | Os Project Domain Name |
-| `os_region_name` | string | no | `""` | Os Region Name |
 | `prometheus_url` | string | no | `""` | Prometheus Url |
 | `grafana_url` | string | no | `""` | Grafana Url |
 | `grafana_token` | string | no | `""` | Grafana Token |
@@ -939,7 +1080,9 @@ Update runtime settings; fields with value '***' or '' for secrets are preserved
 
 ### **GET** `/api/health`
 
-Health
+Unauthenticated and cheap (no PCD calls), for the catalog's probe (APPLIANCE_STANDARD §6).
+
+setup_required: no admin has authorized background access, or it stopped working.
 
 **Response:** 200 — Successful Response  
 
@@ -949,7 +1092,7 @@ Health
 
 ### **GET** `/api/reclamation/candidates`
 
-Return idle VMs (stopped/shelved), unattached volumes, and unused floating IPs eligible for reclamation.
+Return idle VMs, unattached volumes, and unused floating IPs for reclamation.
 
 **Response:** 200 — Successful Response  
 
@@ -978,6 +1121,20 @@ Delete a Cinder volume (irreversible).
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `volume_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/floating_ips/{fip_id}`
+
+Release an unused floating IP back to the pool (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `fip_id` | path | string | yes | — |  |
 
 **Response:** 200 — Successful Response  
 
@@ -1080,7 +1237,7 @@ Delete a Cinder volume snapshot (irreversible).
 
 ### **GET** `/api/system/version`
 
-Return current git commit (short), branch name, and tag (if on an exact tag).
+Return version from version file (written at image build time) or git, plus git metadata.
 
 **Response:** 200 — Successful Response  
 
@@ -1097,6 +1254,30 @@ Check whether a newer version is available by running git fetch and comparing HE
 ### **GET** `/api/system/update/log`
 
 Return the stdout/stderr log from the most recent self-update run.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/system/connections`
+
+Test live connectivity to OpenStack (background access) and Grafana; ok/error per service.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/system/restart`
+
+Restart the pcd-ops backend service without updating code.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/system/reboot`
+
+Reboot the appliance VM (response returns before the reboot completes).
 
 **Response:** 200 — Successful Response  
 

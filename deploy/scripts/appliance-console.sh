@@ -108,6 +108,7 @@ draw_advanced() {
   printf "  ${W}│${N}  ${Y}[P]${N}  Patch OS (apk update + upgrade)        ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[L]${N}  View app logs                          ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[N]${N}  Network info                           ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[R]${N}  Reset setup (forget background access) ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[X]${N}  Emergency shell                        ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[B]${N}  Back to main menu                      ${W}│${N}\n"
   printf "  ${W}+────────────────────────────────────────────────+${N}\n"
@@ -175,6 +176,19 @@ do_network_info() {
   press_any_key
 }
 
+do_reset_setup() {
+  printf "${CLS}"
+  printf "\n  ${W}Reset Setup${N}\n"
+  printf "  ${D}Forgets background access and logs everyone out; the next admin to log in sets it up again.${N}\n\n"
+  printf "  Type ${W}reset${N} to continue: "
+  read -r answer
+  if [ "$answer" = "reset" ]; then
+    "$APP_DIR/deploy/scripts/reset-setup.sh"
+    printf "\n  ${G}Setup reset.${N}\n"
+  fi
+  press_any_key
+}
+
 do_emergency_shell() {
   printf "${CLS}"
   printf "\n  ${W}Emergency Shell${N}\n"
@@ -197,6 +211,7 @@ advanced_menu() {
       p) do_patch_os ;;
       l) do_view_logs ;;
       n) do_network_info ;;
+      r) do_reset_setup ;;
       x) do_emergency_shell ;;
       b) return ;;
     esac
