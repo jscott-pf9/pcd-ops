@@ -1,0 +1,81 @@
+{
+  "schema_version": "0.2",
+  "id": "pcd-ops",
+  "name": "PCD Ops",
+  "version": "0.4.2",
+  "publisher": "Platform9",
+  "repo": "https://github.com/jscott-pf9/pcd-ops",
+  "tagline": "Reclamation, right-sizing and capacity planning.",
+  "description": "The day-two dashboard. Resource reclamation, cluster capacity planning with what-if analysis, a searchable inventory, snapshot management, right-sizing recommendations from real Prometheus usage, and anomaly and drift detection.",
+  "category": "operations",
+  "tags": ["PCD", "Analytics"],
+  "featured": true,
+  "icon": "pcd-ops.svg",
+  "includes": [
+    "Idle VMs, orphaned volumes, stale snapshots",
+    "Right-sizing and capacity headroom",
+    "AI triage, cloud-hosted or on-premises Ollama"
+  ],
+  "image": {
+    "format": "qcow2",
+    "source": {
+      "type": "github_release",
+      "tag": "v0.4.2",
+      "asset": "pcd-ops-0.4.2.qcow2",
+      "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "min_disk_gb": 20,
+    "properties": {
+      "os_type": "linux",
+      "hw_disk_bus": "virtio"
+    }
+  },
+  "requirements": { "vcpus": 2, "memory_mb": 4096, "disk_gb": 20 },
+  "network": { "port_security": true, "floating_ip": "optional" },
+  "ports": [
+    { "protocol": "tcp", "port": 80, "purpose": "Web UI" }
+  ],
+  "configuration": [
+    {
+      "id": "ai_backend",
+      "label": "AI backend",
+      "type": "select",
+      "section": "advanced",
+      "default": "ollama",
+      "env": "AI_BACKEND",
+      "options": [
+        { "value": "ollama", "label": "Ollama or OpenAI-compatible (on-premises)" },
+        { "value": "claude", "label": "Claude (Anthropic, cloud)" }
+      ],
+      "help": "Used for AI right-sizing, anomaly and log analysis. For Claude, enter the API key on the PCD Ops Settings page after install."
+    },
+    {
+      "id": "ai_url",
+      "label": "AI endpoint URL",
+      "type": "string",
+      "section": "advanced",
+      "default": "http://localhost:11434",
+      "env": "AI_URL",
+      "placeholder": "http://ollama.example.com:11434",
+      "help": "Ollama base URL or OpenAI-compatible endpoint, reachable from the appliance.",
+      "show_if": { "field": "ai_backend", "equals": "ollama" }
+    },
+    {
+      "id": "ai_model",
+      "label": "AI model",
+      "type": "string",
+      "section": "advanced",
+      "default": "llama3.1:8b",
+      "env": "AI_MODEL",
+      "help": "Model name on the endpoint, e.g. llama3.1:8b.",
+      "show_if": { "field": "ai_backend", "equals": "ollama" }
+    }
+  ],
+  "health_check": { "type": "http", "port": 80, "path": "/api/health", "timeout_s": 600 },
+  "access": { "url": "http://{ip}/" },
+  "ui": { "nav": { "label": "PCD Ops", "audience": "admin", "icon": "chart" } },
+  "post_deploy_notes": "Open the web UI and enter PCD and Grafana details (and the Claude API key, if used) under Settings. AI settings from the install form are defaults; anything saved on the Settings page wins. The appliance has no sshd; manage it from the VM console menu.",
+  "todo": [
+    "Move repo to github.com/platform9."
+  ]
+}

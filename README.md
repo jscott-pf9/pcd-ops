@@ -29,13 +29,21 @@ PCD Ops runs as a dedicated appliance VM in your PCD environment — no Kubernet
 
 ---
 
-### Method 1 — Prebuilt image (recommended)
+### Method 1 — PCD App Catalog (Extensions)
+
+In the PCD admin UI, open **Extensions**, pick **PCD Ops**, and install. The catalog imports the release image, opens port 80, and waits for `/api/health`. The AI backend, URL and model under **Advanced Configuration** are written to `/etc/pcd-app/config.env` and become the appliance's defaults; anything saved on the Settings page wins. Secrets (PCD password, Grafana token, Claude API key) are only ever entered on the Settings page.
+
+Each release carries the catalog's [manifest.json](manifest.json) as an asset, with the image's tag, file name and checksum filled in.
+
+---
+
+### Method 2 — Prebuilt image
 
 No build tools required. Download the image, upload it to PCD, and launch a VM.
 
 **1. Download**
 
-Download the latest `pcd-ops-alpine.qcow2` from [Releases](https://github.com/jscott-pf9/pcd-ops/releases).
+Download the latest `pcd-ops-<version>.qcow2` from [Releases](https://github.com/jscott-pf9/pcd-ops/releases) and check it with `sha256sum -c pcd-ops-<version>.qcow2.sha256`. The image boots under both BIOS (SeaBIOS) and UEFI, so no firmware properties are needed.
 
 **2. Upload to PCD**
 
@@ -45,7 +53,7 @@ pcdctl image create --insecure \
   --disk-format qcow2 \
   --property os_type=Linux \
   --public \
-  --file pcd-ops-alpine.qcow2 \
+  --file pcd-ops-<version>.qcow2 \
   pcd-ops
 ```
 
@@ -60,7 +68,7 @@ Or use `pcdctl server create` if you prefer the CLI.
 
 ---
 
-### Method 2 — Build from source
+### Method 3 — Build from source
 
 For contributors or custom builds. Requires Packer and QEMU/KVM on the build host.
 
@@ -81,9 +89,20 @@ git clone https://github.com/jscott-pf9/pcd-ops.git
 cd pcd-ops
 
 ./deploy/build-image.sh
-# Output: deploy/packer/alpine/output/pcd-ops-alpine.qcow2
+# Output: deploy/packer/alpine/output/<tag>/pcd-ops-<version>.qcow2 (+ .sha256, manifest.json)
 # Build time: ~5 minutes with KVM acceleration
 ```
+
+Packer clones the **current branch from GitHub** inside the build VM, so push your changes first. The build fails if the image doesn't pass Nova's format-inspector safety check.
+
+To boot the result locally the way Nova does (config drive with catalog-style user-data, port 80 forwarded to `127.0.0.1:8180`):
+
+```bash
+build/test-local.sh                 # UEFI (q35 + OVMF)
+FIRMWARE=bios build/test-local.sh   # SeaBIOS
+```
+
+It reports when `/api/health` answers, the AI settings the app picked up, the cloud-init datasource, and the guest's `/etc/pcd-app/config.env`.
 
 **2. Upload to PCD**
 
@@ -93,7 +112,7 @@ pcdctl image create --insecure \
   --disk-format qcow2 \
   --property os_type=Linux \
   --public \
-  --file deploy/packer/alpine/output/pcd-ops-alpine.qcow2 \
+  --file deploy/packer/alpine/output/<tag>/pcd-ops-<version>.qcow2 \
   pcd-ops
 ```
 
@@ -107,6 +126,25 @@ cp terraform.tfvars.example terraform.tfvars
 ```
 
 The VM IP is printed on completion: `app_url = "http://192.168.1.50"`
+
+---
+
+### Releasing
+
+Every GitHub release attaches three assets in the PCD App Catalog's format; the tag keeps its `v`, the file names don't:
+
+| Asset | Contents |
+|---|---|
+| `pcd-ops-<version>.qcow2` | the appliance image |
+| `pcd-ops-<version>.qcow2.sha256` | `<hash>  <file>` (sha256sum format) |
+| `manifest.json` | the repo's [manifest.json](manifest.json) with `version`, `image.source.tag`, `asset` and `checksum` filled in |
+
+1. Bump the version in `backend/pyproject.toml` and `frontend/package.json`, and `version` / `image.source` in `manifest.json`; commit.
+2. `git tag v<version> && git push origin main v<version>`
+3. `./deploy/build-image.sh` — builds from the tag, runs the Nova safety check, writes the three assets.
+4. `build/test-local.sh && FIRMWARE=bios build/test-local.sh`
+5. `./deploy/release.sh [notes.md]` — creates the release and checks the assets download anonymously (Glance imports them without credentials, so the repo must stay public).
+6. Copy the release's `manifest.json` over the repo's and commit, so the repo root matches the latest release.
 
 ---
 
