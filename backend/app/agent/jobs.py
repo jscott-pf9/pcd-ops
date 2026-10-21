@@ -677,3 +677,5 @@ async def execute_job(job: dict) -> None:
     except Exception as e:
         db.job_run_finish(run_id, job_id, "error", error=str(e))
         logger.exception("Job %d (%s) failed", job_id, type_)
+        from app.services.openstack import report_background_failure
+        report_background_failure(e)

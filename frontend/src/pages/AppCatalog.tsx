@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, Edit2, Globe, Layers, Rocket, Server, Shield, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { apiFetch } from "../api/client";
+import { apiFetch, CSRF_HEADERS } from "../api/client";
 
 interface SavedConfig {
   id: number; name: string; type: string; created_at: string; updated_at: string;
@@ -101,7 +101,7 @@ function DeployModal({ profile, hcl, profileId, onClose, onDeployed }: {
     try {
       const resp = await fetch("/api/generate/deploy", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...CSRF_HEADERS },
         body: JSON.stringify({
           hcl, tenant_name: tenantName,
           network_name: hasManagedNetworks ? "" : network,

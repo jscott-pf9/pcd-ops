@@ -12,14 +12,8 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
     )
 
-    # OpenStack
-    os_auth_url: str = ""
-    os_username: str = ""
-    os_password: str = ""
-    os_project_name: str = ""
-    os_user_domain_name: str = "Default"
-    os_project_domain_name: str = "Default"
-    os_region_name: str = ""
+    # PCD (Keystone URL, region, install project) is not a setting: it comes from
+    # /etc/pcd-app/config.env, see app/appliance/connection.py.
 
     # Grafana / Prometheus
     prometheus_url: str = "http://localhost:9090"

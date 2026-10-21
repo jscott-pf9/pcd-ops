@@ -1,7 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-import openstack.connection
-from app.dependencies import get_connection
 from app.services.db import cache_get
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])

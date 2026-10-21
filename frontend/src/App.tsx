@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "./api/client";
-import { getSettings } from "./api/settings";
+import { getSession, logout } from "./api/auth";
 import EventFooter from "./components/EventFooter";
 import {
   AlertTriangle,
@@ -14,6 +14,7 @@ import {
   FileText,
   type LucideIcon,
   Layers,
+  LogOut,
   MessageSquarePlus,
   Network,
   RefreshCw,
@@ -43,6 +44,8 @@ import SettingsAI from "./pages/settings/SettingsAI";
 import SettingsStatus from "./pages/settings/SettingsStatus";
 import SettingsUpdates from "./pages/settings/SettingsUpdates";
 import Feedback from "./pages/Feedback";
+import Login from "./pages/Login";
+import Setup from "./pages/Setup";
 
 // ── Nav data types ─────────────────────────────────────────────────────────────
 
@@ -121,11 +124,11 @@ function sectionContainsActive(sec: NavSection, pathname: string) {
 
 // ── Sidebar ────────────────────────────────────────────────────────────────────
 
-function Sidebar() {
+function Sidebar({ user }: { user?: string }) {
   const loc = useLocation();
   const { data: ver } = useQuery({
     queryKey: ["version"],
-    queryFn: () => apiFetch<{ tag: string | null; commit: string }>("/version"),
+    queryFn: () => apiFetch<{ tag: string | null; commit: string }>("/system/version"),
     staleTime: Infinity,
   });
   const versionLabel = ver?.tag ?? (ver?.commit ? ver.commit : null);
@@ -243,6 +246,16 @@ function Sidebar() {
           <MessageSquarePlus size={14} />
           <span>Feedback</span>
         </Link>
+        <button
+          className="sidebar-footer-link"
+          onClick={() => logout().finally(() => window.location.assign("/login"))}
+          title={user ? `Logged in as ${user}` : undefined}
+        >
+          <LogOut size={14} />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            Log out{user ? ` (${user})` : ""}
+          </span>
+        </button>
       </div>
     </nav>
   );
@@ -250,17 +263,8 @@ function Sidebar() {
 
 // ── Shell ──────────────────────────────────────────────────────────────────────
 
-function Shell() {
+function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
   const loc = useLocation();
-  const { data: settings, isSuccess } = useQuery({
-    queryKey: ["settings"],
-    queryFn: getSettings,
-    staleTime: 60_000,
-  });
-  const unconfigured = isSuccess && !settings?.os_auth_url;
-  if (unconfigured && loc.pathname !== "/settings/connection") {
-    return <Navigate to="/settings/connection" replace />;
-  }
 
   const crumb = (() => {
     if (loc.pathname === "/feedback") return "Feedback";
@@ -288,6 +292,17 @@ function Shell() {
         </div>
         <div className="topbar-spacer" />
       </header>
+      {backgroundFailed && (
+        <div role="alert" style={{
+          background: "var(--red-light)", color: "var(--red)", padding: "0.6rem 1.25rem",
+          fontSize: 13, borderBottom: "1px solid var(--gray-200)",
+        }}>
+          Background access to PCD stopped working, so collection and scheduled jobs are paused.{" "}
+          <Link to="/settings/connection" style={{ color: "inherit", fontWeight: 600 }}>
+            Re-authorize it
+          </Link>
+        </div>
+      )}
       <main className="page">
         <Routes>
           <Route path="/"                  element={<Inventory />}       />
@@ -316,16 +331,44 @@ function Shell() {
   );
 }
 
+// ── Auth gate ──────────────────────────────────────────────────────────────────
+
+/** Every page needs a PCD login and finished setup (APPLIANCE_STANDARD §7.1, §7.7). */
+function AuthGate() {
+  const loc = useLocation();
+  const { data: session, isError } = useQuery({
+    queryKey: ["session"],
+    queryFn: getSession,
+    refetchInterval: 60_000,
+  });
+  if (isError) return <div className="empty"><div className="empty-title">PCD Ops isn't responding</div></div>;
+  if (!session) return null;
+  if (!session.connection_configured) return <Navigate to="/setup" replace />;
+  if (!session.authenticated) {
+    return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
+  }
+  if (session.setup_required) return <Navigate to="/setup" replace />;
+  return (
+    <>
+      <div className="app">
+        <Sidebar user={session.user} />
+        <Shell backgroundFailed={session.background === "failed"} />
+      </div>
+      <EventFooter />
+    </>
+  );
+}
+
 // ── App ────────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="app">
-        <Sidebar />
-        <Shell />
-      </div>
-      <EventFooter />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/setup" element={<Setup />} />
+        <Route path="*"      element={<AuthGate />} />
+      </Routes>
     </BrowserRouter>
   );
 }

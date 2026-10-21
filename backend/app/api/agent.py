@@ -1,9 +1,11 @@
 import asyncio
 
-from fastapi import APIRouter
+import openstack.connection
+from fastapi import APIRouter, Depends
 
 from app.agent import runner
 from app.services import db
+from app.services.openstack import acting_as, user_connection
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -19,18 +21,20 @@ async def status():
 
 
 @router.post("/trigger")
-async def trigger(slow: bool = False):
-    """Trigger an on-demand collection run.
+async def trigger(slow: bool = False,
+                  conn: openstack.connection.Connection = Depends(user_connection)):
+    """Trigger an on-demand collection run, as the logged-in user.
 
     ?slow=true runs all tiers including AI collectors (anomaly, capacity trends, right-sizing).
     Default (slow=false) runs only fast collectors (inventory, snapshots, logs, reclamation).
     """
     if runner._is_running:
         return {"triggered": False, "reason": "already running"}
-    if slow:
-        asyncio.create_task(runner.run_all())
-    else:
-        asyncio.create_task(runner.run_fast())
+    with acting_as(conn):   # the task inherits the user's connection
+        if slow:
+            asyncio.create_task(runner.run_all())
+        else:
+            asyncio.create_task(runner.run_fast())
     return {"triggered": True, "slow": slow}
 
 

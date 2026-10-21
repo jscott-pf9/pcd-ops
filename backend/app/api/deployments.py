@@ -12,11 +12,13 @@ import os
 import shutil
 import tempfile
 
-from fastapi import APIRouter, HTTPException
+import openstack.connection
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.appliance import connection as pcd
 from app.services import db
-from app.services.openstack import get_connection
+from app.services.openstack import user_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -30,9 +32,27 @@ def _event(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-async def _run_tf(tmpdir: str, *args) -> tuple[int, list[str]]:
+def pcd_env(request: Request) -> dict[str, str]:
+    """Environment for the OpenStack Terraform provider: the logged-in user's token (rescoped
+    by the provider to the deployment's tenant_name), never a stored account."""
+    conn = pcd.load()
+    tok = request.state.session["token"]
+    env = {
+        "OS_AUTH_URL": conn.auth_url,
+        "OS_AUTH_TOKEN": tok.value,
+        "OS_PROJECT_DOMAIN_NAME": conn.project_domain,
+        "OS_ENDPOINT_TYPE": "public",
+    }
+    if conn.region:
+        env["OS_REGION_NAME"] = conn.region
+    return env
+
+
+async def _run_tf(tmpdir: str, *args, auth_env: dict[str, str]) -> tuple[int, list[str]]:
     """Run a terraform command, return (returncode, [output_lines])."""
-    env = {**os.environ, "TF_IN_AUTOMATION": "1"}
+    # Drop any OS_* from the service's own environment; auth comes only from auth_env.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OS_")}
+    env.update(auth_env, TF_IN_AUTOMATION="1")
     proc = await asyncio.create_subprocess_exec(
         *args, cwd=tmpdir,
         stdout=asyncio.subprocess.PIPE,
@@ -48,7 +68,7 @@ async def _run_tf(tmpdir: str, *args) -> tuple[int, list[str]]:
     return proc.returncode, lines
 
 
-async def _tf_operation(dep_id: str, op: str):
+async def _tf_operation(dep_id: str, op: str, auth_env: dict[str, str]):
     """Shared generator: init + {apply|destroy}, stream SSE, save state."""
     dep = db.deployment_get(dep_id)
     if not dep:
@@ -80,7 +100,7 @@ async def _tf_operation(dep_id: str, op: str):
 
         # Init
         yield _event({"type": "log", "line": "▶ terraform init"})
-        rc, lines = await _run_tf(tmpdir, TF, "init", "-input=false", "-no-color")
+        rc, lines = await _run_tf(tmpdir, TF, "init", "-input=false", "-no-color", auth_env=auth_env)
         for ln in lines:
             yield _event({"type": "log", "line": ln})
         if rc != 0:
@@ -96,7 +116,7 @@ async def _tf_operation(dep_id: str, op: str):
             tf_args.append("-auto-approve")
 
         yield _event({"type": "log", "line": f"▶ terraform {op}"})
-        rc2, lines2 = await _run_tf(tmpdir, *tf_args)
+        rc2, lines2 = await _run_tf(tmpdir, *tf_args, auth_env=auth_env)
         for ln in lines2:
             yield _event({"type": "log", "line": ln})
 
@@ -123,7 +143,7 @@ async def _tf_operation(dep_id: str, op: str):
             return
 
         # Outputs
-        rc3, out_lines = await _run_tf(tmpdir, TF, "output", "-json")
+        rc3, out_lines = await _run_tf(tmpdir, TF, "output", "-json", auth_env=auth_env)
         try:
             raw = json.loads("\n".join(out_lines))
             outputs = {k: v.get("value") for k, v in raw.items()}
@@ -158,7 +178,7 @@ async def get_deployment(dep_id: str):
 
 
 @router.post("/{dep_id}/redeploy")
-async def redeploy(dep_id: str):
+async def redeploy(dep_id: str, request: Request):
     """Re-run terraform init + apply for a deployment, streaming SSE progress and final outputs."""
     dep = db.deployment_get(dep_id)
     if not dep:
@@ -166,8 +186,10 @@ async def redeploy(dep_id: str):
     if dep["status"] == "deploying":
         raise HTTPException(409, detail="Deployment already in progress")
 
+    auth_env = pcd_env(request)
+
     async def _stream():
-        async for chunk in _tf_operation(dep_id, "apply"):
+        async for chunk in _tf_operation(dep_id, "apply", auth_env):
             yield chunk
 
     return StreamingResponse(_stream(), media_type="text/event-stream",
@@ -175,7 +197,7 @@ async def redeploy(dep_id: str):
 
 
 @router.post("/{dep_id}/destroy")
-async def destroy_deployment(dep_id: str):
+async def destroy_deployment(dep_id: str, request: Request):
     """Run terraform destroy for a deployment, streaming SSE progress lines."""
     dep = db.deployment_get(dep_id)
     if not dep:
@@ -185,8 +207,10 @@ async def destroy_deployment(dep_id: str):
     if dep["status"] == "destroyed":
         raise HTTPException(409, detail="Already destroyed")
 
+    auth_env = pcd_env(request)
+
     async def _stream():
-        async for chunk in _tf_operation(dep_id, "destroy"):
+        async for chunk in _tf_operation(dep_id, "destroy", auth_env):
             yield chunk
 
     return StreamingResponse(_stream(), media_type="text/event-stream",
@@ -194,7 +218,8 @@ async def destroy_deployment(dep_id: str):
 
 
 @router.post("/{dep_id}/stop")
-async def stop_vms(dep_id: str):
+async def stop_vms(dep_id: str,
+                   conn: openstack.connection.Connection = Depends(user_connection)):
     """Shelve all VMs belonging to this deployment via OpenStack API."""
     dep = db.deployment_get(dep_id)
     if not dep:
@@ -202,7 +227,6 @@ async def stop_vms(dep_id: str):
     if dep["status"] not in ("running",):
         raise HTTPException(409, detail="Only running deployments can be stopped")
 
-    conn = get_connection()
     servers = await asyncio.to_thread(
         lambda: list(conn.compute.servers(all_projects=True))
     )
@@ -229,13 +253,13 @@ async def stop_vms(dep_id: str):
 
 
 @router.get("/{dep_id}/status")
-async def check_status(dep_id: str):
+async def check_status(dep_id: str,
+                       conn: openstack.connection.Connection = Depends(user_connection)):
     """Refresh deployment status by querying OpenStack for VM states."""
     dep = db.deployment_get(dep_id)
     if not dep:
         raise HTTPException(404)
 
-    conn = get_connection()
     servers = await asyncio.to_thread(
         lambda: list(conn.compute.servers(all_projects=True))
     )

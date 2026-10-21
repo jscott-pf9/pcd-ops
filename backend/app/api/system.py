@@ -77,7 +77,7 @@ async def get_update_log():
 
 @router.get("/connections")
 async def check_connections():
-    """Test live connectivity to OpenStack and Grafana; returns ok/error per service."""
+    """Test live connectivity to OpenStack (background access) and Grafana; ok/error per service."""
     from app.config import settings as _settings
 
     result = {
@@ -85,26 +85,27 @@ async def check_connections():
         "grafana":   {"ok": False, "error": None, "configured": False},
     }
 
-    # ── OpenStack ──────────────────────────────────────────────────────────────
-    if _settings.os_auth_url and _settings.os_username:
+    # ── OpenStack (what background work runs as) ───────────────────────────────
+    from app.services import openstack as os_service
+
+    bg = os_service.background_status()
+    result["openstack"]["source"] = bg["state"]
+    if os_service.background_available():
         result["openstack"]["configured"] = True
         try:
-            import openstack as _os
-            conn = _os.connect(
-                auth_url=_settings.os_auth_url,
-                username=_settings.os_username,
-                password=_settings.os_password,
-                project_name=_settings.os_project_name,
-                user_domain_name=_settings.os_user_domain_name,
-                project_domain_name=_settings.os_project_domain_name,
-                interface="public",
-            )
+            conn = os_service.background_connection()
             await asyncio.to_thread(conn.authorize)
             result["openstack"]["ok"] = True
         except Exception as exc:
+            os_service.report_background_failure(exc)
             result["openstack"]["error"] = str(exc)[:300]
+    elif bg["state"] == "failed":
+        result["openstack"]["configured"] = True
+        result["openstack"]["error"] = ("Background access stopped working — re-authorize it "
+                                        "under PCD & Metrics")
     else:
-        result["openstack"]["error"] = "Not configured — set Auth URL and Username"
+        result["openstack"]["error"] = ("Not authorized — finish setup to authorize background "
+                                        "access")
 
     # ── Grafana ────────────────────────────────────────────────────────────────
     if _settings.grafana_url and _settings.grafana_token:

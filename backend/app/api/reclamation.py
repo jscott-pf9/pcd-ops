@@ -1,9 +1,9 @@
 import openstack.connection
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.dependencies import get_connection
 from app.services import db
 from app.services.db import cache_get
+from app.services.openstack import user_connection
 
 router = APIRouter(prefix="/reclamation", tags=["reclamation"])
 
@@ -22,7 +22,7 @@ async def reclamation_candidates():
 @router.delete("/servers/{server_id}")
 async def delete_server(
     server_id: str,
-    conn: openstack.connection.Connection = Depends(get_connection),
+    conn: openstack.connection.Connection = Depends(user_connection),
 ):
     """Force-delete a server (irreversible)."""
     try:
@@ -45,7 +45,7 @@ async def delete_server(
 @router.delete("/volumes/{volume_id}")
 async def delete_volume(
     volume_id: str,
-    conn: openstack.connection.Connection = Depends(get_connection),
+    conn: openstack.connection.Connection = Depends(user_connection),
 ):
     """Delete a Cinder volume (irreversible)."""
     try:
@@ -68,7 +68,7 @@ async def delete_volume(
 @router.delete("/floating_ips/{fip_id}")
 async def release_floating_ip(
     fip_id: str,
-    conn: openstack.connection.Connection = Depends(get_connection),
+    conn: openstack.connection.Connection = Depends(user_connection),
 ):
     """Release an unused floating IP back to the pool (irreversible)."""
     try:

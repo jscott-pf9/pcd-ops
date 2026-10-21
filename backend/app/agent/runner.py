@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 
 from app.services import db
+from app.services import openstack as os_service
 from app.agent import collector
 from app.agent import jobs as job_executor
 
@@ -36,6 +37,15 @@ DAILY_INTERVAL = 24 * 60 * 60  # 24 hours
 _is_running = False
 
 
+def _can_run(tier: str) -> bool:
+    """Scheduled runs need background access; runs a user triggers act as that user."""
+    if os_service.is_interactive() or os_service.background_available():
+        return True
+    logger.info("%s collection skipped: background access to PCD isn't authorized "
+                "(finish setup in the web UI).", tier)
+    return False
+
+
 async def _gather_named(tasks: list[tuple[str, object]]) -> list[str]:
     """Run named coroutine tasks concurrently; return a list of 'name: error' strings for any that fail."""
     results = await asyncio.gather(*(coro for _, coro in tasks), return_exceptions=True)
@@ -44,6 +54,7 @@ async def _gather_named(tasks: list[tuple[str, object]]) -> list[str]:
         if isinstance(result, BaseException):
             logger.error("Collector '%s' failed", name, exc_info=result)
             errors.append(f"{name}: {result}")
+            os_service.report_background_failure(result)
     return errors
 
 
@@ -52,6 +63,8 @@ async def run_fast() -> None:
     global _is_running
     if _is_running:
         logger.info("Agent already running — skipping.")
+        return
+    if not _can_run("Fast"):
         return
 
     _is_running = True
@@ -82,6 +95,8 @@ async def run_slow() -> None:
     global _is_running
     if _is_running:
         logger.info("Agent already running — skipping slow run.")
+        return
+    if not _can_run("Slow"):
         return
 
     from app.config import settings
@@ -114,6 +129,8 @@ async def run_daily() -> None:
     if _is_running:
         logger.info("Agent already running — skipping daily run.")
         return
+    if not _can_run("Daily"):
+        return
 
     from app.config import settings
     if not _ai_feature_due("rightsizing:recommendations", settings.ai_rightsizing_schedule, True):
@@ -130,6 +147,7 @@ async def run_daily() -> None:
     except Exception as e:
         db.run_finish(run_id, "error", str(e))
         logger.exception("Daily collection run failed (run_id=%d).", run_id)
+        os_service.report_background_failure(e)
     finally:
         _is_running = False
 
@@ -191,6 +209,8 @@ async def scheduler_loop() -> None:
 
 async def _run_due_jobs() -> None:
     """Check all enabled jobs and run any that are due."""
+    if not _can_run("Scheduled job"):
+        return
     for job in db.job_list():
         if job_executor.is_due(job):
             logger.info("Triggering scheduled job %d (%s)", job["id"], job["name"])

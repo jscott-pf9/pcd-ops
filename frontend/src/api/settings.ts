@@ -1,13 +1,8 @@
 import { apiFetch } from "./client";
 
+// App settings only — PCD credentials are never settings (login and background access
+// replace them; see api/auth.ts).
 export interface AppSettings {
-  os_auth_url: string;
-  os_username: string;
-  os_password: string;
-  os_project_name: string;
-  os_user_domain_name: string;
-  os_project_domain_name: string;
-  os_region_name: string;
   prometheus_url: string;
   grafana_url: string;
   grafana_token: string;

@@ -1,10 +1,12 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+import openstack.connection
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.agent import jobs as job_executor
 from app.services import db
+from app.services.openstack import acting_as, user_connection
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -67,12 +69,14 @@ async def delete_job(job_id: int):
 
 
 @router.post("/{job_id}/run")
-async def trigger_job(job_id: int):
-    """Trigger a job to run immediately, regardless of its schedule."""
+async def trigger_job(job_id: int,
+                      conn: openstack.connection.Connection = Depends(user_connection)):
+    """Trigger a job to run immediately, regardless of its schedule, as the logged-in user."""
     job = db.job_get(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
-    asyncio.create_task(job_executor.execute_job(job))
+    with acting_as(conn):   # the task inherits the user's connection
+        asyncio.create_task(job_executor.execute_job(job))
     return {"triggered": True, "job_id": job_id}
 
 

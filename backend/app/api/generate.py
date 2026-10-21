@@ -3,7 +3,7 @@ AI-powered config generation — Terraform HCL, cloud-init YAML, security groups
 load balancers, combined profiles, natural language, and saved config CRUD.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.dependencies import get_ai_provider
@@ -855,10 +855,12 @@ class DeployRequest(BaseModel):
 
 
 @router.post("/deploy")
-async def deploy_app(req: DeployRequest):
+async def deploy_app(req: DeployRequest, request: Request):
     """Create a deployment record then run terraform init + apply, streaming SSE."""
     from app.services import db as _db
-    from app.api.deployments import _tf_operation
+    from app.api.deployments import _tf_operation, pcd_env
+
+    auth_env = pcd_env(request)
 
     # Create the deployment record before starting
     dep = _db.deployment_create(
@@ -876,7 +878,7 @@ async def deploy_app(req: DeployRequest):
         # Emit the deployment_id first so the frontend can track it
         import json as _j
         yield f'data: {_j.dumps({"type":"started","deployment_id":dep_id})}\n\n'
-        async for chunk in _tf_operation(dep_id, "apply"):
+        async for chunk in _tf_operation(dep_id, "apply", auth_env):
             yield chunk
 
     from fastapi.responses import StreamingResponse

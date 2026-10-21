@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, RefreshCw, Rocket, Trash2 } from "lucide-react";
-import { apiFetch } from "../api/client";
+import { apiFetch, CSRF_HEADERS } from "../api/client";
 
 interface Deployment {
   id: string;
@@ -95,7 +95,7 @@ function DeploymentRow({ dep, onRefresh }: { dep: Deployment; onRefresh: () => v
   async function streamOp(url: string) {
     setOpLog([]); setOpResult(null); setOpRunning(true);
     try {
-      const resp = await fetch(url, { method: "POST" });
+      const resp = await fetch(url, { method: "POST", headers: CSRF_HEADERS });
       const reader = resp.body!.getReader();
       const dec = new TextDecoder();
       let buf = "";

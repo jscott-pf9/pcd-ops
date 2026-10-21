@@ -2,9 +2,6 @@ import { useEffect, useState } from "react";
 import { type AppSettings, getSettings, saveSettings } from "../../api/settings";
 
 const EMPTY: AppSettings = {
-  os_auth_url: "", os_username: "", os_password: "",
-  os_project_name: "", os_user_domain_name: "Default",
-  os_project_domain_name: "Default", os_region_name: "",
   prometheus_url: "", grafana_url: "", grafana_token: "",
   ai_backend: "ollama", ai_url: "", ai_model: "", ai_api_key: "",
   ai_rightsizing_enabled: true, ai_anomaly_enabled: true,

@@ -1,5 +1,8 @@
 # Credentials and secrets
 creds
+*-openrc.sh
+*.rc
+dev.config.env
 .env
 .env.*
 !.env.example

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import openstack.connection
-from app.dependencies import get_connection
+from app.services.openstack import user_connection
 from app.services import db
 from app.services.db import cache_get
 
@@ -26,7 +26,7 @@ async def list_snapshots():
 @router.post("/")
 async def create_snapshot(
     body: SnapshotCreate,
-    conn: openstack.connection.Connection = Depends(get_connection),
+    conn: openstack.connection.Connection = Depends(user_connection),
 ):
     """Create a snapshot of a server's volumes by calling the Nova createImage action."""
     try:
@@ -44,7 +44,7 @@ async def create_snapshot(
 @router.delete("/{snapshot_id}")
 async def delete_snapshot(
     snapshot_id: str,
-    conn: openstack.connection.Connection = Depends(get_connection),
+    conn: openstack.connection.Connection = Depends(user_connection),
 ):
     """Delete a Cinder volume snapshot (irreversible)."""
     try:
