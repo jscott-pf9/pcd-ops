@@ -17,7 +17,7 @@ write_files:
       PROMETHEUS_URL=
       GRAFANA_URL=
       GRAFANA_TOKEN=
-      AI_BACKEND=ollama
-      AI_URL=http://localhost:11434
-      AI_MODEL=llama3.1:8b
-      AI_API_KEY=
+      # AI_BACKEND=ollama
+      # AI_URL=http://localhost:11434
+      # AI_MODEL=llama3.1:8b
+      # AI_API_KEY=
