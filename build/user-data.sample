@@ -1,0 +1,15 @@
+#cloud-config
+write_files:
+- path: /etc/pcd-app/config.env
+  owner: root:root
+  permissions: '0644'
+  content: |
+    # Written by the PCD App Catalog at first boot. Redeploy to change.
+    PCD_APP_ID='pcd-ops'
+    PCD_APP_VERSION='0.0.0'
+    PCD_INSTANCE_NAME='pcd-ops-test'
+    PCD_REGION='lab'
+    PCD_PROJECT_ID='local-test'
+    AI_BACKEND='ollama'
+    AI_URL='http://10.0.0.9:11434'
+    AI_MODEL='qwen2.5:14b'
