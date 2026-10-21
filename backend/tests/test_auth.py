@@ -63,11 +63,18 @@ def test_bad_password_is_refused(client, mock_login):
     assert "Invalid username" in r.json()["detail"]
 
 
-def test_login_is_rate_limited(client, mock_login):
+def test_failed_logins_are_rate_limited(client, mock_login):
     mock_login.error = keystone.AuthError("nope")
     codes = [client.post("/api/auth/login", json={"username": "a", "password": "b"},
                          headers=CSRF).status_code for _ in range(6)]
     assert codes == [401] * 5 + [429]
+    assert len(mock_login.calls) == 5      # the 6th never reaches Keystone
+
+
+def test_successful_logins_are_not_rate_limited(client, mock_login):
+    codes = [client.post("/api/auth/login", json={"username": "a", "password": "b"},
+                         headers=CSRF).status_code for _ in range(8)]
+    assert codes == [200] * 8
 
 
 def test_setup_gate_after_login(logged_in):

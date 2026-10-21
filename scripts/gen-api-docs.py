@@ -165,7 +165,7 @@ lines += [
     "| 401 | Not logged in |",
     "| 403 | Write without the `X-Requested-With` header |",
     "| 409 | Conflict (operation in progress or invalid state transition), or `{\"setup_required\": true}` |",
-    "| 429 | Too many login attempts (5 a minute per client IP) |",
+    "| 429 | Too many failed logins (5 a minute per client IP) |",
     "| 422 | Validation error (FastAPI request model mismatch) |",
     "| 503 | Cache miss — collector not yet run, or AI feature disabled |",
     "",

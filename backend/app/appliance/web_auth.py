@@ -72,23 +72,25 @@ sessions = Sessions()
 
 
 class RateLimiter:
-    """At most `limit` attempts per key in `window_s` seconds (login: 5 a minute per client IP)."""
+    """At most `limit` failures per key in `window_s` seconds (login: 5 failed attempts a minute
+    per client IP). Successful logins don't count, so admins and UI tests aren't locked out."""
 
     def __init__(self, limit: int = 5, window_s: int = 60) -> None:
         self.limit, self.window_s = limit, window_s
         self._hits: dict[str, deque] = defaultdict(deque)
         self._lock = threading.Lock()
 
-    def allow(self, key: str) -> bool:
+    def blocked(self, key: str) -> bool:
         now = time.time()
         with self._lock:
             q = self._hits[key]
             while q and now - q[0] > self.window_s:
                 q.popleft()
-            if len(q) >= self.limit:
-                return False
-            q.append(now)
-            return True
+            return len(q) >= self.limit
+
+    def fail(self, key: str) -> None:
+        with self._lock:
+            self._hits[key].append(time.time())
 
     def reset(self) -> None:
         with self._lock:

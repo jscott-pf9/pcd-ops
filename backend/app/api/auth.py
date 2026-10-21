@@ -24,9 +24,10 @@ class LoginRequest(BaseModel):
 
 @router.post("/login")
 async def login(body: LoginRequest, request: Request):
-    """Authenticate against PCD Keystone and start a session (5 attempts a minute per IP)."""
-    if not web_auth.login_limiter.allow(web_auth.client_ip(request)):
-        raise HTTPException(429, detail="Too many login attempts. Wait a minute and try again.")
+    """Authenticate against PCD Keystone and start a session (5 failed attempts a minute per IP)."""
+    ip = web_auth.client_ip(request)
+    if web_auth.login_limiter.blocked(ip):
+        raise HTTPException(429, detail="Too many failed logins. Wait a minute and try again.")
     conn = pcd.load()
     if not conn.configured:
         return JSONResponse({"detail": "PCD Ops doesn't know which PCD to use yet.",
@@ -38,6 +39,7 @@ async def login(body: LoginRequest, request: Request):
             project_domain=conn.project_domain)
         keystone.require_admin(tok, conn.project_label)
     except keystone.AuthError as e:
+        web_auth.login_limiter.fail(ip)
         raise HTTPException(401, detail=str(e)) from None
     resp = JSONResponse({"user": tok.user_name, "project": tok.project_name or conn.project_label,
                          "setup_required": not os_service.setup_complete()})
