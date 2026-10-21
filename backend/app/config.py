@@ -7,6 +7,9 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         frozen=False,
         extra="ignore",
+        # The PCD App Catalog's /etc/pcd-app/config.env writes blank install-form
+        # fields as KEY='' — treat those as unset so the defaults below apply.
+        env_ignore_empty=True,
     )
 
     # OpenStack
