@@ -25,7 +25,7 @@
       "type": "github_release",
       "tag": "v0.5.0",
       "asset": "pcd-ops-0.5.0.qcow2",
-      "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      "checksum": "sha256:8fa35fb12d32f41a1bf0611de56d210c8929b1a23405100ccb368297bf7c9d6b"
     },
     "min_disk_gb": 20,
     "properties": {
