@@ -2,7 +2,7 @@
   "schema_version": "0.2",
   "id": "pcd-ops",
   "name": "PCD Ops",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "Platform9",
   "repo": "https://github.com/jscott-pf9/pcd-ops",
   "tagline": "Reclamation, right-sizing and capacity planning.",
@@ -20,8 +20,8 @@
     "format": "qcow2",
     "source": {
       "type": "github_release",
-      "tag": "v0.4.2",
-      "asset": "pcd-ops-0.4.2.qcow2",
+      "tag": "v0.4.3",
+      "asset": "pcd-ops-0.4.3.qcow2",
       "checksum": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     },
     "min_disk_gb": 20,
