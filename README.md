@@ -17,6 +17,8 @@ An operations dashboard for [Platform9 Private Cloud Director (PCD)](https://pla
 | **Log Analysis** | AI-assisted log triage and pattern detection |
 | **Scheduled Jobs** | Background data collection with job history and status |
 
+What's next: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ---
 
 ## Deployment
