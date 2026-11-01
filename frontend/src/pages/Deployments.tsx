@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, RefreshCw, Rocket, Trash2 } from "lucide-react";
 import { apiFetch, CSRF_HEADERS } from "../api/client";
+import MovingBanner from "../components/MovingBanner";
 
 interface Deployment {
   id: string;
@@ -245,6 +246,7 @@ export default function Deployments() {
 
   return (
     <div>
+      <MovingBanner />
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
         <div>
           <h1 style={{ margin:0 }}>Deployments</h1>

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, Copy, Layers, Plus, Shield, Sparkles, Trash2, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch } from "../api/client";
+import MovingBanner from "../components/MovingBanner";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -167,6 +168,7 @@ export default function Generate() {
 
   return (
     <div>
+      <MovingBanner />
       <h1>App Builder</h1>
       <p className="page-subtitle">Design a complete multi-tier application and save it to the App Catalog.</p>
       <div className="tabs" style={{ marginBottom: 16 }}>

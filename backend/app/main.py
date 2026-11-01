@@ -19,6 +19,7 @@ from app.api import (
     inventory,
     jobs,
     logs,
+    orchestration,
     reclamation,
     reports,
     rightsizing,
@@ -86,6 +87,7 @@ for router in (
     reports.router,
     generate.router,
     deployments.router,
+    orchestration.router,
     events.router,
 ):
     app.include_router(router, prefix="/api")

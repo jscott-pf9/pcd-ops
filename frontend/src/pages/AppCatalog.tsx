@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, Edit2, Globe, Layers, Rocket, Server, Shield, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch, CSRF_HEADERS } from "../api/client";
+import MovingBanner from "../components/MovingBanner";
 
 interface SavedConfig {
   id: number; name: string; type: string; created_at: string; updated_at: string;
@@ -524,6 +525,7 @@ export default function AppCatalog() {
 
   return (
     <div>
+      <MovingBanner />
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
         <div>
           <h1 style={{ margin:0 }}>App Catalog</h1>

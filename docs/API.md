@@ -73,6 +73,7 @@ object on a `data:` line:
 - [Jobs](#jobs)
 - [Logs](#logs)
 - [Misc](#misc)
+- [Orchestration](#orchestration)
 - [Reclamation](#reclamation)
 - [Reports](#reports)
 - [Rightsizing](#rightsizing)
@@ -186,7 +187,7 @@ Return the latest anomaly detection results (metric drift and outlier analysis).
 
 ### **POST** `/api/auth/login`
 
-Authenticate against PCD Keystone and start a session (5 attempts a minute per IP).
+Authenticate against PCD Keystone and start a session (5 failed attempts a minute per IP).
 
 **Request body** (`application/json`)
 
@@ -1083,6 +1084,16 @@ Update runtime settings; fields with value '***' or '' for secrets are preserved
 Unauthenticated and cheap (no PCD calls), for the catalog's probe (APPLIANCE_STANDARD §6).
 
 setup_required: no admin has authorized background access, or it stopped working.
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Orchestration
+
+### **GET** `/api/orchestration/export`
+
+Download the App Builder library and deployments as one JSON file.
 
 **Response:** 200 — Successful Response  
 
