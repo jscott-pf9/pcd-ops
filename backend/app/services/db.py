@@ -85,14 +85,6 @@ def init_db() -> None:
                 result     TEXT,
                 error      TEXT
             );
-            CREATE TABLE IF NOT EXISTS saved_configs (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                name       TEXT NOT NULL,
-                type       TEXT NOT NULL,
-                content    TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS app_events (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp  TEXT NOT NULL,
@@ -103,317 +95,7 @@ def init_db() -> None:
                 component  TEXT,
                 tenant     TEXT
             );
-            CREATE TABLE IF NOT EXISTS deployments (
-                id           TEXT PRIMARY KEY,
-                app_name     TEXT NOT NULL,
-                profile_id   INTEGER,
-                tenant_name  TEXT NOT NULL,
-                network_name TEXT,
-                key_pair     TEXT,
-                extra_vars   TEXT NOT NULL DEFAULT '{}',
-                hcl          TEXT NOT NULL,
-                tf_state     TEXT,
-                outputs      TEXT NOT NULL DEFAULT '{}',
-                status       TEXT NOT NULL DEFAULT 'deploying',
-                error_msg    TEXT,
-                created_at   TEXT NOT NULL,
-                updated_at   TEXT NOT NULL
-            );
         """)
-    _seed_default_roles(_connect())
-    _seed_default_sg_templates(_connect())
-
-
-_DEFAULT_ROLES = [
-    {
-        "name": "NGINX Web Server",
-        "description": "Installs NGINX, opens HTTP/HTTPS firewall ports.",
-        "yaml": """\
-#cloud-config
-package_update: true
-package_upgrade: true
-packages:
-  - nginx
-  - ufw
-runcmd:
-  - ufw allow 'Nginx Full'
-  - ufw --force enable
-  - systemctl enable nginx
-  - systemctl start nginx""",
-    },
-    {
-        "name": "Apache Web Server",
-        "description": "Installs Apache2 with mod_ssl, opens HTTP/HTTPS.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - apache2
-  - ufw
-runcmd:
-  - a2enmod ssl
-  - ufw allow 'Apache Full'
-  - ufw --force enable
-  - systemctl enable apache2
-  - systemctl start apache2""",
-    },
-    {
-        "name": "PostgreSQL Database",
-        "description": "Installs PostgreSQL, enables service, opens port 5432.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - postgresql
-  - postgresql-contrib
-  - ufw
-runcmd:
-  - systemctl enable postgresql
-  - systemctl start postgresql
-  - ufw allow 5432/tcp""",
-    },
-    {
-        "name": "MariaDB Database",
-        "description": "Installs MariaDB, sets root password, opens port 3306.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - mariadb-server
-  - ufw
-runcmd:
-  - systemctl enable mariadb
-  - systemctl start mariadb
-  - mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'changeme'; FLUSH PRIVILEGES;"
-  - ufw allow 3306/tcp""",
-    },
-    {
-        "name": "Redis Cache",
-        "description": "Installs Redis, binds to all interfaces, opens port 6379.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - redis-server
-  - ufw
-runcmd:
-  - sed -i 's/^bind 127.0.0.1 ::1/bind 0.0.0.0/' /etc/redis/redis.conf
-  - sed -i 's/^# requirepass foobared/requirepass changeme/' /etc/redis/redis.conf
-  - systemctl enable redis-server
-  - systemctl start redis-server
-  - ufw allow 6379/tcp""",
-    },
-    {
-        "name": "Docker Host",
-        "description": "Installs Docker CE and Compose plugin; adds ubuntu user to docker group.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - apt-transport-https
-  - ca-certificates
-  - curl
-  - gnupg
-runcmd:
-  - curl -fsSL https://get.docker.com | sh
-  - systemctl enable docker
-  - systemctl start docker
-  - usermod -aG docker ubuntu""",
-    },
-    {
-        "name": "Kubernetes Node (k3s)",
-        "description": "Installs k3s single-node cluster; kubeconfig world-readable.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - curl
-runcmd:
-  - curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
-  - systemctl enable k3s""",
-    },
-    {
-        "name": "Monitoring (Prometheus + Grafana)",
-        "description": "Installs Prometheus on :9090 and Grafana on :3000.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - prometheus
-  - ufw
-runcmd:
-  - wget -q -O /tmp/grafana.deb https://dl.grafana.com/oss/release/grafana_10.4.2_amd64.deb
-  - dpkg -i /tmp/grafana.deb || apt-get -f install -y
-  - systemctl enable prometheus grafana-server
-  - systemctl start prometheus grafana-server
-  - ufw allow 9090/tcp
-  - ufw allow 3000/tcp""",
-    },
-    {
-        "name": "VPN Gateway (WireGuard)",
-        "description": "Installs WireGuard, enables IP forwarding, opens UDP 51820.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - wireguard
-  - ufw
-runcmd:
-  - wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
-  - echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
-  - sysctl -p
-  - ufw allow 51820/udp
-  - ufw --force enable""",
-    },
-    {
-        "name": "Load Balancer (HAProxy)",
-        "description": "Installs HAProxy and opens ports 80 and 443.",
-        "yaml": """\
-#cloud-config
-package_update: true
-packages:
-  - haproxy
-  - ufw
-runcmd:
-  - systemctl enable haproxy
-  - systemctl start haproxy
-  - ufw allow 80/tcp
-  - ufw allow 443/tcp
-  - ufw --force enable""",
-    },
-]
-
-
-_DEFAULT_SG_TEMPLATES = [
-    {
-        "name": "Web Server (HTTP/HTTPS)",
-        "description": "Opens ports 80 and 443 for public web traffic.",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 80,  "port_max": 80,  "cidr": "0.0.0.0/0"},
-            {"direction": "ingress", "protocol": "tcp", "port_min": 443, "port_max": 443, "cidr": "0.0.0.0/0"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",  "port_max": "",  "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "SSH Access",
-        "description": "Allows SSH on port 22 from anywhere (restrict CIDR in production).",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 22, "port_max": 22, "cidr": "0.0.0.0/0"},
-            {"direction": "egress",  "protocol": "",    "port_min": "", "port_max": "", "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "PostgreSQL",
-        "description": "Allows PostgreSQL access on port 5432 from internal network.",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 5432, "port_max": 5432, "cidr": "10.0.0.0/8"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "MySQL / MariaDB",
-        "description": "Allows MySQL/MariaDB access on port 3306 from internal network.",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 3306, "port_max": 3306, "cidr": "10.0.0.0/8"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "Redis",
-        "description": "Allows Redis access on port 6379 from internal network.",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 6379, "port_max": 6379, "cidr": "10.0.0.0/8"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "Load Balancer",
-        "description": "HTTP, HTTPS, and health-check ports for a load balancer.",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 80,   "port_max": 80,   "cidr": "0.0.0.0/0"},
-            {"direction": "ingress", "protocol": "tcp", "port_min": 443,  "port_max": 443,  "cidr": "0.0.0.0/0"},
-            {"direction": "ingress", "protocol": "tcp", "port_min": 8080, "port_max": 8080, "cidr": "10.0.0.0/8"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "Kubernetes Node",
-        "description": "API server (6443), kubelet (10250), and node-port range (30000-32767).",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 6443,  "port_max": 6443,  "cidr": "10.0.0.0/8"},
-            {"direction": "ingress", "protocol": "tcp", "port_min": 10250, "port_max": 10250, "cidr": "10.0.0.0/8"},
-            {"direction": "ingress", "protocol": "tcp", "port_min": 30000, "port_max": 32767, "cidr": "0.0.0.0/0"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",    "port_max": "",    "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "Monitoring (Prometheus + Grafana)",
-        "description": "Prometheus scrape (9090) and Grafana UI (3000) from internal network.",
-        "rules": [
-            {"direction": "ingress", "protocol": "tcp", "port_min": 9090, "port_max": 9090, "cidr": "10.0.0.0/8"},
-            {"direction": "ingress", "protocol": "tcp", "port_min": 3000, "port_max": 3000, "cidr": "10.0.0.0/8"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",   "port_max": "",   "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "WireGuard VPN",
-        "description": "WireGuard UDP on 51820 from anywhere.",
-        "rules": [
-            {"direction": "ingress", "protocol": "udp", "port_min": 51820, "port_max": 51820, "cidr": "0.0.0.0/0"},
-            {"direction": "egress",  "protocol": "",    "port_min": "",    "port_max": "",    "cidr": "0.0.0.0/0"},
-        ],
-    },
-    {
-        "name": "ICMP (Ping)",
-        "description": "Allows ICMP ping from anywhere.",
-        "rules": [
-            {"direction": "ingress", "protocol": "icmp", "port_min": "", "port_max": "", "cidr": "0.0.0.0/0"},
-            {"direction": "egress",  "protocol": "icmp", "port_min": "", "port_max": "", "cidr": "0.0.0.0/0"},
-        ],
-    },
-]
-
-
-def _seed_default_roles(conn: sqlite3.Connection) -> None:
-    """Insert built-in sample roles that don't already exist (by name)."""
-    existing = {
-        row[0].lower()
-        for row in conn.execute("SELECT name FROM saved_configs WHERE type = 'role'").fetchall()
-    }
-    now = datetime.utcnow().isoformat()
-    inserted = False
-    for role in _DEFAULT_ROLES:
-        if role["name"].lower() in existing:
-            continue
-        content = json.dumps({"description": role["description"], "yaml": role["yaml"]})
-        conn.execute(
-            "INSERT INTO saved_configs (name, type, content, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (role["name"], "role", content, now, now),
-        )
-        inserted = True
-    if inserted:
-        conn.commit()
-
-
-def _seed_default_sg_templates(conn: sqlite3.Connection) -> None:
-    """Insert built-in sample SG templates that don't already exist (by name)."""
-    existing = {
-        row[0].lower()
-        for row in conn.execute("SELECT name FROM saved_configs WHERE type = 'sg-template'").fetchall()
-    }
-    now = datetime.utcnow().isoformat()
-    inserted = False
-    for tpl in _DEFAULT_SG_TEMPLATES:
-        if tpl["name"].lower() in existing:
-            continue
-        content = json.dumps({"description": tpl["description"], "rules": tpl["rules"]})
-        conn.execute(
-            "INSERT INTO saved_configs (name, type, content, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (tpl["name"], "sg-template", content, now, now),
-        )
-        inserted = True
-    if inserted:
-        conn.commit()
 
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
@@ -593,15 +275,6 @@ def event_log(event_type: str, title: str, level: str = "info",
         )
 
 
-_DEPLOY_LEVEL = {
-    "deploying": "running",
-    "running":   "success",
-    "stopped":   "info",
-    "destroyed": "info",
-    "error":     "error",
-}
-
-
 def get_recent_events(limit: int = 100) -> list[dict]:
     """Return a unified, timestamp-sorted event list from all event sources."""
     events: list[dict] = []
@@ -638,21 +311,6 @@ def get_recent_events(limit: int = 100) -> list[dict]:
                 "component":  r["job_type"] or "Job",
                 "tenant":     None,
                 "timestamp":  r["started_at"],
-            })
-
-        # Deployments — use updated_at as the event timestamp
-        for r in conn.execute(
-            "SELECT * FROM deployments ORDER BY updated_at DESC LIMIT 30"
-        ).fetchall():
-            events.append({
-                "id":         f"deploy:{r['id']}",
-                "event_type": "deployment",
-                "level":      _DEPLOY_LEVEL.get(r["status"], "info"),
-                "title":      r["app_name"],
-                "detail":     r["error_msg"],
-                "component":  "Deployment",
-                "tenant":     r["tenant_name"],
-                "timestamp":  r["updated_at"],
             })
 
         # Capacity reports
@@ -740,130 +398,27 @@ def report_get(report_id: str) -> dict | None:
     return json.loads(row["data"]) if row else None
 
 
-# ── Saved Configs ──────────────────────────────────────────────────────────────
+# ── App Builder data (moved to PCD App Builder) ──────────────────────────────────
+# PCD Ops no longer creates these tables. Installs that used App Builder keep their rows,
+# which GET /api/orchestration/export hands to PCD App Builder.
 
-def saved_config_list() -> list[dict]:
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                        (name,)).fetchone() is not None
+
+
+def saved_configs_export() -> list[dict]:
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, name, type, created_at, updated_at FROM saved_configs ORDER BY updated_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+        if not _table_exists(conn, "saved_configs"):
+            return []
+        rows = conn.execute("SELECT * FROM saved_configs ORDER BY id").fetchall()
+    return [{**dict(r), "content": json.loads(r["content"])} for r in rows]
 
 
-def saved_config_get(config_id: int) -> dict | None:
+def deployments_export() -> list[dict]:
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM saved_configs WHERE id = ?", (config_id,)).fetchone()
-    if not row:
-        return None
-    r = dict(row)
-    r["content"] = json.loads(r["content"])
-    return r
-
-
-def saved_config_create(name: str, type_: str, content: dict) -> dict:
-    now = datetime.utcnow().isoformat()
-    with _connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO saved_configs (name, type, content, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (name, type_, json.dumps(content), now, now),
-        )
-        row = conn.execute("SELECT * FROM saved_configs WHERE id = ?", (cur.lastrowid,)).fetchone()
-    r = dict(row)
-    r["content"] = json.loads(r["content"])
-    return r
-
-
-def saved_config_update(config_id: int, name: str | None, content: dict | None) -> dict | None:
-    now = datetime.utcnow().isoformat()
-    with _connect() as conn:
-        if name is not None:
-            conn.execute("UPDATE saved_configs SET name = ?, updated_at = ? WHERE id = ?", (name, now, config_id))
-        if content is not None:
-            conn.execute("UPDATE saved_configs SET content = ?, updated_at = ? WHERE id = ?",
-                         (json.dumps(content), now, config_id))
-        row = conn.execute("SELECT * FROM saved_configs WHERE id = ?", (config_id,)).fetchone()
-    if not row:
-        return None
-    r = dict(row)
-    r["content"] = json.loads(r["content"])
-    return r
-
-
-def saved_config_delete(config_id: int) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM saved_configs WHERE id = ?", (config_id,))
-
-
-# ── Deployments ────────────────────────────────────────────────────────────────
-
-def deployment_create(app_name: str, profile_id: int | None, tenant_name: str,
-                      network_name: str, key_pair: str, hcl: str,
-                      extra_vars: dict | None = None) -> dict:
-    import uuid as _uuid
-    dep_id = str(_uuid.uuid4())
-    now = datetime.utcnow().isoformat()
-    with _connect() as conn:
-        conn.execute(
-            """INSERT INTO deployments
-               (id, app_name, profile_id, tenant_name, network_name, key_pair,
-                extra_vars, hcl, status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,'deploying',?,?)""",
-            (dep_id, app_name, profile_id, tenant_name, network_name, key_pair,
-             json.dumps(extra_vars or {}), hcl, now, now),
-        )
-        row = conn.execute("SELECT * FROM deployments WHERE id = ?", (dep_id,)).fetchone()
-    return _dep_row(row)
-
-
-def deployment_list(profile_id: int | None = None) -> list[dict]:
-    with _connect() as conn:
-        if profile_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM deployments WHERE profile_id = ? ORDER BY created_at DESC", (profile_id,)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM deployments ORDER BY created_at DESC"
-            ).fetchall()
-    return [_dep_row(r) for r in rows]
-
-
-def deployment_get(dep_id: str) -> dict | None:
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM deployments WHERE id = ?", (dep_id,)).fetchone()
-    return _dep_row(row) if row else None
-
-
-def deployment_update(dep_id: str, *, status: str | None = None,
-                      tf_state: str | None = None, outputs: dict | None = None,
-                      error_msg: str | None = None) -> dict | None:
-    now = datetime.utcnow().isoformat()
-    with _connect() as conn:
-        if status is not None:
-            conn.execute("UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?",
-                         (status, now, dep_id))
-        if tf_state is not None:
-            conn.execute("UPDATE deployments SET tf_state = ?, updated_at = ? WHERE id = ?",
-                         (tf_state, now, dep_id))
-        if outputs is not None:
-            conn.execute("UPDATE deployments SET outputs = ?, updated_at = ? WHERE id = ?",
-                         (json.dumps(_sanitize(outputs)), now, dep_id))
-        if error_msg is not None:
-            conn.execute("UPDATE deployments SET error_msg = ?, updated_at = ? WHERE id = ?",
-                         (error_msg, now, dep_id))
-        row = conn.execute("SELECT * FROM deployments WHERE id = ?", (dep_id,)).fetchone()
-    return _dep_row(row) if row else None
-
-
-def deployment_delete(dep_id: str) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM deployments WHERE id = ?", (dep_id,))
-
-
-def _dep_row(row) -> dict:
-    if row is None:
-        return None
-    r = dict(row)
-    r["extra_vars"] = json.loads(r.get("extra_vars") or "{}")
-    r["outputs"]    = json.loads(r.get("outputs")    or "{}")
-    return r
+        if not _table_exists(conn, "deployments"):
+            return []
+        rows = conn.execute("SELECT * FROM deployments ORDER BY created_at").fetchall()
+    return [{**dict(r), "extra_vars": json.loads(r["extra_vars"] or "{}"),
+             "outputs": json.loads(r["outputs"] or "{}")} for r in rows]

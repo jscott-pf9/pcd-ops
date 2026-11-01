@@ -3,6 +3,7 @@ import { checkForUpdate, getUpdateLog, getVersion, rebootAppliance, restartServi
 import { apiFetch } from "../../api/client";
 import { useSettings } from "./useSettings";
 import { Fieldset, SaveRow } from "./SettingsConnection";
+import MovingBanner from "../../components/MovingBanner";
 
 export default function SettingsUpdates() {
   const [version, setVersion] = useState<VersionInfo | null>(null);
@@ -110,6 +111,9 @@ export default function SettingsUpdates() {
 
       {/* ── Data Retention ── */}
       <DataRetentionSection />
+
+      {/* ── App Builder moved ── */}
+      <MovingBanner />
     </div>
   );
 }

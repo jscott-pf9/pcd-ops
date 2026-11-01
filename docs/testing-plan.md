@@ -1,5 +1,7 @@
 # Plan: Automated Testing Suite
 
+> App Builder (HCL generation, saved configs, deployments) moved to PCD App Builder, with its tests.
+
 ## Context
 No tests exist. pytest + pytest-asyncio + httpx are already in `pyproject.toml`; vitest is already in `package.json`. The `backend/tests/` directory exists but is empty. Goal: establish a meaningful test suite covering the most critical paths — HCL generation, schedule logic, DB operations, API endpoints — without requiring live OpenStack/Prometheus/AI connections.
 
@@ -12,16 +14,14 @@ tests/
 ├── backend/
 │   ├── conftest.py               # shared fixtures: test app client, temp DB, mocked deps
 │   ├── unit/
-│   │   ├── test_hcl_builder.py   # _build_deterministic_hcl — no external deps
 │   │   ├── test_schedule.py      # _parse_schedule, next_run_at, _ai_feature_due
-│   │   ├── test_db.py            # SQLite CRUD: cache, jobs, deployments, saved_configs
+│   │   ├── test_db.py            # SQLite CRUD: cache, jobs
 │   │   └── test_settings_store.py# load/save settings.json
 │   └── api/
 │       ├── test_health.py        # GET /api/health
 │       ├── test_settings.py      # GET/PUT /api/settings
 │       ├── test_jobs.py          # CRUD + /types + trigger
 │       ├── test_inventory.py     # endpoints with pre-seeded cache data
-│       ├── test_generate.py      # /generate/app-profile-terraform (no AI — deterministic)
 │       └── test_agent.py         # GET /api/agent/status, trigger
 └── frontend/
     └── src/
@@ -72,23 +72,6 @@ External services (OpenStack, Prometheus, AI, SSH) are patched per-test or per-m
 
 ## Backend unit tests
 
-### `test_hcl_builder.py` — most valuable, zero external deps
-
-Test `_build_deterministic_hcl(req)` with various `AppProfileRequest` inputs:
-
-| Test | Checks |
-|---|---|
-| `test_single_vm_no_networks` | Uses `var.network_name`, basic variables block |
-| `test_multi_vm_managed_networks` | Creates network/subnet/router resources per network |
-| `test_vm_assigned_to_network` | VM network block references correct resource ID |
-| `test_provider_network_data_source` | VM on external net gets `data` source, not resource |
-| `test_multi_listener_lb` | HTTP:80 + TERMINATED_HTTPS:443 with `var.tls_cert_ref` |
-| `test_sg_per_tier` | Each VM only gets its assigned SGs, not all SGs |
-| `test_cloud_init_embedded` | `user_data = <<-CLOUDINIT` block present when yaml set |
-| `test_outputs_generated` | All VM profile IP outputs present |
-| `test_empty_sg_assignment` | Falls back to `"default"` when no SGs assigned |
-| `test_slug_special_chars` | `_slug()` handles dashes, spaces, uppercase |
-
 ### `test_schedule.py`
 
 Test `_parse_schedule`, `next_run_at`, `_ai_feature_due`:
@@ -111,8 +94,6 @@ Test all CRUD functions against temp SQLite:
 
 - `cache_set` / `cache_get` / `cache_meta`
 - `job_create` / `job_list` / `job_get` / `job_update` / `job_delete`
-- `deployment_create` / `deployment_list` / `deployment_get` / `deployment_update` / `deployment_delete`
-- `saved_config_create` / `saved_config_list` / `saved_config_get` / `saved_config_update` / `saved_config_delete`
 - `_sanitize` with NaN/Inf floats
 
 ---
@@ -143,15 +124,6 @@ Pre-seed `inventory:servers`, `inventory:hypervisors`, etc. via `db.cache_set()`
 - `GET /api/inventory/tenants` → 200
 - `GET /api/inventory/keypairs` → 200 (empty list when not cached)
 - `GET /api/inventory/summary` → 503 when no data (correct "no_data" code)
-
-### `test_generate.py`
-Test the deterministic endpoint (no AI):
-- `POST /api/generate/app-profile-terraform` basic → 200, HCL contains `variable "tenant_name"`
-- HCL contains `openstack_networking_network_v2` when networks defined
-- HCL contains `TERMINATED_HTTPS` when tls listener present
-- `GET /api/generate/flavors` → 200 (empty when no cache)
-- `GET /api/generate/saved` → 200, empty list
-- `POST /api/generate/saved` + `GET` + `PUT` + `DELETE` → full CRUD lifecycle
 
 ### `test_agent.py`
 - `GET /api/agent/status` → 200, has `is_running` field
@@ -294,7 +266,6 @@ Press ↑ ↓ ← → while in the Advanced Options menu — same as main menu, 
 | File | Notes |
 |---|---|
 | `tests/backend/conftest.py` | tmp_db, tmp_settings, client fixtures |
-| `tests/backend/unit/test_hcl_builder.py` | 10 test cases |
 | `tests/backend/unit/test_schedule.py` | 9 test cases |
 | `tests/backend/unit/test_db.py` | CRUD coverage for all tables |
 | `tests/backend/unit/test_settings_store.py` | load/save round-trip |
@@ -302,7 +273,6 @@ Press ↑ ↓ ← → while in the Advanced Options menu — same as main menu, 
 | `tests/backend/api/test_settings.py` | 3 tests |
 | `tests/backend/api/test_jobs.py` | 7 tests |
 | `tests/backend/api/test_inventory.py` | 5 tests |
-| `tests/backend/api/test_generate.py` | 7 tests |
 | `tests/backend/api/test_agent.py` | 2 tests |
 | `frontend/src/schedule_utils.test.ts` | 4 tests |
 | `frontend/src/mini_markdown.test.ts` | 3 tests |

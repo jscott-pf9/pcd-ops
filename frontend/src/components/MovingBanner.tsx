@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { CSRF_HEADERS } from "../api/client";
 
-/** App Builder, App Catalog and App Deployments are moving to PCD App Builder, a separate
- *  appliance in the PCD App Catalog. Export downloads everything they hold for its
+/** App Builder, App Catalog and App Deployments moved to PCD App Builder, a separate appliance
+ *  in the PCD App Catalog. Export downloads what this install still holds for its
  *  Settings → Import, Terraform state included. */
 export default function MovingBanner() {
   const [busy, setBusy] = useState(false);
@@ -36,10 +36,10 @@ export default function MovingBanner() {
       background: "var(--blue-light)", color: "var(--blue-dark)", border: "1px solid var(--gray-200)",
     }}>
       <span style={{ flex: 1, minWidth: 260 }}>
-        <strong>App Builder is moving to its own appliance, PCD App Builder</strong>, in the PCD App
-        Catalog. Install it, then export here and choose the file under its Settings → Import. Your
-        profiles, roles, templates and deployments (with their Terraform state) come across.
-        A later PCD Ops release removes these pages.
+        <strong>App Builder moved to its own appliance, PCD App Builder</strong>, in the PCD App
+        Catalog. If you used App Builder here, install it, export here and choose the file under
+        its Settings → Import. Your profiles, roles, templates and deployments (with their
+        Terraform state) come across.
       </span>
       <button className="btn btn-primary btn-sm" disabled={busy} onClick={exportAll}>
         {busy ? "Exporting…" : "Export"}
