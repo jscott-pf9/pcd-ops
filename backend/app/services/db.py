@@ -396,29 +396,3 @@ def report_get(report_id: str) -> dict | None:
             "SELECT data FROM capacity_reports WHERE id = ?", (report_id,)
         ).fetchone()
     return json.loads(row["data"]) if row else None
-
-
-# ── App Builder data (moved to PCD App Builder) ──────────────────────────────────
-# PCD Ops no longer creates these tables. Installs that used App Builder keep their rows,
-# which GET /api/orchestration/export hands to PCD App Builder.
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                        (name,)).fetchone() is not None
-
-
-def saved_configs_export() -> list[dict]:
-    with _connect() as conn:
-        if not _table_exists(conn, "saved_configs"):
-            return []
-        rows = conn.execute("SELECT * FROM saved_configs ORDER BY id").fetchall()
-    return [{**dict(r), "content": json.loads(r["content"])} for r in rows]
-
-
-def deployments_export() -> list[dict]:
-    with _connect() as conn:
-        if not _table_exists(conn, "deployments"):
-            return []
-        rows = conn.execute("SELECT * FROM deployments ORDER BY created_at").fetchall()
-    return [{**dict(r), "extra_vars": json.loads(r["extra_vars"] or "{}"),
-             "outputs": json.loads(r["outputs"] or "{}")} for r in rows]

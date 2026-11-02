@@ -92,12 +92,9 @@ async def authorize(request: Request):
         ) from None
     app_credentials.save_record(record)
 
-    # 0.4.x carry-over: keep the non-secret connection details, then delete the service account.
+    # Installs without config.env know the project by name; keep its ID too.
     if not conn.from_config_env:
-        pcd.save(auth_url=conn.auth_url, region=conn.region, project_id=tok.project_id,
-                 project_name=tok.project_name or conn.project_name,
-                 project_domain=conn.project_domain)
-    pcd.forget_legacy()
+        pcd.save(project_id=tok.project_id, project_name=tok.project_name or conn.project_name)
     os_service.reset_connection()
 
     warning = None

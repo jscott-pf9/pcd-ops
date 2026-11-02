@@ -3,13 +3,17 @@ import { apiFetch } from "./client";
 // App settings only — PCD credentials are never settings (login and background access
 // replace them; see api/auth.ts).
 export interface AppSettings {
+  // Blank grafana_url means grafana_url_default (https://<PCD host>/grafana); blank
+  // prometheus_url means the data source PCD Ops finds through Grafana.
   prometheus_url: string;
   grafana_url: string;
   grafana_token: string;
+  /** "ollama" is Private AI (Ollama or any OpenAI-compatible server). */
   ai_backend: string;
   ai_url: string;
   ai_model: string;
   ai_api_key: string;
+  ai_private_api_key: string;
   // SSH (hypervisor log collection)
   hypervisor_ssh_user?: string;
   hypervisor_ssh_key_path?: string;
@@ -33,12 +37,28 @@ export interface AppSettings {
   // AI analysis schedules
   ai_rightsizing_schedule?: string;
   ai_anomaly_schedule?: string;
+  /** Read-only. */
+  grafana_url_default?: string;
 }
 
 export const getSettings = () => apiFetch<AppSettings>("/settings");
 
-export const saveSettings = (payload: AppSettings) =>
+/** Saves only the fields given; a secret sent blank or as "***" keeps the saved value. */
+export const saveSettings = (payload: Partial<AppSettings>) =>
   apiFetch<{ status: string }>("/settings", {
     method: "PUT",
     body: JSON.stringify(payload),
   });
+
+export interface AIRequest { ai_backend: string; ai_url: string; ai_model: string; api_key: string }
+
+export const listAIModels = (body: AIRequest) =>
+  apiFetch<{ models: string[] }>("/settings/ai/models", { method: "POST", body: JSON.stringify(body) });
+
+export const testAI = (body: AIRequest) =>
+  apiFetch<{ ok: boolean; models?: string[]; model?: string; reply?: string; error?: string }>(
+    "/settings/ai/test", { method: "POST", body: JSON.stringify(body) });
+
+export const testMetrics = (body: { grafana_url: string; grafana_token: string; prometheus_url: string }) =>
+  apiFetch<{ ok: boolean; grafana_url: string; datasource?: string; prometheus_url?: string; error?: string }>(
+    "/settings/metrics/test", { method: "POST", body: JSON.stringify(body) });

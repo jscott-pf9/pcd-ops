@@ -528,7 +528,7 @@ async def _run_capacity_report(config: dict) -> dict:
             ai_context,
         ))
     else:
-        ai_text = "AI analysis disabled — enable in Settings → AI Backend."
+        ai_text = "AI analysis disabled — enable in Settings → AI."
 
     # ── Assemble and store report ──────────────────────────────────────────────
     report_id = str(uuid.uuid4())
@@ -556,13 +556,16 @@ async def _run_capacity_report(config: dict) -> dict:
         for t in tenants_report:
             body_lines.append(f"  {t['name']}: CPU {t['vcpus']['pct']}%  RAM {t['ram_gb']['pct']}%  Storage {t['storage_gb']['pct']}%")
         body_lines += ["", "Analysis:", ai_text or ""]
-        await send_email(subject, "\n".join(body_lines))
-        report["email_sent_to"] = email_to
-        db.report_save(report_id, report)  # update with email_sent_to
+        if await send_email(subject, "\n".join(body_lines), to=email_to):
+            report["email_sent_to"] = email_to
+            db.report_save(report_id, report)  # update with email_sent_to
 
+    sent_to = report["email_sent_to"]
     summary = (f"Report generated for {len(tenants_report)} tenant(s)"
-               + (f", emailed to {email_to}" if email_to else ""))
-    return {"summary": summary, "report_id": report_id, "email_sent_to": email_to,
+               + (f", emailed to {sent_to}" if sent_to else "")
+               + (f"; email to {email_to} failed (check Settings → Alerts)"
+                  if email_to and not sent_to else ""))
+    return {"summary": summary, "report_id": report_id, "email_sent_to": sent_to,
             "tenant_filter": id_to_name.get(tenant_id) if tenant_id else None}
 
 
@@ -627,8 +630,6 @@ async def _run_rightsizing_resize(config: dict) -> dict:
                 "tenant_name":    rec.get("tenant_name", "—"),
                 "dry_run":        dry_run,
             })
-        else:
-            skipped.append({"name": vm_name, "reason": "resize failed"})
 
     prefix = "[DRY RUN] " if dry_run else ""
     summary = (f"{prefix}Resized {len(resized)} VM(s) to smaller flavors; "

@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -28,13 +30,26 @@ async def create_snapshot(
     body: SnapshotCreate,
     conn: openstack.connection.Connection = Depends(user_connection),
 ):
-    """Create a snapshot of a server's volumes by calling the Nova createImage action."""
+    """Create a Cinder snapshot of each volume attached to a server (in-use volumes too)."""
     try:
-        server = conn.compute.get_server(body.server_id)
-        snapshot = conn.compute.create_server_image(server, name=body.name)
+        server = await asyncio.to_thread(conn.compute.get_server, body.server_id)
+        volume_ids = [v["id"] for v in (server.attached_volumes or [])]
+        if not volume_ids:
+            raise HTTPException(400, detail=f"{server.name or body.server_id} has no attached "
+                                            "volumes to snapshot.")
+        created = []
+        for vid in volume_ids:
+            name = body.name if len(volume_ids) == 1 else f"{body.name}-{vid[:8]}"
+            snap = await asyncio.to_thread(
+                lambda v=vid, n=name: conn.block_storage.create_snapshot(volume_id=v, name=n,
+                                                                         force=True))
+            created.append({"snapshot_id": snap.id, "name": name, "volume_id": vid})
         db.event_log("snapshot_create", f"Snapshot created: {body.name}",
+                     detail=f"{len(created)} volume(s) of {server.name or body.server_id}",
                      level="success", component="Snapshots")
-        return {"snapshot_id": snapshot.id, "name": snapshot.name}
+        return {"snapshots": created}
+    except HTTPException:
+        raise
     except Exception as e:
         db.event_log("snapshot_create", f"Snapshot create failed: {body.name}",
                      level="error", detail=str(e), component="Snapshots")

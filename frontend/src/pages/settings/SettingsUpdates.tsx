@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { checkForUpdate, getUpdateLog, getVersion, rebootAppliance, restartService, triggerUpdate, type UpdateCheck, type VersionInfo } from "../../api/system";
 import { apiFetch } from "../../api/client";
 import { useSettings } from "./useSettings";
-import { Fieldset, SaveRow } from "./SettingsConnection";
-import MovingBanner from "../../components/MovingBanner";
+import { Fieldset, SaveRow } from "./form";
 
 export default function SettingsUpdates() {
   const [version, setVersion] = useState<VersionInfo | null>(null);
@@ -62,7 +61,6 @@ export default function SettingsUpdates() {
 
   return (
     <div style={{ maxWidth: 560 }}>
-      <h1>Software</h1>
 
       {/* ── Version & updates ── */}
       <div className="card card-body" style={{ marginBottom: "1rem" }}>
@@ -111,9 +109,6 @@ export default function SettingsUpdates() {
 
       {/* ── Data Retention ── */}
       <DataRetentionSection />
-
-      {/* ── App Builder moved ── */}
-      <MovingBanner />
     </div>
   );
 }
@@ -199,7 +194,7 @@ function ApplianceControls() {
 }
 
 function DataRetentionSection() {
-  const { form, set, status, error, save } = useSettings();
+  const { form, set, status, error, save } = useSettings(["job_run_retention_days", "report_retention_days"]);
   const [purgeMsg, setPurgeMsg] = useState("");
 
   async function runCleanupNow() {
@@ -230,13 +225,13 @@ function DataRetentionSection() {
             <label className="form-label">Job run history (days)</label>
             <input type="number" min={0} max={365} className="form-input"
               value={form.job_run_retention_days ?? 30}
-              onChange={e => set("job_run_retention_days" as any, e.target.value)} />
+              onChange={e => set("job_run_retention_days", Number(e.target.value))} />
           </div>
           <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
             <label className="form-label">Capacity reports (days)</label>
             <input type="number" min={0} max={365} className="form-input"
               value={form.report_retention_days ?? 30}
-              onChange={e => set("report_retention_days" as any, e.target.value)} />
+              onChange={e => set("report_retention_days", Number(e.target.value))} />
           </div>
         </div>
 

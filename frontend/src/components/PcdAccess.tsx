@@ -6,7 +6,7 @@ import {
 } from "../api/auth";
 import { errorDetail } from "../api/client";
 
-// Shared by /setup and Settings › PCD & Metrics (APPLIANCE_STANDARD §7.7, §7.8).
+// Shared by /setup and Settings › Connection (APPLIANCE_STANDARD §7.7, §7.8).
 
 function fmtTime(ts: number | null | undefined): string {
   return ts ? new Date(ts * 1000).toLocaleString() : "never";
@@ -46,19 +46,10 @@ export function ConnectionCard({ connection }: { connection: PcdConnection }) {
   );
 }
 
-/** What "Authorize background access" creates, in plain terms. */
-export function AuthorizeExplainer({ project }: { project: string }) {
-  return (
-    <p style={{ fontSize: 13, color: "var(--gray-700)", margin: "0 0 0.75rem" }}>
-      PCD Ops collects inventory, metrics and logs, and runs scheduled jobs, while nobody is
-      logged in. Authorizing creates a PCD <strong>application credential</strong> owned by
-      you, in project <strong>{project}</strong>, with the <strong>admin</strong> role only
-      and no permission to create further credentials. PCD Ops stores it encrypted and never
-      sees your password. If your account loses the admin role there, background work stops
-      until an admin re-authorizes it.
-    </p>
-  );
-}
+/** The one line about background access (APPLIANCE_STANDARD §7.7). */
+export const BACKGROUND_ACCESS_NOTE =
+  "PCD Ops runs its background work (collection and scheduled jobs) with an application " +
+  "credential created from your login.";
 
 function CredentialRows({ cred }: { cred: BackgroundCredential }) {
   return (
@@ -79,7 +70,6 @@ export function BackgroundAccessCard({ access }: { access: AccessStatus }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const { state, credential } = access.background;
-  const project = access.connection.project_name || access.connection.project_id;
 
   async function run(kind: "authorize" | "revoke") {
     if (kind === "revoke" && !window.confirm(
@@ -110,7 +100,6 @@ export function BackgroundAccessCard({ access }: { access: AccessStatus }) {
         <span className="card-title">Background access</span>
         {state === "authorized" && <span className="badge badge-ok">Authorized</span>}
         {state === "failed" && <span className="badge badge-error">Stopped working</span>}
-        {state === "legacy" && <span className="badge badge-warn">0.4 service account</span>}
         {state === "none" && <span className="badge badge-neutral">Not authorized</span>}
       </div>
       <div className="card-body">
@@ -121,17 +110,11 @@ export function BackgroundAccessCard({ access }: { access: AccessStatus }) {
             Its owner may have been deleted or lost the admin role. Re-authorize with your account.
           </p>
         )}
-        {state === "legacy" && (
-          <p style={{ fontSize: 13 }}>
-            Background work still uses the service account saved by PCD Ops 0.4. Authorize
-            background access to replace it; the stored password is then deleted.
-          </p>
-        )}
-        {(state === "none" || state === "legacy") && <AuthorizeExplainer project={project} />}
+        {state === "none" && <p style={{ fontSize: 13, margin: 0 }}>{BACKGROUND_ACCESS_NOTE}</p>}
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
           <button className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => run("authorize")}>
             {busy === "authorize" ? "Authorizing…"
-              : credential ? "Re-authorize" : "Authorize background access"}
+              : credential ? "Re-authorize" : "Authorize"}
           </button>
           {credential && (
             <button className="btn btn-danger btn-sm" disabled={!!busy} onClick={() => run("revoke")}>

@@ -1,7 +1,7 @@
 """Keystone v3 login with the user's own PCD account (APPLIANCE_STANDARD §7.1, §7.4).
 
 Adapted from the standard's §8.2 reference module:
-- login() can scope by project name, for 0.4.x installs that know only the project name;
+- login() can scope by project name, for installs without config.env that know only its name;
 - network errors become AuthError, so the login page can show them;
 - connections use PCD's public endpoints (the catalog's internal URLs are k8s-only).
 """

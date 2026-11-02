@@ -10,8 +10,8 @@ export interface Session {
 }
 
 /** authorized: application credential in use. failed: Keystone refused it (re-authorize).
- *  legacy: a 0.4.x service account, until setup completes. none: nothing authorized. */
-export type BackgroundState = "authorized" | "failed" | "legacy" | "none";
+ *  none: nothing authorized. */
+export type BackgroundState = "authorized" | "failed" | "none";
 
 export interface PcdConnection {
   auth_url: string;

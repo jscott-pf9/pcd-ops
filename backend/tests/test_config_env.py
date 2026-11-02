@@ -34,20 +34,19 @@ def test_connection_comes_from_config_env():
     assert conn.from_config_env and conn.configured
 
 
-def test_config_env_wins_over_legacy_settings():
-    from app.services import settings_store
-    settings_store.save({"os_auth_url": "https://old/keystone/v3", "os_region_name": "old"})
+def test_config_env_wins_over_saved_connection():
+    pcd.save(auth_url="https://old/keystone/v3", region="old")
     conn = pcd.load()
     assert conn.auth_url == "https://pcd.example.com/keystone/v3"
     assert conn.region == "lab"
 
 
-def test_legacy_settings_fill_in_without_config_env(isolated):
-    from app.services import settings_store
+def test_saved_connection_without_config_env(isolated):
     (isolated / "config.env").unlink()
-    settings_store.save({"os_auth_url": "https://old/keystone/v3", "os_project_name": "admin",
-                         "os_region_name": "r1", "os_project_domain_name": "corp"})
+    pcd.save(auth_url="https://other/keystone/v3", project_name="admin", region="r1",
+             project_domain="corp")
     conn = pcd.load()
-    assert (conn.auth_url, conn.project_name, conn.region) == ("https://old/keystone/v3", "admin", "r1")
+    assert (conn.auth_url, conn.project_name, conn.region) == (
+        "https://other/keystone/v3", "admin", "r1")
     assert conn.project_domain == "corp"
     assert not conn.from_config_env and conn.configured

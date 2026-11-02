@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { apiFetch } from "../../api/client";
 import { useAgentStatus, useTriggerAgent } from "../../api/agent";
-import { Fieldset } from "./SettingsConnection";
+import { Fieldset } from "./form";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ function ConnectionPanel() {
           <span style={{ fontSize: 12, color: "var(--gray-400)" }}>
             {result.openstack.ok && result.grafana.ok
               ? "All connections OK"
-              : "Check Settings → PCD & Metrics"}
+              : "Check the Connection tab"}
           </span>
         )}
         {fetchErr && (
@@ -245,7 +245,6 @@ function AgentPanel() {
 export default function SettingsStatus() {
   return (
     <div style={{ maxWidth: 640 }}>
-      <h1>System Status</h1>
       <p style={{ fontSize: 13, color: "var(--gray-500)", marginBottom: "1.25rem" }}>
         Verify your connections and trigger a data collection run after initial setup.
       </p>

@@ -20,7 +20,7 @@ import {
   Sliders,
 } from "lucide-react";
 import PcdOpsMark from "./assets/PcdOpsMark";
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import Anomaly from "./pages/Anomaly";
 import Capacity from "./pages/Capacity";
 import CapacityPlans from "./pages/CapacityPlans";
@@ -31,11 +31,7 @@ import RightSizing from "./pages/RightSizing";
 import Snapshots from "./pages/Snapshots";
 import Jobs from "./pages/Jobs";
 import Topology from "./pages/Topology";
-import SettingsAlerts from "./pages/settings/SettingsAlerts";
-import SettingsConnection from "./pages/settings/SettingsConnection";
-import SettingsAI from "./pages/settings/SettingsAI";
-import SettingsStatus from "./pages/settings/SettingsStatus";
-import SettingsUpdates from "./pages/settings/SettingsUpdates";
+import Settings from "./pages/settings/Settings";
 import Feedback from "./pages/Feedback";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
@@ -82,17 +78,6 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/anomaly", label: "Anomaly", icon: AlertTriangle },
       { path: "/logs",    label: "Logs",    icon: FileText      },
-    ],
-  },
-  {
-    id: "settings", label: "Settings", icon: SettingsIcon,
-    // No icons on settings children — renders as nav-child style
-    items: [
-      { path: "/settings/status",     label: "System Status" },
-      { path: "/settings/connection", label: "PCD & Metrics" },
-      { path: "/settings/ai",         label: "AI Backend"    },
-      { path: "/settings/alerts",     label: "Alerts"        },
-      { path: "/settings/updates",    label: "Software"      },
     ],
   },
 ];
@@ -225,6 +210,13 @@ function Sidebar({ user }: { user?: string }) {
 
       <div className="sidebar-footer">
         <Link
+          to="/settings"
+          className={`sidebar-footer-link${loc.pathname.startsWith("/settings") ? " active" : ""}`}
+        >
+          <SettingsIcon size={14} />
+          <span>Settings</span>
+        </Link>
+        <Link
           to="/feedback"
           className={`sidebar-footer-link${loc.pathname === "/feedback" ? " active" : ""}`}
         >
@@ -253,6 +245,7 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
 
   const crumb = (() => {
     if (loc.pathname === "/feedback") return "Feedback";
+    if (loc.pathname.startsWith("/settings")) return "Settings";
     for (const sec of NAV_SECTIONS) {
       for (const item of sec.items) {
         // Check sub-children first
@@ -283,7 +276,7 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
           fontSize: 13, borderBottom: "1px solid var(--gray-200)",
         }}>
           Background access to PCD stopped working, so collection and scheduled jobs are paused.{" "}
-          <Link to="/settings/connection" style={{ color: "inherit", fontWeight: 600 }}>
+          <Link to="/settings?tab=connection" style={{ color: "inherit", fontWeight: 600 }}>
             Re-authorize it
           </Link>
         </div>
@@ -300,21 +293,20 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
           <Route path="/jobs"              element={<Jobs />}            />
           <Route path="/anomaly"           element={<Anomaly />}         />
           <Route path="/logs"              element={<Logs />}            />
-          {/* App Builder moved to PCD App Builder; its export is under Software */}
-          <Route path="/generate"          element={<Navigate to="/settings/updates" replace />} />
-          <Route path="/catalog"           element={<Navigate to="/settings/updates" replace />} />
-          <Route path="/deployments"       element={<Navigate to="/settings/updates" replace />} />
           <Route path="/feedback"              element={<Feedback />}            />
-          <Route path="/settings"            element={<Navigate to="/settings/status" replace />} />
-          <Route path="/settings/status"     element={<SettingsStatus />}       />
-          <Route path="/settings/connection" element={<SettingsConnection />}   />
-          <Route path="/settings/ai"         element={<SettingsAI />}           />
-          <Route path="/settings/alerts"     element={<SettingsAlerts />}       />
-          <Route path="/settings/updates"    element={<SettingsUpdates />}      />
+          <Route path="/settings"              element={<Settings />}            />
+          <Route path="/settings/:tab"         element={<SettingsRedirect />}    />
         </Routes>
       </main>
     </div>
   );
+}
+
+/** Old /settings/<page> links land on the matching tab. */
+function SettingsRedirect() {
+  const { tab = "" } = useParams();
+  const id = tab === "updates" ? "software" : tab;
+  return <Navigate to={`/settings?tab=${encodeURIComponent(id)}`} replace />;
 }
 
 // ── Auth gate ──────────────────────────────────────────────────────────────────

@@ -16,8 +16,10 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def send_email(subject: str, body_text: str, body_html: str | None = None) -> bool:
-    to = settings.alert_email_to
+async def send_email(subject: str, body_text: str, body_html: str | None = None,
+                     to: str | None = None) -> bool:
+    """Send to `to` (comma-separated addresses), or to the alert recipient from Settings."""
+    to = to or settings.alert_email_to
     if not to or not settings.smtp_host:
         logger.debug("Email not configured — skipping alert email.")
         return False
@@ -36,7 +38,8 @@ async def send_email(subject: str, body_text: str, body_html: str | None = None)
                 server.starttls()
             if settings.smtp_user and settings.smtp_password:
                 server.login(settings.smtp_user, settings.smtp_password)
-            server.sendmail(msg["From"], [to], msg.as_string())
+            server.sendmail(msg["From"], [a.strip() for a in to.split(",") if a.strip()],
+                            msg.as_string())
         logger.info("Alert email sent to %s: %s", to, subject)
         return True
     except Exception as e:

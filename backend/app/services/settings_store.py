@@ -1,15 +1,13 @@
-import json
-import os
-from pathlib import Path
+"""Settings saved on the Settings page: settings.json in the state dir (mode 0600; it holds the
+Grafana token, API keys and passwords)."""
+from app.appliance import state
 
-_path = Path(os.environ.get("SETTINGS_FILE", "settings.json"))
+SETTINGS_FILE = "settings.json"
 
 
 def load() -> dict:
-    if _path.exists():
-        return json.loads(_path.read_text())
-    return {}
+    return state.read_json(SETTINGS_FILE) or {}
 
 
 def save(data: dict) -> None:
-    _path.write_text(json.dumps(data, indent=2))
+    state.write_json(SETTINGS_FILE, data)

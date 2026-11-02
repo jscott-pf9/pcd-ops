@@ -229,7 +229,7 @@ function LiveLogs() {
       {isNoData && (
         <div className="empty">
           <div className="empty-title">No log data yet</div>
-          <div className="empty-body">Configure SSH credentials in Settings → PCD & Metrics, then click Refresh to collect hypervisor logs.</div>
+          <div className="empty-body">Configure SSH credentials in Settings → Connection, then click Refresh to collect hypervisor logs.</div>
         </div>
       )}
       {data && data.entries.length === 0 && !isNoData && (

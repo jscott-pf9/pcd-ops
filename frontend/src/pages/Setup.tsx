@@ -3,11 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useNavigate } from "react-router-dom";
 import { authorizeBackground, getAccess, getSession, saveConnection } from "../api/auth";
 import { errorDetail } from "../api/client";
-import { AuthorizeExplainer, ConnectionCard } from "../components/PcdAccess";
+import { BACKGROUND_ACCESS_NOTE, ConnectionCard } from "../components/PcdAccess";
 import { AuthPage } from "./Login";
 
 // First-run setup (APPLIANCE_STANDARD §7.7). Asks only for what's missing: the PCD connection
-// when config.env didn't supply it (before anyone can log in), then background access.
+// when config.env didn't supply it (before anyone can log in), then "Complete install", which
+// mints the background credential.
 
 function ConnectForm() {
   const qc = useQueryClient();
@@ -82,29 +83,19 @@ function AuthorizeStep() {
     }
   }
 
-  const project = access ? (access.connection.project_name || access.connection.project_id) : "";
   return (
-    <AuthPage title="Finish setting up PCD Ops" width={560}>
+    <AuthPage title="Finish installing PCD Ops" width={560}>
       {loadError && <p className="text-danger">{errorDetail(loadError)}</p>}
       {access && (
         <>
           <ConnectionCard connection={access.connection} />
-          <div className="card">
-            <div className="card-header"><span className="card-title">Background access</span></div>
-            <div className="card-body">
-              {access.background.state === "legacy" && (
-                <p style={{ fontSize: 13 }}>
-                  Until you authorize, background work keeps using the service account PCD Ops
-                  0.4 saved in its settings. Authorizing deletes that stored password.
-                </p>
-              )}
-              <AuthorizeExplainer project={project} />
-              {error && <p className="text-danger" style={{ fontSize: 13 }}>{error}</p>}
-              <button className="btn btn-primary" disabled={busy} onClick={authorize}>
-                {busy ? "Authorizing…" : "Authorize background access"}
-              </button>
-            </div>
-          </div>
+          <p style={{ fontSize: 13, color: "var(--gray-700)", margin: "0 0 1rem" }}>
+            {BACKGROUND_ACCESS_NOTE}
+          </p>
+          {error && <p className="text-danger" style={{ fontSize: 13 }}>{error}</p>}
+          <button className="btn btn-primary" disabled={busy} onClick={authorize}>
+            {busy ? "Completing install…" : "Complete install"}
+          </button>
         </>
       )}
     </AuthPage>

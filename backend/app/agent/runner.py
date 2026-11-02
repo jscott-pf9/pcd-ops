@@ -3,11 +3,13 @@ Agent runner — orchestrates collection across all domains and logs each run.
 
 Fast  (inventory, reclamation, capacity, snapshots, logs): every 15 min.
 Slow  (anomaly, capacity trends — 1 AI call each):         every 1 hour.
-Daily (right-sizing — 1 AI call per VM):                   every 24 hours.
+Daily (right-sizing — 1 AI call per VM):                   per its schedule in Settings
+                                                            (checked hourly).
 """
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 from app.services import db
@@ -33,6 +35,8 @@ def _ai_feature_due(cache_key: str, schedule: str, enabled: bool) -> bool:
 FAST_INTERVAL  = 15 * 60        # 15 minutes
 SLOW_INTERVAL  = 60 * 60        # 1 hour
 DAILY_INTERVAL = 24 * 60 * 60  # 24 hours
+JOB_CHECK_INTERVAL = 5 * 60    # scheduled jobs
+TICK = 60                      # how often the scheduler wakes up
 
 _is_running = False
 
@@ -168,7 +172,8 @@ async def scheduler_loop() -> None:
     Background loop started at app startup.
     Fast (inventory, reclamation, etc.) every 15 min.
     Slow (anomaly, capacity trends) every 1 hour.
-    Daily (right-sizing — N AI calls per VM) every 24 hours.
+    Daily (right-sizing — N AI calls per VM) per its schedule, checked hourly.
+    Scheduled jobs are checked every 5 minutes; retention cleanup runs daily.
     """
     logger.info(
         "Agent scheduler starting. Fast=%ds, Slow=%ds, Daily=%ds",
@@ -179,32 +184,23 @@ async def scheduler_loop() -> None:
     await run_fast()
     await run_daily()
 
-    slow_countdown    = SLOW_INTERVAL
-    daily_countdown   = DAILY_INTERVAL
-    job_check_interval = 5 * 60       # check jobs every 5 minutes
-    cleanup_interval   = 24 * 60 * 60 # run retention cleanup daily
-    job_countdown     = job_check_interval
-    cleanup_countdown = cleanup_interval
+    # Each task runs when its interval has passed since it last ran (monotonic clock).
+    tasks = [
+        (JOB_CHECK_INTERVAL, _run_due_jobs),
+        (FAST_INTERVAL,      run_fast),
+        (SLOW_INTERVAL,      run_slow),
+        (SLOW_INTERVAL,      run_daily),       # gated by ai_rightsizing_schedule
+        (DAILY_INTERVAL,     _run_retention_cleanup),
+    ]
+    start = time.monotonic()
+    last_run = [start] * len(tasks)
 
     while True:
-        await asyncio.sleep(FAST_INTERVAL)
-        await run_fast()
-        slow_countdown    -= FAST_INTERVAL
-        daily_countdown   -= FAST_INTERVAL
-        job_countdown     -= FAST_INTERVAL
-        cleanup_countdown -= FAST_INTERVAL
-        if slow_countdown <= 0:
-            await run_slow()
-            slow_countdown = SLOW_INTERVAL
-        if daily_countdown <= 0:
-            await run_daily()
-            daily_countdown = DAILY_INTERVAL
-        if job_countdown <= 0:
-            await _run_due_jobs()
-            job_countdown = job_check_interval
-        if cleanup_countdown <= 0:
-            await _run_retention_cleanup()
-            cleanup_countdown = cleanup_interval
+        await asyncio.sleep(TICK)
+        for i, (interval, task) in enumerate(tasks):
+            if time.monotonic() - last_run[i] >= interval:
+                last_run[i] = time.monotonic()
+                await task()
 
 
 async def _run_due_jobs() -> None:

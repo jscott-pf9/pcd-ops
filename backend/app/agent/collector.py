@@ -584,19 +584,21 @@ async def collect_capacity_trends() -> None:
         }
         for r in trends
     }
-    try:
-        analysis = await ai.analyze(
-            "You are analyzing OpenStack cluster capacity trends. "
-            "Based on the 30-day usage data below, identify: "
-            "(1) resources trending toward saturation, "
-            "(2) any concerning growth rates, "
-            "(3) estimated runway before intervention is needed, "
-            "(4) specific recommendations. Be concise and actionable.",
-            forecast_summary,
-        )
-    except Exception as e:
-        logger.warning("AI capacity analysis failed: %s", e)
-        analysis = None
+    analysis = None
+    from app.config import settings as _settings
+    if _settings.ai_capacity_enabled:
+        try:
+            analysis = await ai.analyze(
+                "You are analyzing OpenStack cluster capacity trends. "
+                f"Based on the {TREND_DAYS}-day usage data below, identify: "
+                "(1) resources trending toward saturation, "
+                "(2) any concerning growth rates, "
+                "(3) estimated runway before intervention is needed, "
+                "(4) specific recommendations. Be concise and actionable.",
+                forecast_summary,
+            )
+        except Exception as e:
+            logger.warning("AI capacity analysis failed: %s", e)
 
     db.cache_set("capacity:trends", {
         "window_days": TREND_DAYS,

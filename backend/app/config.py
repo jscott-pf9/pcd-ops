@@ -15,16 +15,21 @@ class Settings(BaseSettings):
     # PCD (Keystone URL, region, install project) is not a setting: it comes from
     # /etc/pcd-app/config.env, see app/appliance/connection.py.
 
-    # Grafana / Prometheus
-    prometheus_url: str = "http://localhost:9090"
+    # Grafana / Prometheus. Blank grafana_url: https://<PCD host>/grafana, from PCD_AUTH_URL.
+    # Blank prometheus_url: the Prometheus data source found through Grafana
+    # (services/prometheus.py).
+    prometheus_url: str = ""
     grafana_url: str = ""
     grafana_token: str = ""
 
-    # AI — variable names match .env (AI_BACKEND, AI_URL, AI_MODEL, AI_API_KEY)
+    # AI — variable names match .env (AI_BACKEND, AI_URL, AI_MODEL, AI_API_KEY).
+    # ai_backend "ollama" is Private AI: Ollama or any OpenAI-compatible server
+    # (services/ai/private.py).
     ai_backend: str = "ollama"
     ai_url: str = "http://localhost:11434"
     ai_model: str = "llama3.1:8b"
-    ai_api_key: str = ""
+    ai_api_key: str = ""            # Claude
+    ai_private_api_key: str = ""    # Private AI, if the server wants a bearer token
 
     # AI feature toggles (controls which background/interactive features call the AI)
     ai_rightsizing_enabled: bool = True
@@ -61,10 +66,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Apply any overrides saved via the Settings page (settings.json)
+# Apply any overrides saved via the Settings page (settings.json in the state dir). Everything
+# reads `settings` when it runs, so a saved change applies without a restart.
 # Import here to avoid circular imports at module level
 from app.services import settings_store  # noqa: E402
 
 for _k, _v in settings_store.load().items():
-    if hasattr(settings, _k) and (_v != "" or isinstance(_v, bool)):
+    if _k in Settings.model_fields and (_v != "" or isinstance(_v, bool)):
         setattr(settings, _k, _v)

@@ -3,7 +3,7 @@ import { type AppSettings, getSettings, saveSettings } from "../../api/settings"
 
 const EMPTY: AppSettings = {
   prometheus_url: "", grafana_url: "", grafana_token: "",
-  ai_backend: "ollama", ai_url: "", ai_model: "", ai_api_key: "",
+  ai_backend: "ollama", ai_url: "", ai_model: "", ai_api_key: "", ai_private_api_key: "",
   ai_rightsizing_enabled: true, ai_anomaly_enabled: true,
   ai_logs_enabled: true, ai_capacity_enabled: true,
   ai_rightsizing_schedule: "daily@02:00", ai_anomaly_schedule: "hourly",
@@ -13,13 +13,15 @@ const EMPTY: AppSettings = {
   smtp_from: "", alert_email_to: "", webhook_url: "",
 };
 
-export function useSettings() {
+/** One Settings tab's form. Save sends only `fields`, so tabs don't overwrite each other. */
+export function useSettings(fields: (keyof AppSettings)[]) {
   const [form, setForm] = useState<AppSettings>(EMPTY);
+  const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    getSettings().then(setForm).catch(() => {});
+    getSettings().then(s => { setForm(s); setLoaded(true); }).catch(() => {});
   }, []);
 
   function set(field: keyof AppSettings, value: string | boolean | number) {
@@ -32,7 +34,7 @@ export function useSettings() {
     setStatus("saving");
     setError("");
     try {
-      await saveSettings(form);
+      await saveSettings(Object.fromEntries(fields.map(f => [f, form[f]])));
       setStatus("saved");
     } catch (err) {
       setError(String(err));
@@ -40,5 +42,5 @@ export function useSettings() {
     }
   }
 
-  return { form, set, status, error, save };
+  return { form, set, loaded, status, error, save };
 }

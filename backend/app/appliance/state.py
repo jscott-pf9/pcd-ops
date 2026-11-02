@@ -1,9 +1,7 @@
 """Where the appliance keeps per-install state that must never be in the image.
 
-/var/lib/pcd-ops on images built from 0.5.0 (created by provisioning, owned by pcd-ops).
-Appliances upgraded in place from 0.4.x can't create it (the service user isn't root), so
-they fall back to backend/data/, next to the SQLite database. PCD_OPS_STATE_DIR overrides
-both (tests, local development).
+/var/lib/pcd-ops on the appliance (created by provisioning, owned by pcd-ops).
+PCD_OPS_STATE_DIR overrides it (tests, local development); without either, backend/data/.
 """
 from __future__ import annotations
 

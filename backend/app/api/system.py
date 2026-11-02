@@ -3,7 +3,6 @@ import os
 import subprocess
 from pathlib import Path
 
-import httpx
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -102,29 +101,26 @@ async def check_connections():
     elif bg["state"] == "failed":
         result["openstack"]["configured"] = True
         result["openstack"]["error"] = ("Background access stopped working — re-authorize it "
-                                        "under PCD & Metrics")
+                                        "in Settings › Connection")
     else:
         result["openstack"]["error"] = ("Not authorized — finish setup to authorize background "
                                         "access")
 
-    # ── Grafana ────────────────────────────────────────────────────────────────
-    if _settings.grafana_url and _settings.grafana_token:
+    # ── Grafana / Prometheus ───────────────────────────────────────────────────
+    from app.services import prometheus
+
+    if _settings.grafana_token or _settings.prometheus_url:
         result["grafana"]["configured"] = True
         try:
-            url = _settings.grafana_url.rstrip("/") + "/api/health"
-            async with httpx.AsyncClient(verify=False, timeout=10) as client:
-                resp = await client.get(
-                    url,
-                    headers={"Authorization": f"Bearer {_settings.grafana_token}"},
-                )
-            if resp.status_code == 200:
-                result["grafana"]["ok"] = True
-            else:
-                result["grafana"]["error"] = f"HTTP {resp.status_code}"
+            target = await prometheus.resolve()
+            await prometheus.prometheus_client.query("vector(1)")
+            result["grafana"]["ok"] = True
+            result["grafana"]["datasource"] = target.get("name") or target["url"]
         except Exception as exc:
             result["grafana"]["error"] = str(exc)[:300]
     else:
-        result["grafana"]["error"] = "Not configured — set Grafana URL and Token"
+        result["grafana"]["error"] = ("Not configured — add the Grafana token in "
+                                      "Settings › Connection")
 
     return result
 

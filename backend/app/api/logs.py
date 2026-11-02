@@ -142,7 +142,7 @@ async def nlp_query(body: NLPQuery, ai: AIProvider = Depends(get_ai_provider)):
     """NLP: answer a question using compressed log patterns + PCD inventory context."""
     from app.config import settings as _settings
     if not getattr(_settings, "ai_logs_enabled", True):
-        raise HTTPException(503, detail={"code": "ai_disabled", "message": "Log AI analysis is disabled in Settings → AI Backend."})
+        raise HTTPException(503, detail={"code": "ai_disabled", "message": "Log AI analysis is disabled in Settings → AI."})
 
     data, collected_at = cache_get("logs:recent")
     if not data:

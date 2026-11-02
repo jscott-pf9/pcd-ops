@@ -5,8 +5,7 @@
   dependency, or wrap the work in `acting_as(...)` so collectors and jobs started from a
   request pick it up through get_connection().
 - Background work (the scheduler's collectors and scheduled jobs) uses the application
-  credential an admin authorized in /setup. Until then, a 0.4.x install keeps using the
-  service account in settings.json; once setup completes that account is deleted.
+  credential an admin authorized in /setup.
 
 All features call get_connection(); never openstack.connect() elsewhere.
 """
@@ -31,7 +30,6 @@ _user_conn: ContextVar[openstack.connection.Connection | None] = ContextVar(
     "pcd_user_conn", default=None)
 
 _bg_conn: openstack.connection.Connection | None = None
-_bg_kind: str | None = None          # "app_credential" | "legacy"
 _lock = threading.Lock()
 
 
@@ -78,7 +76,7 @@ def get_connection() -> openstack.connection.Connection:
 # ── Background ───────────────────────────────────────────────────────────────
 
 def background_status() -> dict:
-    """What background work runs as: {"state": "authorized"|"failed"|"legacy"|"none", ...}."""
+    """What background work runs as: {"state": "authorized"|"failed"|"none", ...}."""
     record = app_credentials.load_record()
     if record:
         public = {k: record.get(k) for k in
@@ -86,8 +84,6 @@ def background_status() -> dict:
                    "failed_at", "error")}
         state = "failed" if record.get("failed_at") else "authorized"
         return {"state": state, "credential": public}
-    if pcd.legacy_credentials():
-        return {"state": "legacy", "credential": None}
     return {"state": "none", "credential": None}
 
 
@@ -97,38 +93,33 @@ def setup_complete() -> bool:
 
 
 def background_available() -> bool:
-    return background_status()["state"] in ("authorized", "legacy")
+    return background_status()["state"] == "authorized"
 
 
 def reset_connection() -> None:
     """Drop the cached background connection; the next get_connection() reconnects."""
-    global _bg_conn, _bg_kind
+    global _bg_conn
     with _lock:
         if _bg_conn is not None:
             try:
                 _bg_conn.close()
             except Exception:
                 pass
-        _bg_conn, _bg_kind = None, None
+        _bg_conn = None
 
 
 def background_connection() -> openstack.connection.Connection:
-    global _bg_conn, _bg_kind
+    global _bg_conn
     with _lock:
         record = app_credentials.load_record()
         if _bg_conn is None:
-            conn_info = pcd.load()
-            if record and not record.get("failed_at"):
-                _bg_conn = app_credentials.connection(conn_info.auth_url, record, conn_info.region)
-                _bg_kind = "app_credential"
-            elif record is None and (legacy := pcd.legacy_credentials()):
-                _bg_conn = _legacy_connection(legacy)
-                _bg_kind = "legacy"
-            else:
+            if not record or record.get("failed_at"):
                 raise BackgroundAccessError(
                     "Background access to PCD isn't authorized. An admin needs to authorize it "
-                    "in PCD Ops (Settings › PCD & Metrics).")
-        if _bg_kind == "app_credential" and record and _stale(record.get("last_used")):
+                    "in PCD Ops (Settings › Connection).")
+            conn_info = pcd.load()
+            _bg_conn = app_credentials.connection(conn_info.auth_url, record, conn_info.region)
+        if record and _stale(record.get("last_used")):
             record["last_used"] = int(time.time())
             app_credentials.save_record(record)
         return _bg_conn
@@ -136,25 +127,6 @@ def background_connection() -> openstack.connection.Connection:
 
 def _stale(ts: int | None) -> bool:
     return ts is None or time.time() - ts > 300
-
-
-def _legacy_connection(legacy: dict) -> openstack.connection.Connection:
-    conn = openstack.connect(
-        auth_url=legacy["os_auth_url"],
-        username=legacy["os_username"],
-        password=legacy["os_password"],
-        project_name=legacy.get("os_project_name", ""),
-        user_domain_name=legacy.get("os_user_domain_name") or "Default",
-        project_domain_name=legacy.get("os_project_domain_name") or "Default",
-        # Force public endpoints — PCD's catalog internal URLs are k8s-only.
-        interface="public",
-    )
-    # Passing region_name to openstack.connect() causes a validation error when no OS_* env
-    # vars are set (the SDK validates against the "envvars" cloud profile). Setting it on the
-    # CloudRegion config afterwards still routes catalog lookups to the right region.
-    if legacy.get("os_region_name"):
-        conn.config.config["region_name"] = legacy["os_region_name"]
-    return conn
 
 
 def is_auth_failure(exc: BaseException | None) -> bool:
@@ -184,7 +156,7 @@ def report_background_failure(exc: BaseException) -> bool:
     if is_interactive() or not is_auth_failure(exc):
         return False
     record = app_credentials.load_record()
-    if _bg_kind != "app_credential" or not record or record.get("failed_at"):
+    if not record or record.get("failed_at"):
         return False
     record["failed_at"] = int(time.time())
     record["error"] = str(exc)[:300]

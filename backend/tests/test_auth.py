@@ -1,5 +1,7 @@
 """Login, sessions and the request gate (APPLIANCE_STANDARD §7.1–7.3, §7.7)."""
+import re
 import time
+from pathlib import Path
 
 from app.appliance import keystone, web_auth
 
@@ -11,7 +13,8 @@ def test_health_is_open_and_reports_setup(client):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.5.0"
+    pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    assert body["version"] == re.search(r'^version = "(.+)"', pyproject, re.M).group(1)
     assert body["setup_required"] is True
 
 

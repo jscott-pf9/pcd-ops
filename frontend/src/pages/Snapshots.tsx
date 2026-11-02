@@ -87,7 +87,7 @@ interface PolicyFormProps {
 }
 
 function PolicyForm({ tenants, onCreated, onCancel }: PolicyFormProps) {
-  const [jobType, setJobType] = useState<"snapshot-create" | "snapshot-rotate">("snapshot-create");
+  const [jobType, setJobType] = useState<"snapshot-create" | "snapshot-rotate" | "snapshot-cleanup">("snapshot-create");
   const [name, setName] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [interval, setInterval] = useState("daily");
@@ -95,6 +95,7 @@ function PolicyForm({ tenants, onCreated, onCancel }: PolicyFormProps) {
   const [vmPattern, setVmPattern] = useState("");
   const [namePrefix, setNamePrefix] = useState("auto");
   const [retainCount, setRetainCount] = useState(7);
+  const [maxAgeDays, setMaxAgeDays] = useState(30);
   const [dryRun, setDryRun] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,11 +112,15 @@ function PolicyForm({ tenants, onCreated, onCancel }: PolicyFormProps) {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setError("Name is required"); return; }
-    const config: Record<string, any> = { tenant_id: tenantId, name_prefix: namePrefix, dry_run: dryRun };
+    const config: Record<string, any> = { tenant_id: tenantId, dry_run: dryRun };
     if (jobType === "snapshot-create") {
+      config.name_prefix = namePrefix;
       config.vm_name_pattern = vmPattern;
-    } else {
+    } else if (jobType === "snapshot-rotate") {
+      config.name_prefix = namePrefix;
       config.retain_count = retainCount;
+    } else {
+      config.max_age_days = maxAgeDays;
     }
     create.mutate({ name: name.trim(), type: jobType, schedule: buildSchedule(interval, time), config });
   }
@@ -135,6 +140,7 @@ function PolicyForm({ tenants, onCreated, onCancel }: PolicyFormProps) {
             <select className="form-select" value={jobType} onChange={e => setJobType(e.target.value as any)}>
               <option value="snapshot-create">Snapshot Create — create snapshots on schedule</option>
               <option value="snapshot-rotate">Snapshot Rotate — enforce retention per volume</option>
+              <option value="snapshot-cleanup">Snapshot Cleanup — delete snapshots older than N days</option>
             </select>
           </div>
           <div className="form-group">
@@ -161,11 +167,18 @@ function PolicyForm({ tenants, onCreated, onCancel }: PolicyFormProps) {
               )}
             </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Snapshot name prefix</label>
-            <input className="form-input" value={namePrefix} onChange={e => setNamePrefix(e.target.value)} placeholder="auto" />
-          </div>
-          {jobType === "snapshot-create" ? (
+          {jobType !== "snapshot-cleanup" && (
+            <div className="form-group">
+              <label className="form-label">Snapshot name prefix</label>
+              <input className="form-input" value={namePrefix} onChange={e => setNamePrefix(e.target.value)} placeholder="auto" />
+            </div>
+          )}
+          {jobType === "snapshot-cleanup" ? (
+            <div className="form-group">
+              <label className="form-label">Delete snapshots older than (days)</label>
+              <input className="form-input" type="number" min={1} value={maxAgeDays} onChange={e => setMaxAgeDays(Number(e.target.value))} />
+            </div>
+          ) : jobType === "snapshot-create" ? (
             <div className="form-group">
               <label className="form-label">VM name pattern <span className="text-muted">(regex, blank = all)</span></label>
               <input className="form-input" value={vmPattern} onChange={e => setVmPattern(e.target.value)} placeholder="e.g. prod-.*" />

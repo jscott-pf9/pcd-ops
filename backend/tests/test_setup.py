@@ -1,4 +1,4 @@
-"""First-run setup, background access and the 0.4.x migration (APPLIANCE_STANDARD §7.5–7.8)."""
+"""First-run setup and background access (APPLIANCE_STANDARD §7.5–7.8)."""
 import json
 import os
 import stat
@@ -7,14 +7,13 @@ import pytest
 
 from app.appliance import app_credentials, state
 from app.appliance import connection as pcd
-from app.services import settings_store
 from app.services import openstack as os_service
+from app.services import settings_store
 
 from .conftest import CSRF, make_token
 
-LEGACY = {"os_auth_url": "https://pcd.example.com/keystone/v3", "os_username": "svc",
-          "os_password": "hunter2", "os_project_name": "service", "os_region_name": "lab",
-          "grafana_url": "https://pcd.example.com/grafana/"}
+OLD_SERVICE_ACCOUNT = {"os_auth_url": "https://pcd.example.com/keystone/v3", "os_username": "svc",
+                       "os_password": "hunter2", "os_project_name": "service"}
 
 
 def test_authorize_mints_from_admin_token(logged_in, keystone_api):
@@ -83,47 +82,27 @@ def test_revoke_refused_by_keystone_keeps_record(logged_in, keystone_api):
     assert app_credentials.load_record() is not None
 
 
-# ── 0.4.x migration ──────────────────────────────────────────────────────────
+# ── No stored PCD account ───────────────────────────────────────────────────
 
-def test_legacy_service_account_used_until_setup(monkeypatch):
-    settings_store.save(LEGACY)
-    assert os_service.background_status()["state"] == "legacy"
-    assert os_service.background_available() and not os_service.setup_complete()
-    seen = {}
-
-    class FakeConn:
-        config = type("C", (), {"config": {}})()
-
-    def fake_connect(**kw):
-        seen.update(kw)
-        return FakeConn()
-
-    monkeypatch.setattr(os_service.openstack, "connect", fake_connect)
-    conn = os_service.get_connection()
-    assert seen["username"] == "svc" and seen["interface"] == "public"
-    assert conn.config.config["region_name"] == "lab"
+def test_stored_service_account_is_ignored():
+    """A settings.json with a PCD username and password (as PCD Ops 0.4 kept) grants nothing."""
+    settings_store.save(OLD_SERVICE_ACCOUNT)
+    assert os_service.background_status()["state"] == "none"
+    assert not os_service.background_available()
+    with pytest.raises(os_service.BackgroundAccessError):
+        os_service.get_connection()
 
 
-def test_setup_deletes_legacy_credentials(logged_in, keystone_api):
-    settings_store.save(LEGACY)
-    logged_in.post("/api/access/authorize", headers=CSRF)
-    saved = settings_store.load()
-    assert not [k for k in saved if k.startswith("os_")]
-    assert saved["grafana_url"] == LEGACY["grafana_url"]     # app settings are kept
-    assert os_service.background_status()["state"] == "authorized"
-
-
-def test_legacy_install_without_config_env(isolated, client, mock_login, keystone_api):
-    """A 0.4.x appliance (no config.env): log in with the project from settings.json, and the
-    non-secret connection details survive the credential cleanup."""
+def test_install_without_config_env(isolated, client, mock_login, keystone_api):
+    """No config.env: log in to the project named on the connection form; authorizing keeps
+    its ID."""
     (isolated / "config.env").unlink()
-    settings_store.save(LEGACY)
+    pcd.save(auth_url="https://pcd.example.com/keystone/v3", project_name="service", region="lab")
     r = client.post("/api/auth/login", json={"username": "alice", "password": "pw"}, headers=CSRF)
     assert r.status_code == 200
     assert mock_login.calls[0]["project_id"] is None
     assert mock_login.calls[0]["project_name"] == "service"
     client.post("/api/access/authorize", headers=CSRF)
-    assert not [k for k in settings_store.load() if k.startswith("os_")]
     conn = pcd.load()
     assert (conn.auth_url, conn.region, conn.project_id) == (
         "https://pcd.example.com/keystone/v3", "lab", "proj-123")
