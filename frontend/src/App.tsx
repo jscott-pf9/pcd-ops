@@ -6,19 +6,15 @@ import EventFooter from "./components/EventFooter";
 import {
   AlertTriangle,
   BarChart2,
-  BookOpen,
   Briefcase,
   Camera,
   ChevronDown,
-  Code2,
   FileText,
   type LucideIcon,
-  Layers,
   LogOut,
   MessageSquarePlus,
   Network,
   RefreshCw,
-  Rocket,
   Server,
   Settings as SettingsIcon,
   Sliders,
@@ -33,9 +29,6 @@ import Logs from "./pages/Logs";
 import Reclamation from "./pages/Reclamation";
 import RightSizing from "./pages/RightSizing";
 import Snapshots from "./pages/Snapshots";
-import Generate from "./pages/Generate";
-import AppCatalog from "./pages/AppCatalog";
-import Deployments from "./pages/Deployments";
 import Jobs from "./pages/Jobs";
 import Topology from "./pages/Topology";
 import SettingsAlerts from "./pages/settings/SettingsAlerts";
@@ -89,14 +82,6 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/anomaly", label: "Anomaly", icon: AlertTriangle },
       { path: "/logs",    label: "Logs",    icon: FileText      },
-    ],
-  },
-  {
-    id: "tools", label: "Orchestration", icon: Code2,
-    items: [
-      { path: "/generate",     label: "App Builder",     icon: Layers   },
-      { path: "/catalog",      label: "App Catalog",     icon: BookOpen },
-      { path: "/deployments",  label: "App Deployments", icon: Rocket   },
     ],
   },
   {
@@ -315,9 +300,10 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
           <Route path="/jobs"              element={<Jobs />}            />
           <Route path="/anomaly"           element={<Anomaly />}         />
           <Route path="/logs"              element={<Logs />}            />
-          <Route path="/generate"          element={<Generate />}        />
-          <Route path="/catalog"           element={<AppCatalog />}      />
-          <Route path="/deployments"       element={<Deployments />}     />
+          {/* App Builder moved to PCD App Builder; its export is under Software */}
+          <Route path="/generate"          element={<Navigate to="/settings/updates" replace />} />
+          <Route path="/catalog"           element={<Navigate to="/settings/updates" replace />} />
+          <Route path="/deployments"       element={<Navigate to="/settings/updates" replace />} />
           <Route path="/feedback"              element={<Feedback />}            />
           <Route path="/settings"            element={<Navigate to="/settings/status" replace />} />
           <Route path="/settings/status"     element={<SettingsStatus />}       />

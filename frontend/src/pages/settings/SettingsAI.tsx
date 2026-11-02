@@ -153,7 +153,6 @@ export default function SettingsAI() {
         <Fieldset title="AI Analysis Features">
           <p style={{ fontSize: 13, color: "var(--gray-500)", marginBottom: 12 }}>
             Control which features call the AI model and how often background analysis runs.
-            App Builder generation is always available on-demand.
           </p>
           {AI_FEATURES.map(f => {
             const isEnabled = form[f.enableKey] !== false;

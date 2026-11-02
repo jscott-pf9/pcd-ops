@@ -173,7 +173,7 @@ An appliance that didn't come from the catalog (Terraform, manual image upload) 
 
 | Work | Runs as |
 |---|---|
-| Anything a person does: Collect Now, Run job now, deleting a server/volume/floating IP/snapshot, App Deployments (Terraform) | **That person's** PCD token, so PCD's own RBAC and audit apply |
+| Anything a person does: Collect Now, Run job now, deleting a server/volume/floating IP/snapshot | **That person's** PCD token, so PCD's own RBAC and audit apply |
 | Unattended: the 15-minute/hourly/daily collectors and scheduled jobs (including capacity reports) | The **background application credential** |
 
 **Background access** is a Keystone [application credential](https://docs.openstack.org/keystone/latest/user/application_credentials.html) created from the authorizing admin's token: scoped to the install project, role `admin` only, `unrestricted: false`, named `pcd-ops-<instance>-<yyyymmdd-hhmm>`. Its secret is stored Fernet-encrypted in `/var/lib/pcd-ops/` (key and record both mode 0600, created at first use, never in the image).
