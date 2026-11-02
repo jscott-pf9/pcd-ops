@@ -136,8 +136,12 @@ if [ -e "$APP_DIR/creds" ] || [ -n "$(ls -A /var/lib/pcd-ops)" ]; then
   echo "ERROR: credentials or per-install state found in the image" >&2
   exit 1
 fi
-if grep -rIlE '^[[:space:]]*(export[[:space:]]+)?OS_PASSWORD=[^[:space:]]' "$APP_DIR" \
-     --exclude-dir=.git --exclude-dir=.venv --exclude-dir=node_modules; then
+# BusyBox grep has no --exclude-dir, so prune with find, and fail on any output rather than
+# on grep's exit status (2 on an unknown option would read as "no match").
+found=$(find "$APP_DIR" \( -name .git -o -name .venv -o -name node_modules \) -prune -o -type f \
+  -exec grep -lE '^[[:space:]]*(export[[:space:]]+)?OS_PASSWORD=[^[:space:]]' {} + 2>/dev/null)
+if [ -n "$found" ]; then
+  echo "$found"
   echo "ERROR: the files above contain an OpenStack password" >&2
   exit 1
 fi
