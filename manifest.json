@@ -2,7 +2,7 @@
   "schema_version": "0.2",
   "id": "pcd-ops",
   "name": "PCD Ops",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "Platform9",
   "repo": "https://github.com/jscott-pf9/pcd-ops",
   "tagline": "Reclamation, right-sizing and capacity planning.",
@@ -17,14 +17,14 @@
   "includes": [
     "Idle VMs, orphaned volumes, stale snapshots",
     "Right-sizing and capacity headroom",
-    "AI triage, cloud-hosted or on-premises Ollama"
+    "AI triage with Claude or your own private AI"
   ],
   "image": {
     "format": "qcow2",
     "source": {
       "type": "github_release",
-      "tag": "v0.5.0",
-      "asset": "pcd-ops-0.5.0.qcow2",
+      "tag": "v0.6.0",
+      "asset": "pcd-ops-0.6.0.qcow2",
       "checksum": "sha256:8fa35fb12d32f41a1bf0611de56d210c8929b1a23405100ccb368297bf7c9d6b"
     },
     "min_disk_gb": 20,
@@ -67,7 +67,7 @@
       "options": [
         {
           "value": "ollama",
-          "label": "Ollama or OpenAI-compatible (on-premises)"
+          "label": "Private AI (Ollama or OpenAI-compatible, on-premises)"
         },
         {
           "value": "claude",
@@ -84,7 +84,7 @@
       "default": "http://localhost:11434",
       "env": "AI_URL",
       "placeholder": "http://ollama.example.com:11434",
-      "help": "Ollama base URL or OpenAI-compatible endpoint, reachable from the appliance.",
+      "help": "Ollama base URL or OpenAI-compatible endpoint, reachable from the appliance. Settings lists its models after install.",
       "show_if": {
         "field": "ai_backend",
         "equals": "ollama"
@@ -120,7 +120,7 @@
       "icon": "chart"
     }
   },
-  "post_deploy_notes": "Open the URL and log in with your PCD account; you need the admin role in the project PCD Ops was installed into. The first admin to log in authorizes background access (one click, no passwords), then enters Grafana details and, if used, the Claude API key under Settings. AI settings from the install form are defaults that Settings can change. The appliance serves plain HTTP and has no sshd; manage it from the VM console menu.",
+  "post_deploy_notes": "Open the URL and log in with your PCD account; you need the admin role in the project PCD Ops was installed into. The first admin to log in clicks Complete install (one click, no passwords), then pastes a Grafana service account token and, if used, the Claude API key under Settings. AI settings from the install form are defaults that Settings can change. The appliance serves plain HTTP and has no sshd; manage it from the VM console menu.",
   "todo": [
     "Move repo to github.com/platform9."
   ]

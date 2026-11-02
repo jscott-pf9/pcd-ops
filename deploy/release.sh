@@ -10,7 +10,7 @@
 #   6. Open a PR adding the manifest to the extension index (jscott-pf9/pcd-extensions)
 #
 # Usage:
-#   git tag v0.5.0 && git push origin main v0.5.0
+#   git tag v0.6.0 && git push origin main v0.6.0
 #   ./deploy/release.sh --preflight             # steps 1-3 only; publishes nothing
 #   ./deploy/release.sh [--skip-build] [notes.md]
 #

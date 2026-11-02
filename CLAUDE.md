@@ -8,7 +8,7 @@ PCD Ops is an operations dashboard for Platform9 Private Cloud Director (PCD). I
 ## Stack
 - **Frontend**: React + TypeScript (Vite), TanStack Query, Recharts, shadcn/ui
 - **Backend**: Python FastAPI + openstacksdk + prometheus-api-client
-- **AI**: Pluggable provider abstraction — Claude (Anthropic), Ollama, or other backends
+- **AI**: Pluggable provider abstraction — Claude (Anthropic) or Private AI (Ollama or any OpenAI-compatible server)
 - **Data Sources**: OpenStack APIs (full suite via openstacksdk) + Prometheus metrics
 
 ## Development Commands
@@ -53,47 +53,48 @@ PCD Ops follows `../APPLIANCE_STANDARD.md` (§5 config.env, §7 authentication).
 | `PCD_PROJECT_ID`, `PCD_PROJECT_NAME` | The install project: login is scoped to it (admin role required) and the background credential lives in it |
 | `PCD_INSTANCE_NAME`, `PCD_APP_ID`, `PCD_APP_VERSION` | Instance and app identity |
 
-Installs without config.env get the connection from first-run setup (saved in `connection.json` in the state dir), or from a 0.4.x `settings.json` until setup completes.
+Installs without config.env get the connection from first-run setup (saved in `connection.json` in the state dir).
 
-**App settings** — env vars (catalog values in config.env are initial values; anything saved on the Settings page, in `settings.json`, wins). An empty value means unset:
+**App settings** — env vars (catalog values in config.env are initial values; anything saved on the Settings page, in `settings.json` in the state dir, wins and applies without a restart). An empty value means unset:
 
 | Variable | Description |
 |---|---|
-| `GRAFANA_URL` | Grafana base URL |
+| `GRAFANA_URL` | Grafana base URL. Empty: `https://<host of PCD_AUTH_URL>/grafana` |
 | `GRAFANA_TOKEN` | Grafana service account token (`glsa_...`) |
-| `PROMETHEUS_URL` | Set to `<GRAFANA_URL>/api/datasources/proxy/1` — Prometheus (VictoriaMetrics) is only reachable via Grafana proxy in PCD |
-| `AI_BACKEND` | `ollama` (default) or `claude` |
-| `AI_URL` | Ollama base URL or OpenAI-compatible endpoint |
+| `PROMETHEUS_URL` | Empty (normal): the Prometheus data source is found through Grafana's `/api/frontend/settings`. Set only to force one: `<GRAFANA_URL>/api/datasources/proxy/<id>` |
+| `AI_BACKEND` | `ollama` (default; shown as **Private AI**) or `claude` |
+| `AI_URL` | Private AI: Ollama base URL or OpenAI-compatible endpoint (with or without `/v1`) |
 | `AI_MODEL` | Model name (e.g. `llama3.1:8b`) |
 | `AI_API_KEY` | Required when `AI_BACKEND=claude` (Settings page only; never in config.env) |
-| `PCD_OPS_STATE_DIR` | Per-install secrets: Fernet key + encrypted application credential. Default `/var/lib/pcd-ops`, else `backend/data` (0.4.x upgrades) |
+| `AI_PRIVATE_API_KEY` | Optional bearer token for Private AI (Settings page only) |
+| `PCD_OPS_STATE_DIR` | Per-install state: Fernet key, encrypted application credential, `settings.json`, `connection.json`. Default `/var/lib/pcd-ops`, else `backend/data` (local development) |
 
 ## Authentication and PCD access
 - **Login** (`api/auth.py`): PCD username/password/domain against `PCD_AUTH_URL`, scoped to the install project, `admin` role required. Server-side sessions in memory (`appliance/web_auth.py`): 8 h idle, 12 h max; HttpOnly SameSite=Lax cookie; 5 failed logins/min per IP.
 - **Gate** (`appliance/web_auth.py`): every `/api/` route needs a session except `/api/health`, `/api/auth/*` and `/api/access/connection` (only before a Keystone URL is known). Until setup is done, the rest return 409 `{"setup_required": true}`. Writes need the `X-Requested-With` header (`CSRF_HEADERS` in `frontend/src/api/client.ts`). The SPA renders `/login` and `/setup` (nginx proxies only `/api/`).
 - **Which identity a PCD call uses** (`services/openstack.py`):
   - Anything a person triggers runs with **their token**: take `Depends(user_connection)`, or wrap work started from a request in `with acting_as(conn):` so collectors/jobs it spawns pick it up via `get_connection()`.
-  - Unattended work (scheduler collectors, scheduled jobs) uses the **background application credential** minted at `/setup` (`api/access.py`, `appliance/app_credentials.py`). Before setup, a 0.4.x `settings.json` service account is used; it's deleted when setup completes.
+  - Unattended work (scheduler collectors, scheduled jobs) uses the **background application credential** minted at `/setup` (`api/access.py`, `appliance/app_credentials.py`).
   - Call `report_background_failure(exc)` on errors from background work: Keystone rejecting the credential (401, or 404 from `/auth/tokens` when it was deleted) marks it failed → re-authorize banner + `setup_required` in `/api/health`.
 - **Console TUI** "Reset setup" (`deploy/scripts/reset-setup.sh`) forgets the credential and logs everyone out.
 
 ### Prometheus / Grafana note
-In PCD, Prometheus is actually VictoriaMetrics (`victoria-metrics-cluster-vmselect:8481`) running inside the cluster — not directly reachable. All metric queries must go through the Grafana datasource proxy. The `PrometheusClient` in `services/prometheus.py` automatically adds the `Authorization: Bearer <GRAFANA_TOKEN>` header.
+In PCD, Prometheus is actually VictoriaMetrics (`victoria-metrics-cluster-vmselect:8481`) running inside the cluster — not directly reachable. All metric queries must go through the Grafana datasource proxy. The `PrometheusClient` in `services/prometheus.py` automatically adds the `Authorization: Bearer <GRAFANA_TOKEN>` header, and resolves the data source on each query from the current settings.
 
 ## Architecture
 
 ### Backend (`backend/app/`)
 - `main.py` — FastAPI app factory, mounts all routers
-- `config.py` — App settings via Pydantic BaseSettings (env, then `settings.json` overrides)
+- `config.py` — App settings via Pydantic BaseSettings (env, then `settings.json` overrides). Read `settings.<field>` when the work runs, never at import, so saved changes apply at once
 - `dependencies.py` — FastAPI dependency injection: OpenStack connection, Prometheus client, AI provider
 - `api/` — One router per feature domain (see table below)
 - `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir)
 - `services/openstack.py` — Wraps `openstacksdk`; all features import from here, never instantiate `openstack.connect()` elsewhere. `get_connection()` returns the user's connection inside `acting_as()`, else the background one
-- `services/prometheus.py` — Prometheus HTTP query client
-- `services/settings_store.py` — Persists runtime settings overrides to `settings.json`
-- `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str`
+- `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
+- `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
+- `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
 - `services/ai/claude.py` — Anthropic Claude implementation
-- `services/ai/ollama.py` — Ollama HTTP implementation
+- `services/ai/private.py` — Private AI: Ollama's API, or the OpenAI-compatible API for other servers
 - `models/` — Pydantic models shared between API layer and services
 
 ### Frontend (`frontend/src/`)
@@ -119,7 +120,7 @@ Each feature has a backend router and a frontend page:
 | Log Analysis | `api/logs.py` | `pages/Logs.tsx` |
 | Login | `api/auth.py` | `pages/Login.tsx` |
 | Setup / background access | `api/access.py` | `pages/Setup.tsx`, `components/PcdAccess.tsx` |
-| Settings | `api/settings.py` | `pages/settings/*.tsx` |
+| Settings | `api/settings.py` | `pages/settings/Settings.tsx` (one page, tabs in `?tab=`), `pages/settings/*.tsx` |
 | System (version/update) | `api/system.py` | `pages/settings/SettingsUpdates.tsx` |
 
 ### Available Prometheus Metrics (openstack-exporter)
@@ -136,7 +137,7 @@ Key metric families confirmed live in this environment:
 | Watcher | `openstack_heat_stack_status_counter` |
 
 ### AI Provider Pattern
-`services/ai/base.py` defines the `AIProvider` ABC. Implementations live in `services/ai/`. The active provider is resolved at startup from the `AI_BACKEND` env var and injected via `dependencies.py`. When adding a new provider: subclass `AIProvider`, register it in `dependencies.py`.
+`services/ai/base.py` defines the `AIProvider` ABC. Implementations live in `services/ai/`. `get_ai_provider()` in `dependencies.py` builds the provider from the current settings on every call (no caching, so a saved change applies at once). Claude uses `ai_model` when it's a Claude model, else `claude-opus-5-5`. When adding a new provider: subclass `AIProvider`, register it in `make_ai_provider()`.
 
 ### Deployment (`deploy/`)
 Production runs as a dedicated Alpine Linux appliance VM. The image is a qcow2 built with Packer, uploaded to PCD via `pcdctl`, and deployed via Terraform or the PCD UI.

@@ -1,6 +1,6 @@
 # PCD Ops — Roadmap
 
-> Last updated: 2026-10-29 · Current release: 0.5.0 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
+> Last updated: 2026-11-02 · Current release: 0.6.0 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
 
 **Legend:** ✅ done · 🧪 built, needs lab/field validation · 🔄 partly done · ⬜ not started
 
@@ -10,8 +10,8 @@
 | 2 | Jobs and the event log | ✅ Done |
 | 3 | Appliance | ✅ Done |
 | 4 | Extension catalog and PCD login | ✅ Done |
-| 5 | **Next:** correctness, install and settings experience, App Builder moves out | ⬜ Next |
-| 6 | Host and VM metrics | ⬜ |
+| 5 | Correctness, install and settings experience, App Builder moves out (0.6.0) | 🧪 |
+| 6 | **Next:** host and VM metrics | ⬜ Next |
 | 7 | Capacity: CPU and memory overcommit, idle VMs, right-sizing | ⬜ |
 | 8 | Hypervisor lifecycle: OS updates, maintenance mode, live migration, rolling upgrades | 🔄 |
 | 9 | Anomaly, drift and alerting | 🔄 |
@@ -19,9 +19,9 @@
 | 11 | Log analysis | 🔄 |
 | 12 | Hardening for 1.0 | 🔄 |
 
-**Features first, then hardening.** Phase 5 goes first: several settings and jobs that later phases build on don't work today. Phases 6–11 are in pickup order, not strict dependencies. Phase 6 feeds 7 and 8. Phase 8 also needs the SSH settings fix (Phase 5) and pinned host keys (Phase 11).
+**Features first, then hardening.** Phase 5 fixed the settings and jobs that later phases build on. Phases 6–11 are in pickup order, not strict dependencies. Phase 6 feeds 7 and 8. Phase 8 also needs the SSH settings fix (Phase 5) and pinned host keys (Phase 11).
 
-**App building is leaving this app.** App Builder, App Catalog and App Deployments (the Orchestration nav section) move to a new appliance, **pcd-app-builder**. PCD Ops observes and maintains the cloud; building and deploying applications on it belongs to the new app.
+**App building has left this app.** App Builder, App Catalog and App Deployments (the Orchestration nav section) moved to a new appliance, **pcd-app-builder**. PCD Ops observes and maintains the cloud; building and deploying applications on it belongs to the new app.
 
 ---
 
@@ -49,7 +49,7 @@ FastAPI + React app. A background agent fills a SQLite cache from openstacksdk (
 - ✅ Six job types: `snapshot-create`, `snapshot-rotate`, `snapshot-cleanup`, `resource-reclamation`, `capacity-report`, `rightsizing-resize`. Each has a schedule, dry-run and run history.
 - ✅ Event log and the event footer (0.2.0)
 - ✅ System Status page: connection tests, agent controls, Collect Now (0.2.0)
-- ✅ App Builder, App Catalog and App Deployments (Terraform) (0.2.0), seeded with sample roles and security-group templates (0.4.0). **Moving to pcd-app-builder in Phase 5.**
+- ✅ App Builder, App Catalog and App Deployments (Terraform) (0.2.0), seeded with sample roles and security-group templates (0.4.0). **Moved to pcd-app-builder in 0.6.0.**
 
 ## Phase 3 — Appliance ✅
 
@@ -68,48 +68,32 @@ FastAPI + React app. A background agent fills a SQLite cache from openstacksdk (
 - ✅ Console **Reset setup** (0.5.0)
 - ✅ `deploy/release.sh`: build, UEFI and BIOS boot tests, manifest validation, GitHub release, anonymous download check, PR to the extension index (0.5.0)
 
-## Phase 5 — Correctness, install and settings experience, App Builder moves out ⬜
+## Phase 5 — Correctness, install and settings experience, App Builder moves out 🧪 (0.6.0)
 
-**Things that look done but don't work**
-- ⬜ **Settings from the Alerts, PCD & Metrics and Software pages are never saved.**
-  - `SettingsPayload` (`backend/app/api/settings.py`) has no SMTP, webhook, `hypervisor_ssh_*` or `*_retention_days` fields, so the save drops them silently. Today they can only be set in `.env`.
-  - This blocks email and webhook alerts, SSH-based logs and patch counts, and retention.
-- ⬜ Changing the AI backend or Prometheus URL needs a restart: `get_ai_provider` is `@lru_cache`d (`dependencies.py`) and the Prometheus client is created at import.
-- ⬜ `DELETE /reports/purge` is caught by `DELETE /reports/{report_id}`, declared first (`api/reports.py`), so the Settings purge button does nothing.
-- ⬜ Jobs are checked every 15 minutes, not 5: the countdown in `agent/runner.py` is decremented by `FAST_INTERVAL`.
-- ⬜ The capacity-report job emails `alert_email_to`, not the job's `email_to`, but records `email_to` as the recipient.
-- ⬜ The Claude model is hardcoded to `claude-sonnet-4-6` (`services/ai/claude.py`); the Model setting is ignored.
-- ⬜ "OpenAI-compatible" is offered on the AI Backend page but falls through to the Ollama client (`/api/generate`). Implement it or remove it.
-- ⬜ Capacity: the AI prompt says 30 days but gets 7; the trend analysis ignores `ai_capacity_enabled`.
-- ⬜ Snapshots:
-  - `POST /snapshots/` calls Nova's create-image action, so the result lands in Glance, not in the Cinder list.
-  - The policy form doesn't offer the age-based cleanup type.
-- ⬜ `rightsizing-resize` counts a failed VM as skipped twice (`agent/jobs.py`).
+Built and covered by tests; needs a pass against a lab PCD (Grafana lookup, Private AI, Claude).
+
+**Things that looked done but didn't work**
+- ✅ Settings from the Alerts, Connection (SSH) and Software (retention) tabs are saved. `PUT /api/settings` takes any subset of the fields, so each tab saves only its own (`backend/app/api/settings.py`).
+- ✅ Changing the AI backend or Prometheus/Grafana settings applies at once: `get_ai_provider()` is built per call and the Prometheus client reads the settings on each query. `settings.json` moved to the state dir (mode 0600).
+- ✅ `DELETE /reports/purge` is declared before `DELETE /reports/{report_id}`.
+- ✅ The scheduler wakes every minute: jobs are checked every 5 minutes, and right-sizing hourly against its schedule (`agent/runner.py`).
+- ✅ The capacity-report job emails the job's `email_to` (comma-separated), and records a recipient only when the email went out.
+- ✅ Claude uses the Model setting when it's a Claude model, else `claude-opus-5-5`, with server-side refusal fallbacks.
+- ✅ "OpenAI-compatible" is part of **Private AI**: Ollama's own API when the server is Ollama, the OpenAI-compatible API otherwise.
+- ✅ Capacity: the AI prompt states the real window (7 days); the trend analysis respects `ai_capacity_enabled`.
+- ✅ Snapshots: `POST /snapshots/` creates Cinder snapshots of the server's attached volumes; the policy form offers age-based cleanup.
+- ✅ `rightsizing-resize` counts a failed VM once.
 
 **Install and settings experience**
-- ⬜ **First-run setup screen** (`pages/Setup.tsx`, `components/PcdAccess.tsx`):
-  - The background-access explainer shrinks to one line.
-  - The 0.4.x service-account note goes.
-  - The heading becomes "Finish installing PCD Ops" and the button **Complete install**. Same wording in every appliance (APPLIANCE_STANDARD §7.7).
-- ⬜ **Settings is one page with underline tabs**, as in NetDirector, instead of five sidebar sub-pages. The selected tab is in the URL. This is now a rule in ARCHITECTURE_GUIDE.
-- ⬜ **Grafana URL derived from the PCD URL:**
-  - `https://<host>/grafana` comes from the host in `PCD_AUTH_URL`, pre-filled and editable.
-  - The Prometheus datasource is looked up through Grafana's `/api/datasources` instead of assuming `/api/datasources/proxy/1`.
-  - Only the token is typed.
-- ⬜ **Inline help** beside each URL and token field: where to find it in PCD and Grafana, how to create the `glsa_` service-account token and with which role, and what a valid value looks like.
-- ⬜ **AI Backend tab:**
-  - "Ollama (local)" becomes **Private AI**.
-  - The Model field becomes a dropdown of the models the endpoint serves (`/api/tags`, or `/v1/models` for OpenAI-compatible), with free text as a fallback.
-  - **Test connection** button.
+- ✅ **First-run setup screen:** "Finish installing PCD Ops", one line on background access, and a **Complete install** button (APPLIANCE_STANDARD §7.7). The 0.4.x service-account path is gone, since no 0.4.x install needs it.
+- ✅ **Settings is one page with underline tabs** (Status, Connection, AI, Alerts, Software) and a single sidebar entry; the tab is in the URL (`?tab=`), and old `/settings/<page>` links redirect.
+- 🧪 **Grafana URL derived from the PCD URL** (`https://<host of PCD_AUTH_URL>/grafana`), editable. The Prometheus data source is found through Grafana's `/api/frontend/settings`, so only the token is typed. **Test connection** runs a query through it.
+- ✅ **Inline help** under each URL and token field: where to find it, how to create the `glsa_` token (Viewer role), what a valid value looks like.
+- 🧪 **AI tab:** **Private AI** or **Claude**; the Model field is a dropdown of the models the endpoint serves, with "Other…" for a typed name; **Test connection** lists the models and asks the chosen one for a reply.
 
 **App Builder moves to pcd-app-builder**
-- ⬜ pcd-app-builder ships to the extension catalog. It carries App Builder, App Catalog and App Deployments, with these fixes:
-  - Terraform bundled in the image. Today the runner calls `/snap/bin/terraform`, which the appliance doesn't have.
-  - One status name for runs. Today runs are set to `applying` while the guard and UI look for `deploying`, so a second apply isn't blocked.
-  - Stop and Status scoped to the deployment's own project. Today they match VM names across all projects.
-  - Plan → review → apply the saved plan, instead of `-auto-approve`.
-- ⬜ **Transitional release:** an **Export** banner on the three pages. `GET /api/orchestration/export` returns the user-made saved configs and the deployments, including Terraform state, for pcd-app-builder to import.
-- ⬜ **The release after:** remove `api/generate.py`, `api/deployments.py`, the three pages and the Orchestration nav, the deployment rows in the event feed, and the seeded roles and templates. Existing rows are left in the database.
+- ✅ Removed from PCD Ops: `api/generate.py`, `api/deployments.py`, the three pages and their nav, the deployment rows in the event feed, the seeded roles and templates. No export step: no installed appliance used them.
+- 🧪 pcd-app-builder is a separate repo with its own roadmap; it ships to the extension catalog on its own schedule.
 
 ## Phase 6 — Host and VM metrics ⬜
 
@@ -201,7 +185,7 @@ Here:
 
 ## Phase 9 — Anomaly, drift and alerting 🔄
 
-- 🔄 **Alerts:** email and a generic webhook exist. They become usable once Phase 5 makes their settings save.
+- 🔄 **Alerts:** email and a generic webhook exist; their settings save since 0.6.0.
 - ⬜ **Statistical detection first:** a baseline per VM and host (z-score or seasonal) finds anomalies, and the AI explains them. Today each VM's 24-hour peaks go to the AI, and findings are pulled from its free-text answer with a regex.
 - ⬜ **Config drift:** snapshot flavors, security groups, quotas, aggregates and host config, then diff. Only a docstring today.
 - ⬜ Slack, Microsoft Teams and PagerDuty.
@@ -218,6 +202,7 @@ Here:
 
 - ✅ SSH tail of hypervisor logs; natural-language queries (Phase 1)
 - ⬜ **Pin SSH host keys.** Today they're accepted automatically; Phase 8 needs this before it touches hosts.
+- ⬜ **Hypervisor SSH key from the web UI:** generate a key pair on the appliance and show the public key to install on hosts. Today the key file has to be put on the appliance from the console's emergency shell, or a password used.
 - ⬜ Time-range queries and kept history. Today there's one snapshot of the last 100–300 lines per file every 15 minutes.
 - ⬜ Control-plane logs, from wherever PCD exposes them.
 
@@ -247,7 +232,6 @@ Here:
 - Topology: link VMs to networks by their real ports (today by project); lift the 8-network limit when no tenant filter is set
 - Layered topology (i.e. Region views, availability zone views, clusters).  Drill down.  Maybe layered on top of geographic views.
 - Keypairs view (collected, not shown)
-- Generic Prometheus check in Test Connections (today it covers OpenStack and Grafana)
 - Integrate Grafana dashboards into the application?
 
 ## Decisions and principles

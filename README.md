@@ -156,16 +156,19 @@ Every GitHub release attaches three assets in the PCD App Catalog's format; the 
 Open the appliance's IP in a browser:
 
 1. **Log in with your PCD account.** Username, password and domain (usually `Default`). You need the `admin` role in the install project; anyone else is refused.
-2. **Finish setting up PCD Ops.** The first admin to log in sees the Keystone URL, region and project (read-only) and clicks **Authorize background access**. Until then every page leads here.
-3. Go to **Settings → PCD & Metrics** and enter the Grafana details; go to **Settings → AI Backend** for the Claude API key if you use Claude.
-4. On **Settings → System Status**, click **Test Connections**, then **Collect Now**.
+2. **Finish installing PCD Ops.** The first admin to log in sees the Keystone URL, region and project (read-only) and clicks **Complete install**, which creates the background credential (below). Until then every page leads here.
+3. **Settings → Connection:** paste a Grafana service account token and click **Test connection**. The page says where to create the token.
+4. **Settings → AI:** pick **Private AI** (your Ollama or OpenAI-compatible server) or **Claude** (Anthropic API key), choose a model from the list, and click **Test connection**.
+5. **Settings → Status:** click **Test Connections**, then **Collect Now**.
+
+Settings saved on the page apply at once; no restart. They're kept in `/var/lib/pcd-ops/settings.json` (mode 0600).
 
 An appliance that didn't come from the catalog (Terraform, manual image upload) has no `config.env`, so its first page asks for the Keystone URL, project and region once, before anyone logs in.
 
-**Grafana / Prometheus:** In PCD, Prometheus (VictoriaMetrics) is only reachable via the Grafana datasource proxy:
-- `GRAFANA_URL` → `https://your-pcd-host/grafana/`
-- `GRAFANA_TOKEN` → a Grafana service account token (`glsa_...`)
-- `PROMETHEUS_URL` → `https://your-pcd-host/grafana/api/datasources/proxy/1`
+**Grafana / Prometheus:** in PCD, Prometheus (VictoriaMetrics) is reachable only through Grafana's data source proxy. PCD Ops needs just the token:
+- **Grafana URL:** `https://<host of PCD_AUTH_URL>/grafana` unless you enter another.
+- **Token:** a Grafana service account token (`glsa_…`) with the **Viewer** role. Create it in Grafana under Administration → Users and access → Service accounts.
+- **Prometheus:** PCD Ops finds Grafana's Prometheus data source with that token. Set a Prometheus URL (`<Grafana URL>/api/datasources/proxy/<id>`) only to use a different data source.
 
 ---
 
@@ -178,15 +181,9 @@ An appliance that didn't come from the catalog (Terraform, manual image upload) 
 
 **Background access** is a Keystone [application credential](https://docs.openstack.org/keystone/latest/user/application_credentials.html) created from the authorizing admin's token: scoped to the install project, role `admin` only, `unrestricted: false`, named `pcd-ops-<instance>-<yyyymmdd-hhmm>`. Its secret is stored Fernet-encrypted in `/var/lib/pcd-ops/` (key and record both mode 0600, created at first use, never in the image).
 
-- **Settings → PCD & Metrics → Background access** shows its owner, project, created and last-used times, with **Re-authorize** (create a new one from your token, switch to it, delete the old one) and **Revoke** (delete it in PCD, then forget it).
+- **Settings → Connection → Background access** shows its owner, project, created and last-used times, with **Re-authorize** (create a new one from your token, switch to it, delete the old one) and **Revoke** (delete it in PCD, then forget it).
 - It belongs to the admin who created it. If that account is deleted or loses the admin role, PCD refuses it: collection stops, `/api/health` reports `setup_required: true`, and every page shows a **Re-authorize** banner.
 - **Reset setup** in the VM console (Advanced) forgets it locally and logs everyone out; delete the credential in PCD as its owner.
-
-### Upgrading from 0.4.x
-
-0.4.x kept a PCD service account (username and password) in `settings.json`. After upgrading:
-- Background collection keeps using that account, so nothing stops.
-- The next admin to log in (using the Keystone URL and project from the old settings) is taken to setup. **Authorize background access** switches background work to an application credential and deletes the stored username and password from `settings.json`.
 
 ---
 
@@ -257,7 +254,7 @@ cd frontend && npm test -- --run && npm run build
 
 - **Frontend** — React 18 + TypeScript, Vite, TanStack Query, Recharts, React Flow
 - **Backend** — Python 3.10+, FastAPI, openstacksdk, prometheus-api-client
-- **AI** — Pluggable provider: Claude (Anthropic) or Ollama
+- **AI** — Pluggable provider: Claude (Anthropic) or Private AI (Ollama or any OpenAI-compatible server)
 - **Data Sources** — PCD APIs + Prometheus/VictoriaMetrics via Grafana proxy
 
 ## Project Structure

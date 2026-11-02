@@ -58,7 +58,6 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 - [Jobs](#jobs)
 - [Logs](#logs)
 - [Misc](#misc)
-- [Orchestration](#orchestration)
 - [Reclamation](#reclamation)
 - [Reports](#reports)
 - [Rightsizing](#rightsizing)
@@ -627,7 +626,9 @@ Paste-and-analyze: accepts raw log lines, returns AI summary.
 
 ### **GET** `/api/settings`
 
-Return the app settings; token and API key fields are masked with '***'.
+Return the app settings; secrets are '***' when set. grafana_url_default is the Grafana
+
+URL used while grafana_url is blank.
 
 **Response:** 200 — Successful Response  
 
@@ -635,25 +636,90 @@ Return the app settings; token and API key fields are masked with '***'.
 
 ### **PUT** `/api/settings`
 
-Update runtime settings; fields with value '***' or '' for secrets are preserved from the current config.
+Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 
 **Request body** (`application/json`)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `prometheus_url` | string | no | `""` | Prometheus Url |
-| `grafana_url` | string | no | `""` | Grafana Url |
-| `grafana_token` | string | no | `""` | Grafana Token |
+| `prometheus_url` | string | no | — | Prometheus Url |
+| `grafana_url` | string | no | — | Grafana Url |
+| `grafana_token` | string | no | — | Grafana Token |
+| `ai_backend` | string | no | — | Ai Backend |
+| `ai_url` | string | no | — | Ai Url |
+| `ai_model` | string | no | — | Ai Model |
+| `ai_api_key` | string | no | — | Ai Api Key |
+| `ai_private_api_key` | string | no | — | Ai Private Api Key |
+| `ai_rightsizing_enabled` | boolean | no | — | Ai Rightsizing Enabled |
+| `ai_anomaly_enabled` | boolean | no | — | Ai Anomaly Enabled |
+| `ai_logs_enabled` | boolean | no | — | Ai Logs Enabled |
+| `ai_capacity_enabled` | boolean | no | — | Ai Capacity Enabled |
+| `ai_rightsizing_schedule` | string | no | — | Ai Rightsizing Schedule |
+| `ai_anomaly_schedule` | string | no | — | Ai Anomaly Schedule |
+| `job_run_retention_days` | integer | no | — | Job Run Retention Days |
+| `report_retention_days` | integer | no | — | Report Retention Days |
+| `hypervisor_ssh_user` | string | no | — | Hypervisor Ssh User |
+| `hypervisor_ssh_key_path` | string | no | — | Hypervisor Ssh Key Path |
+| `hypervisor_ssh_password` | string | no | — | Hypervisor Ssh Password |
+| `smtp_host` | string | no | — | Smtp Host |
+| `smtp_port` | string | no | — | Smtp Port |
+| `smtp_user` | string | no | — | Smtp User |
+| `smtp_password` | string | no | — | Smtp Password |
+| `smtp_from` | string | no | — | Smtp From |
+| `alert_email_to` | string | no | — | Alert Email To |
+| `webhook_url` | string | no | — | Webhook Url |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/settings/ai/models`
+
+The models the backend offers, for the Model dropdown.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
 | `ai_backend` | string | no | `"ollama"` | Ai Backend |
 | `ai_url` | string | no | `""` | Ai Url |
 | `ai_model` | string | no | `""` | Ai Model |
-| `ai_api_key` | string | no | `""` | Ai Api Key |
-| `ai_rightsizing_enabled` | boolean | no | `true` | Ai Rightsizing Enabled |
-| `ai_anomaly_enabled` | boolean | no | `true` | Ai Anomaly Enabled |
-| `ai_logs_enabled` | boolean | no | `true` | Ai Logs Enabled |
-| `ai_capacity_enabled` | boolean | no | `true` | Ai Capacity Enabled |
-| `ai_rightsizing_schedule` | string | no | `"daily@02:00"` | Ai Rightsizing Schedule |
-| `ai_anomaly_schedule` | string | no | `"hourly"` | Ai Anomaly Schedule |
+| `api_key` | string | no | `""` | Api Key |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/settings/ai/test`
+
+List the models, then ask the chosen model for a one-word reply.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `ai_backend` | string | no | `"ollama"` | Ai Backend |
+| `ai_url` | string | no | `""` | Ai Url |
+| `ai_model` | string | no | `""` | Ai Model |
+| `api_key` | string | no | `""` | Api Key |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/settings/metrics/test`
+
+Find the Prometheus data source through Grafana (unless a Prometheus URL is given) and
+
+run a query through it.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `grafana_url` | string | no | `""` | Grafana Url |
+| `grafana_token` | string | no | `""` | Grafana Token |
+| `prometheus_url` | string | no | `""` | Prometheus Url |
 
 **Response:** 200 — Successful Response  
 
@@ -664,16 +730,6 @@ Update runtime settings; fields with value '***' or '' for secrets are preserved
 Unauthenticated and cheap (no PCD calls), for the catalog's probe (APPLIANCE_STANDARD §6).
 
 setup_required: no admin has authorized background access, or it stopped working.
-
-**Response:** 200 — Successful Response  
-
----
-
-## Orchestration
-
-### **GET** `/api/orchestration/export`
-
-Download the App Builder library and deployments as one JSON file.
 
 **Response:** 200 — Successful Response  
 
@@ -733,6 +789,20 @@ Release an unused floating IP back to the pool (irreversible).
 
 ## Reports
 
+### **DELETE** `/api/reports/purge`
+
+Delete capacity reports older than N days.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `older_than_days` | query | integer | no | `30` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ### **GET** `/api/reports/{report_id}`
 
 Get a capacity report by ID including per-tenant data and AI analysis.
@@ -761,20 +831,6 @@ Delete a capacity report.
 
 ---
 
-### **DELETE** `/api/reports/purge`
-
-Delete capacity reports older than N days.
-
-**Parameters**
-
-| Name | In | Type | Required | Default | Description |
-|------|----|------|----------|---------|-------------|
-| `older_than_days` | query | integer | no | `30` |  |
-
-**Response:** 200 — Successful Response  
-
----
-
 ## Rightsizing
 
 ### **GET** `/api/rightsizing/recommendations`
@@ -797,7 +853,7 @@ Return all volume snapshots with size, status, and creation time.
 
 ### **POST** `/api/snapshots/`
 
-Create a snapshot of a server's volumes by calling the Nova createImage action.
+Create a Cinder snapshot of each volume attached to a server (in-use volumes too).
 
 **Request body** (`application/json`)
 
