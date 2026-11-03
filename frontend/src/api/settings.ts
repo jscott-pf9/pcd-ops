@@ -14,6 +14,11 @@ export interface AppSettings {
   ai_model: string;
   ai_api_key: string;
   ai_private_api_key: string;
+  // PCD Ops' own metrics store (scrapes the hypervisors' exporters)
+  metrics_local_enabled?: boolean;
+  metrics_scrape_interval?: string;
+  metrics_retention_days?: number;
+  metrics_keep_all_series?: boolean;
   // SSH (hypervisor log collection)
   hypervisor_ssh_user?: string;
   hypervisor_ssh_key_path?: string;

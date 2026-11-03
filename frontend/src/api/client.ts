@@ -53,3 +53,17 @@ export function errorDetail(err: unknown): string {
   }
   return msg;
 }
+
+/** For a 503 {"code": "no_data"} from a cache-backed endpoint: why there's no data yet
+ *  (`failed` = the last collection's error, if it failed). Null for any other error. */
+export function noDataReason(err: unknown): { failed: string | null } | null {
+  if (!err) return null;
+  const msg = String(err instanceof Error ? err.message : err);
+  try {
+    const detail = JSON.parse(msg.slice(msg.indexOf("{"))).detail;
+    if (detail?.code === "no_data") return { failed: detail.error ?? null };
+  } catch {
+    // not JSON
+  }
+  return null;
+}

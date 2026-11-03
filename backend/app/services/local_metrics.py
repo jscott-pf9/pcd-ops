@@ -138,10 +138,23 @@ def restart() -> None:
                    timeout=60)
 
 
+_restart_error: str | None = None
+
+
 def apply_settings() -> None:
-    """After a Settings change: rewrite the config and restart if retention changed."""
-    if write_config() and settings.metrics_local_enabled:
+    """After a Settings change (and at startup): rewrite the config, and restart the store if
+    retention changed. A failed restart is logged and shown on the status, not raised: the
+    setting is saved either way and applies at the store's next start."""
+    global _restart_error
+    if not (write_config() and settings.metrics_local_enabled):
+        return
+    try:
         restart()
+        _restart_error = None
+    except (subprocess.SubprocessError, OSError) as e:
+        detail = getattr(e, "stderr", b"") or b""
+        _restart_error = f"{e} {detail.decode(errors='replace').strip()}".strip()[:300]
+        logger.error("Couldn't restart the metrics store: %s", _restart_error)
 
 
 async def _get(path: str, **params) -> dict:
@@ -158,7 +171,7 @@ async def status() -> dict:
                  "running": False, "retention_days": retention_days(),
                  "scrape_interval": settings.metrics_scrape_interval,
                  "keep_all_series": settings.metrics_keep_all_series, "targets": [],
-                 "disk": _disk()}
+                 "disk": _disk(), "restart_error": _restart_error}
     try:
         targets = await _get("/api/v1/targets")
         out["running"] = True
@@ -201,7 +214,9 @@ def _growth() -> dict:
     first = collecting_since()
     if not first:
         return {}
-    days = max((time.time() - first) / 86400, 1 / 24)
+    days = (time.time() - first) / 86400
+    if days < 1 / 24:   # under an hour: too little to extrapolate from
+        return {"collecting_since": first}
     per_day = _disk()["used_bytes"] / days
     return {"collecting_since": first, "bytes_per_day": round(per_day),
             "projected_bytes": round(per_day * retention_days())}

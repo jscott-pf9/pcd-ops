@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import SettingsAI from "./SettingsAI";
 import SettingsAlerts from "./SettingsAlerts";
 import SettingsConnection from "./SettingsConnection";
+import SettingsMetrics from "./SettingsMetrics";
 import SettingsStatus from "./SettingsStatus";
 import SettingsUpdates from "./SettingsUpdates";
 
@@ -10,6 +11,7 @@ import SettingsUpdates from "./SettingsUpdates";
 export const SETTINGS_TABS = [
   { id: "status",     label: "Status",     Page: SettingsStatus },
   { id: "connection", label: "Connection", Page: SettingsConnection },
+  { id: "metrics",    label: "Metrics",    Page: SettingsMetrics },
   { id: "ai",         label: "AI",         Page: SettingsAI },
   { id: "alerts",     label: "Alerts",     Page: SettingsAlerts },
   { id: "software",   label: "Software",   Page: SettingsUpdates },

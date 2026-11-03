@@ -256,3 +256,17 @@ def test_history_endpoints(admin, http, monkeypatch):
     assert admin.get("/api/metrics/hosts/h1?range=3w").status_code == 400
     vm = admin.get("/api/metrics/vms/vm-1?range=24h").json()
     assert "disk_latency_ms" not in vm["series"]    # no PCD equivalent
+
+
+def test_failed_restart_keeps_the_save(admin, monkeypatch):
+    import subprocess
+
+    def fail():
+        raise subprocess.CalledProcessError(1, ["sudo"], stderr=b"sudo: a password is required")
+    monkeypatch.setattr(local_metrics, "available", lambda: True)
+    monkeypatch.setattr(local_metrics, "restart", fail)
+    r = admin.put("/api/settings", json={"metrics_retention_days": 180}, headers=CSRF)
+    assert r.status_code == 200 and settings.metrics_retention_days == 180
+    st = asyncio.run(local_metrics.status())
+    assert "password is required" in st["restart_error"]
+    local_metrics._restart_error = None

@@ -8,6 +8,8 @@ const EMPTY: AppSettings = {
   ai_logs_enabled: true, ai_capacity_enabled: true,
   ai_rightsizing_schedule: "daily@02:00", ai_anomaly_schedule: "hourly",
   job_run_retention_days: 30, report_retention_days: 30,
+  metrics_local_enabled: true, metrics_scrape_interval: "60s", metrics_retention_days: 90,
+  metrics_keep_all_series: false,
   hypervisor_ssh_user: "root", hypervisor_ssh_key_path: "", hypervisor_ssh_password: "",
   smtp_host: "", smtp_port: "587", smtp_user: "", smtp_password: "",
   smtp_from: "", alert_email_to: "", webhook_url: "",

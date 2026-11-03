@@ -39,8 +39,8 @@ async def lifespan(app: FastAPI):
     # The metrics store reads its scrape config and retention from files PCD Ops writes.
     try:
         await asyncio.to_thread(local_metrics.apply_settings)
-    except Exception:
-        logging.getLogger(__name__).exception("Couldn't configure the metrics store")
+    except OSError:
+        logging.getLogger(__name__).exception("Couldn't write the metrics store's config")
     from app.agent.runner import scheduler_loop
     task = asyncio.create_task(scheduler_loop())
     yield

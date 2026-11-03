@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { useTenants } from "../api/tenants";
 import DataFreshness from "../components/DataFreshness";
+import { formatPct, formatRate, pctColor } from "../components/format";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -37,8 +38,9 @@ function statusColor(status: string | undefined): string {
 
 const NODE_W = 180;
 
-function BaseNode({ emoji, title, subtitle, status, selected, orphan }: {
+function BaseNode({ emoji, title, subtitle, status, selected, orphan, children }: {
   emoji: string; title: string; subtitle?: string; status?: string; selected?: boolean; orphan?: string;
+  children?: React.ReactNode;
 }) {
   const color = statusColor(status);
   const isStoppedOrphan    = orphan === "stopped";
@@ -66,6 +68,21 @@ function BaseNode({ emoji, title, subtitle, status, selected, orphan }: {
         <span style={{ marginLeft: "auto", width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
       </div>
       {subtitle && <div style={{ color: "var(--gray-500)", fontSize: 11 }}>{subtitle}</div>}
+      {children}
+    </div>
+  );
+}
+
+/** A thin labelled bar for a percentage. */
+function LoadBar({ label, pct }: { label: string; pct?: number }) {
+  if (pct == null) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 3, fontSize: 10, color: "var(--gray-500)" }}>
+      <span style={{ width: 26 }}>{label}</span>
+      <div style={{ flex: 1, height: 4, background: "var(--gray-100)", borderRadius: 2, overflow: "hidden" }}>
+        <div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: pctColor(pct, 0, 85) }} />
+      </div>
+      <span style={{ width: 28, textAlign: "right" }}>{Math.round(pct)}%</span>
     </div>
   );
 }
@@ -75,7 +92,10 @@ function HypervisorNode({ data, selected }: any) {
     <>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
       <BaseNode emoji="🖥" title={data.hostname} subtitle={data.host_ip}
-        status={data.state === "up" ? "UP" : "DOWN"} selected={selected} />
+        status={data.state === "up" ? "UP" : "DOWN"} selected={selected}>
+        <LoadBar label="CPU" pct={data.metrics?.cpu_pct} />
+        <LoadBar label="RAM" pct={data.metrics?.mem_pct} />
+      </BaseNode>
     </>
   );
 }
@@ -368,6 +388,11 @@ function DetailPanel({ node, tenants, onClose }: { node: any; tenants: Map<strin
   if (node.type === "hypervisor") {
     rows.push(["Host IP", d.host_ip], ["State", d.state], ["Status", d.status]);
     if (d.vcpus_total) rows.push(["vCPUs", `${d.vcpus_used ?? "?"}/${d.vcpus_total}`]);
+    if (d.metrics) {
+      rows.push(["CPU", formatPct(d.metrics.cpu_pct)], ["Memory", formatPct(d.metrics.mem_pct)],
+                ["Disk", formatPct(d.metrics.disk_pct)],
+                ["Network", `↓ ${formatRate(d.metrics.net_rx_bps)} ↑ ${formatRate(d.metrics.net_tx_bps)}`]);
+    }
   } else if (node.type === "vm") {
     rows.push(["Status", d.status], ["Flavor", d.flavor_name || "—"],
       ["vCPUs", String(d.flavor_vcpus ?? "—")], ["RAM", d.flavor_ram_mb ? `${Math.round(d.flavor_ram_mb/1024)} GB` : "—"]);

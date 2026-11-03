@@ -7,6 +7,9 @@ import { apiFetch, errorDetail } from "../api/client";
 import { EXPORTER_STATUS, type ExporterHost, type ExporterResult, getExporterProbe, probeExporters } from "../api/exporters";
 import { useTenants } from "../api/tenants";
 import DataFreshness from "../components/DataFreshness";
+import MetricsHistory from "../components/MetricsHistory";
+import { formatPct, formatRate, pctColor } from "../components/format";
+import type { HostMetrics } from "../api/metrics";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -243,7 +246,8 @@ export default function Inventory() {
           aoa: [
             ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs",
              "RAM GB","RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
-             "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP"],
+             "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP",
+             ...HYP_METRIC_HEADERS],
             ...(hypervisors ?? []).map((h: any) => [
               h.hostname, h.state, h.status, h.running_vms ?? "",
               h.cpu_sockets ?? "", h.cpu_cores ?? "", h.cpu_threads ?? "", h.cpu_logical ?? "",
@@ -254,6 +258,7 @@ export default function Inventory() {
               h.ssh_ok === true ? "reachable" : h.ssh_ok === false ? "unreachable" : "",
               h.os_version ?? "", h.pending_patches ?? "",
               h.hypervisor_type ?? "", h.hypervisor_version ?? "", h.host_ip ?? "",
+              ...hypMetricCells(h),
             ]),
           ],
         },
@@ -506,6 +511,8 @@ function ServersTable({ data, isLoading, search, tenantFilter, tenants }: any) {
           <DrawerRow label="Created"     value={drawer.created_at ? new Date(drawer.created_at).toLocaleString() : "—"} />
           <DrawerRow label="Updated"     value={drawer.updated_at ? new Date(drawer.updated_at).toLocaleString() : "—"} />
           <DrawerRow label="ID"          value={<span className="text-mono" style={{ fontSize: 10 }}>{drawer.id}</span>} />
+          <DrawerSection label="Metrics" />
+          <MetricsHistory kind="vm" id={drawer.id} />
         </DetailDrawer>
       )}
     </>
@@ -527,7 +534,12 @@ function DrawerSection({ label }: { label: string }) {
 // ── Hypervisors ────────────────────────────────────────────────────────────────
 
 function HypervisorsTable({ data, isLoading, search, servers }: any) {
-  const rows = filterRows(data, search, "", ["hostname","state","status","host_ip","cpu_model","cpu_vendor","hypervisor_type"]);
+  // Latest load, flattened so the columns sort.
+  const rows = filterRows(data, search, "", ["hostname","state","status","host_ip","cpu_model","cpu_vendor","hypervisor_type"])
+    .map((h: any) => ({ ...h, load_cpu: h.metrics?.cpu_pct, load_mem: h.metrics?.mem_pct,
+                        load_disk: h.metrics?.disk_pct,
+                        load_net: (h.metrics?.net_rx_bps ?? 0) + (h.metrics?.net_tx_bps ?? 0) || undefined }));
+  const hasMetrics = (data ?? []).some((h: any) => h.metrics);
   const { sorted, sort, toggle } = useSort<any>(rows);
   const [drawer, setDrawer] = useState<any>(null);
 
@@ -565,8 +577,10 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
     { label: "Sockets",      field: "cpu_sockets" },
     { label: "Cores/Socket", field: "cpu_cores" },
     { label: "RAM",          field: "memory_mb_total" },
-    { label: "CPU",          field: "cpu_model" },
+    { label: "CPU Model",    field: "cpu_model" },
     { label: "Type",         field: "hypervisor_type" },
+    ...(hasMetrics ? [{ label: "CPU", field: "load_cpu" }, { label: "Memory", field: "load_mem" },
+                      { label: "Disk", field: "load_disk" }, { label: "Network", field: "load_net" }] : []),
     ...(hasSsh ? [{ label: "SSH / NICs", field: "nic_count" }] : []),
     ...(hasSsh ? [{ label: "OS", field: "os_version" }] : []),
     ...(hasSsh ? [{ label: "Patches", field: "pending_patches" }] : []),
@@ -591,7 +605,8 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
         onExport={() => exportCsv("hypervisors.csv",
           ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs","RAM GB",
            "RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
-           "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP"],
+           "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP",
+             ...HYP_METRIC_HEADERS],
           sorted.map((h: any) => [
             h.hostname, h.state, h.status, h.running_vms ?? "",
             h.cpu_sockets ?? "", h.cpu_cores ?? "", h.cpu_threads ?? "", h.cpu_logical ?? "",
@@ -602,6 +617,7 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
             h.ssh_ok === true ? "reachable" : h.ssh_ok === false ? "unreachable" : "",
             h.os_version ?? "", h.pending_patches ?? "",
             h.hypervisor_type ?? "", h.hypervisor_version ?? "", h.host_ip ?? "",
+            ...hypMetricCells(h),
           ]))}>
         <tr>{COLS.map(({ label, field }) =>
           <SortTh key={label} label={label} field={field} sort={sort} toggle={toggle} />
@@ -618,6 +634,7 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
               {[h.cpu_vendor, h.cpu_model].filter(Boolean).join(" ") || "—"}
             </td>
             <td className="text-mono" style={{ fontSize: 11 }}>{h.hypervisor_type ?? "—"}</td>
+            {hasMetrics && <LoadCells h={h} />}
             {hasSsh && (
               <td>
                 {h.ssh_ok === true  && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", flexShrink: 0 }} />{h.nic_count} NIC{h.nic_count !== 1 ? "s" : ""}</span>}
@@ -693,6 +710,15 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
             } />
           )}
 
+          <DrawerSection label="Load" />
+          {drawer.metrics?.stale && (
+            <div className="text-danger" style={{ fontSize: 12, marginBottom: 4 }}>
+              {drawer.metrics.exporters ? "node-exporter isn't answering: the values below are old."
+                                        : "No recent data from this host's metrics agent."}
+            </div>
+          )}
+          <MetricsHistory kind="host" id={drawer.id} />
+
           {probeByHost[drawer.id] && (
             <>
               <DrawerSection label="Exporters" />
@@ -729,6 +755,44 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
           )}
         </DetailDrawer>
       )}
+    </>
+  );
+}
+
+const HYP_METRIC_HEADERS = ["CPU %", "Memory %", "Disk %", "Net In B/s", "Net Out B/s"];
+
+function hypMetricCells(h: any) {
+  const m: HostMetrics | null = h.metrics;
+  const r = (v?: number) => (v == null ? "" : Math.round(v * 10) / 10);
+  return [r(m?.cpu_pct), r(m?.mem_pct), r(m?.disk_pct), r(m?.net_rx_bps), r(m?.net_tx_bps)];
+}
+
+/** CPU, memory and disk as small bars, plus network in/out; "stale" when the data is old. */
+function LoadCells({ h }: { h: any }) {
+  const m: HostMetrics | null = h.metrics;
+  if (!m) {
+    return <td colSpan={4} className="text-muted" style={{ fontSize: 11 }}
+      title="No metrics for this host yet">—</td>;
+  }
+  const bar = (v?: number) => (
+    <td style={{ minWidth: 70 }}>
+      {v == null ? <span className="text-muted">—</span> : (
+        <div title={formatPct(v)}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: pctColor(v, 0, 85) }}>{formatPct(v)}</div>
+          <div style={{ height: 4, background: "var(--gray-100)", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ width: `${Math.min(100, v)}%`, height: "100%", background: pctColor(v, 0, 85) }} />
+          </div>
+        </div>
+      )}
+    </td>
+  );
+  return (
+    <>
+      {bar(m.cpu_pct)}{bar(m.mem_pct)}{bar(m.disk_pct)}
+      <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+        ↓ {formatRate(m.net_rx_bps)}<br />↑ {formatRate(m.net_tx_bps)}
+        {m.stale && <div><span className="badge badge-error" style={{ fontSize: 10 }}>stale</span></div>}
+      </td>
     </>
   );
 }
