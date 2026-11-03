@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAccess } from "../../api/auth";
 import { errorDetail } from "../../api/client";
-import { testMetrics } from "../../api/settings";
+import { generateSSHKey, getSSHKey, testMetrics } from "../../api/settings";
 import { BackgroundAccessCard, ConnectionCard } from "../../components/PcdAccess";
-import { Field, Fieldset, Row, SaveRow, TestResult } from "./form";
+import { Field, Fieldset, Help, Row, SaveRow, TestResult } from "./form";
 import { useSettings } from "./useSettings";
 
 export default function SettingsConnection() {
@@ -79,13 +79,14 @@ export default function SettingsConnection() {
         </Fieldset>
 
         <Fieldset title="Hypervisor SSH (logs and pending OS updates)">
+          <SSHKeyCard onGenerated={path => set("hypervisor_ssh_key_path", path)} />
           <Row>
             <Field label="SSH user" value={form.hypervisor_ssh_user ?? "root"}
               onChange={v => set("hypervisor_ssh_user", v)} placeholder="root"
               help="An account on every hypervisor that can read /var/log and run apt." />
             <Field label="Private key path" value={form.hypervisor_ssh_key_path ?? ""}
               onChange={v => set("hypervisor_ssh_key_path", v)} placeholder="/var/lib/pcd-ops/id_ed25519"
-              help="A key file on this appliance, readable by the pcd-ops service." />
+              help="Set by Generate key. To use a key of your own instead, the path of a key file on this appliance, readable by the pcd-ops service." />
           </Row>
           <Field label="SSH password (if no key)" value={form.hypervisor_ssh_password ?? ""}
             onChange={v => set("hypervisor_ssh_password", v)} secret
@@ -94,6 +95,77 @@ export default function SettingsConnection() {
 
         <SaveRow status={status} error={error} />
       </form>
+    </div>
+  );
+}
+
+/** The appliance's own key pair for the hypervisors: generate it here, then add the public key to
+ *  authorized_keys on each host. The private key never leaves the appliance. */
+function SSHKeyCard({ onGenerated }: { onGenerated: (path: string) => void }) {
+  const queryClient = useQueryClient();
+  const { data: key } = useQuery({ queryKey: ["ssh-key"], queryFn: getSSHKey });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const text = useRef<HTMLTextAreaElement>(null);
+
+  async function generate() {
+    const replace = !!key?.public_key;
+    if (replace && !confirm("Replace the SSH key? Hosts that only have the old public key will "
+                            + "refuse PCD Ops until you add the new one.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      const k = await generateSSHKey(replace);
+      queryClient.setQueryData(["ssh-key"], k);
+      onGenerated(k.path);
+    } catch (err) {
+      setError(errorDetail(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!key?.public_key) return;
+    try {
+      await navigator.clipboard.writeText(key.public_key);
+    } catch {
+      // No clipboard API over plain http: select the text and copy it the old way.
+      text.current?.select();
+      document.execCommand("copy");
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div style={{ marginBottom: "0.75rem" }}>
+      <label className="form-label">Public key</label>
+      {key?.public_key ? (
+        <>
+          <textarea ref={text} readOnly value={key.public_key} rows={2} className="form-input"
+            onFocus={e => e.target.select()}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 12, resize: "none", wordBreak: "break-all" }} />
+          <Help>Add this line to <code>~/.ssh/authorized_keys</code> for the SSH user on every
+            hypervisor.{!key.generated && <> It belongs to the key file below.</>}</Help>
+        </>
+      ) : (
+        <Help>{key?.path
+          ? <>The key file below can't be read (missing, or protected by a passphrase). Generate a key, or fix the path.</>
+          : <>No key yet. Generate one on this appliance, then add its public key to each hypervisor.</>}</Help>
+      )}
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={generate}>
+          {busy ? "Generating…" : key?.public_key ? "Replace key" : "Generate key"}
+        </button>
+        {key?.public_key && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+        )}
+        {error && <span className="text-danger" style={{ fontSize: 13 }}>{error}</span>}
+      </div>
     </div>
   );
 }

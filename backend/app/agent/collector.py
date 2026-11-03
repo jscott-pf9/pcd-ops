@@ -815,6 +815,8 @@ async def collect_rightsizing() -> None:
         key=lambda f: (f["vcpus"], f["ram_mb"]),
     )
 
+    from app.config import settings as _settings
+    ai_on = _settings.ai_rightsizing_enabled   # turned off for the rest of the run if AI fails
     recommendations = []
     for server in servers:
         uuid = server.id
@@ -875,8 +877,7 @@ async def collect_rightsizing() -> None:
             # "right-sized" intentionally omitted — no action needed, saves GPU
         }
         analysis = None
-        from app.config import settings as _settings
-        if classification in _prompts and getattr(_settings, "ai_rightsizing_enabled", True):
+        if classification in _prompts and ai_on:
             try:
                 analysis = _clean_analysis(await ai.analyze(
                     f"Right-sizing analysis for this PCD VM — 2 plain sentences. {_prompts[classification]} "
@@ -894,7 +895,11 @@ async def collect_rightsizing() -> None:
                     },
                 ))
             except Exception as e:
-                logger.warning("AI insight failed for %s: %s", server.name, e)
+                # One failure (backend down or unreachable) would repeat for every VM, each
+                # waiting out the timeout; classify the rest from metrics alone.
+                logger.warning("AI insight failed for %s, skipping AI for the rest of this run: %s",
+                               server.name, e)
+                ai_on = False
 
         # Compute suggested (smaller) flavor for overprovisioned/idle VMs
         suggested_flavor = None
