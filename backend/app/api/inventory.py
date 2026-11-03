@@ -21,10 +21,20 @@ async def list_servers():
     return _require("inventory:servers")
 
 
+def _with_metrics(hypervisors: list[dict]) -> list[dict]:
+    """Each hypervisor with its latest CPU, memory, disk and network (`metrics`, null without
+    data) and where they came from (`metrics_source`: local or pcd)."""
+    data, _ = cache_get("metrics:hosts")
+    hosts = (data or {}).get("hosts", {})
+    source = (data or {}).get("source")
+    return [{**h, "metrics": hosts.get(h["id"]), "metrics_source": source} for h in hypervisors]
+
+
 @router.get("/hypervisors")
 async def list_hypervisors():
-    """Return all hypervisors with CPU/RAM/disk capacity and current utilization."""
-    return _require("inventory:hypervisors")
+    """Return all hypervisors with CPU/RAM/disk capacity, current utilization, and live load
+    (`metrics`) from PCD Ops' metrics store or PCD's Grafana."""
+    return _with_metrics(_require("inventory:hypervisors"))
 
 
 @router.get("/hypervisors/exporters")
@@ -93,7 +103,7 @@ async def list_security_groups():
 async def topology():
     """Return graph nodes + edges for the topology view."""
     servers    = _require("inventory:servers")
-    hypervisors = _require("inventory:hypervisors")
+    hypervisors = _with_metrics(_require("inventory:hypervisors"))
     volumes    = _require("inventory:volumes")
     networks   = _require("inventory:networks")
 

@@ -14,9 +14,9 @@ import logging
 from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
-from app.services import db
+from app.services import db, local_metrics, metrics_catalog
 from app.services.openstack import get_connection
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import MetricsNotConfigured, prometheus_client
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,8 @@ async def collect_inventory() -> None:
             "state":            h.state,
             "status":           h.status,
             "host_ip":          h.host_ip,
+            # Nova's compute service host: in PCD, the host UUID that pcd:* metrics carry
+            "service_host":     (h.service_details or {}).get("host"),
             # Physical specs
             "cpu_vendor":       ci.get("vendor"),
             "cpu_model":        ci.get("model"),
@@ -182,6 +184,8 @@ async def collect_inventory() -> None:
             "running_vms":      h.running_vms if h.running_vms is not None else _hyp_vms.get(h.name, 0),
         })
     db.cache_set("inventory:hypervisors", hyp_records)
+    # PCD Ops' own metrics store scrapes every hypervisor; keep its target list current.
+    local_metrics.write_targets(hyp_records)
 
     db.cache_set("inventory:volumes", [
         {
@@ -399,6 +403,32 @@ async def collect_reclamation() -> None:
 
 
 # ── Capacity ───────────────────────────────────────────────────────────────────
+
+# ── Host and VM metrics ───────────────────────────────────────────────────────
+
+async def collect_host_metrics() -> None:
+    """Current CPU, memory, disk and network per hypervisor and per VM, from PCD Ops' own
+    metrics store or else PCD's Grafana (services/metrics_catalog.py)."""
+    src = await metrics_catalog.source()
+    if src is None:
+        logger.info("Host metrics skipped: no local metrics store and no Grafana token.")
+        return
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    # The source's key for each hypervisor → Nova id.
+    nova_id = {(h["id"] if src == "local" else h.get("service_host")): h["id"] for h in hyps or []}
+    host_vals, vms, health = await asyncio.gather(
+        metrics_catalog.instant("host", src),
+        metrics_catalog.instant("vm", src),
+        metrics_catalog.host_health(src),
+    )
+    hosts: dict[str, dict] = {}
+    for key in set(host_vals) | set(health):
+        if key in nova_id:
+            hosts[nova_id[key]] = {**host_vals.get(key, {}), **health.get(key, {})}
+    db.cache_set("metrics:hosts", {"source": src, "hosts": hosts})
+    db.cache_set("metrics:vms", {"source": src, "vms": vms})
+    logger.info("Host metrics from %s: %d hosts, %d VMs", src, len(hosts), len(vms))
+
 
 async def collect_capacity() -> None:
     logger.info("Collecting capacity…")
@@ -732,6 +762,9 @@ RS_MEM_LOW  = 20.0   # % below → underutilised RAM
 RS_MEM_HIGH = 80.0   # % above → RAM-pressured
 RS_IO_IDLE  = 0.5    # avg IOPS below which disk is considered idle
 RS_STEP     = "2h"   # ~84 data points over 7 days
+RS_LOCAL_DAYS = 30            # with PCD Ops' own metrics store
+RS_LOCAL_STEP = "6h"          # 120 points over 30 days
+RS_LOCAL_MIN_DAYS = 7         # until the store has this much, use PCD's Grafana if set
 
 
 import math as _math
@@ -770,34 +803,32 @@ def _prom_avg(series_list: list[dict], domain: str) -> float | None:
 
 
 async def collect_rightsizing() -> None:
-    logger.info("Collecting right-sizing (PCD pcd:vm_* metrics)…")
     conn = get_connection()
     ai = get_ai_provider()
 
+    # PCD Ops' own store once it has a week of data, looking back 30 days; else PCD's Grafana,
+    # whose reduced pcd:* series are kept 14 days, looking back 7.
+    src = await metrics_catalog.source(min_days=RS_LOCAL_MIN_DAYS)
+    if src is None:
+        raise MetricsNotConfigured("No VM metrics: PCD Ops' metrics store has no data yet and "
+                                   "no Grafana token is set.")
+    logger.info("Collecting right-sizing from %s metrics…", src)
+    days, step = (RS_LOCAL_DAYS, RS_LOCAL_STEP) if src == "local" else (7, RS_STEP)
     end = datetime.utcnow()
-    start = end - timedelta(days=7)
+    start = end - timedelta(days=days)
+    prom = metrics_catalog.client(src)
 
-    # Batch all Prometheus queries
-    (
-        meta_raw,
-        cpu_series_raw, cpu_total_raw,
-        mem_series_raw, mem_total_raw,
-        io_series_raw,
-    ) = await asyncio.gather(
-        prometheus_client.query("libvirt_domain_info_meta"),
-        prometheus_client.query_range("pcd:vm_cpu_usage / pcd:vm_cpu_total * 100",  start, end, step=RS_STEP),
-        prometheus_client.query("pcd:vm_cpu_total"),
-        prometheus_client.query_range("pcd:vm_mem_usage / pcd:vm_mem_total * 100",  start, end, step=RS_STEP),
-        prometheus_client.query("pcd:vm_mem_total"),
-        prometheus_client.query_range("pcd:vm_read_iops + pcd:vm_write_iops",       start, end, step=RS_STEP),
+    def _range(metric: str):
+        return prom.query_range(metrics_catalog.promql("vm", metric, src), start, end, step=step)
+
+    meta_raw, cpu_series_raw, mem_series_raw, io_series_raw = await asyncio.gather(
+        prom.query("libvirt_domain_info_meta"),
+        _range("cpu_pct"), _range("mem_pct"), _range("disk_iops"),
     )
 
-    # Domain → metadata map (instance_name, project_name, flavor, host_name)
+    # Domain → metadata (instance_name, project_name, flavor; host_name from PCD, or our
+    # hypervisor label locally)
     domain_meta: dict[str, dict] = {m["metric"]["domain"]: m["metric"] for m in meta_raw}
-
-    # Domain → current total (for labels)
-    domain_cpu_total = {s["metric"]["domain"]: float(s["value"][1]) for s in cpu_total_raw if "domain" in s["metric"]}
-    domain_mem_total = {s["metric"]["domain"]: float(s["value"][1]) for s in mem_total_raw if "domain" in s["metric"]}
 
     # Build per-domain series maps for sparklines
     cpu_series_by_domain = {s["metric"]["domain"]: _series_from_range([s]) for s in cpu_series_raw if "domain" in s["metric"]}
@@ -919,7 +950,7 @@ async def collect_rightsizing() -> None:
             "server_status": server.status,
             "project_id":   server.project_id,
             "tenant_name":  meta.get("project_name"),
-            "hypervisor":   meta.get("host_name"),
+            "hypervisor":   meta.get("host_name") or meta.get("hypervisor"),
             "current_flavor":   {"name": flavor_name, "vcpus": vcpus, "ram_mb": ram_mb},
             "suggested_flavor": suggested_flavor,
             "classification": classification,
@@ -943,11 +974,12 @@ async def collect_rightsizing() -> None:
 
 # ── Anomaly Detection (AI — slow) ─────────────────────────────────────────────
 
+# Name in the AI's context → metric in services/metrics_catalog.py
 ANOMALY_METRICS = {
-    "cpu_throttle":  "avg by (domain) (pcd:vm_cpu_throttling_percentage)",
-    "mem_usage_pct": "avg by (domain) (pcd:vm_mem_usage / pcd:vm_mem_total * 100)",
-    "read_iops":     "sum by (domain) (pcd:vm_read_iops)",
-    "write_iops":    "sum by (domain) (pcd:vm_write_iops)",
+    "cpu_throttle":  "cpu_wait_pct",
+    "mem_usage_pct": "mem_pct",
+    "read_iops":     "read_iops",
+    "write_iops":    "write_iops",
 }
 
 LOOKBACK_HOURS = 24
@@ -995,10 +1027,14 @@ async def collect_anomaly() -> None:
     end = datetime.utcnow()
     start = end - timedelta(hours=LOOKBACK_HOURS)
 
-    # Collect PCD-native metrics
+    src = await metrics_catalog.source(min_days=LOOKBACK_HOURS / 24)
+    if src is None:
+        raise MetricsNotConfigured("No VM metrics: PCD Ops' metrics store has no data yet and "
+                                   "no Grafana token is set.")
     metric_results = await asyncio.gather(*[
-        prometheus_client.query_range(query, start, end, step="15m")
-        for query in ANOMALY_METRICS.values()
+        metrics_catalog.client(src).query_range(
+            metrics_catalog.promql("vm", metric, src), start, end, step="15m")
+        for metric in ANOMALY_METRICS.values()
     ], return_exceptions=True)
 
     # Build summary stats per domain for AI context

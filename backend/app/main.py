@@ -17,6 +17,7 @@ from app.api import (
     inventory,
     jobs,
     logs,
+    metrics,
     reclamation,
     reports,
     rightsizing,
@@ -25,6 +26,7 @@ from app.api import (
     system,
 )
 from app.appliance import web_auth
+from app.services import local_metrics
 from app.services import openstack as os_service
 from app.services.db import init_db
 
@@ -34,6 +36,11 @@ logging.basicConfig(level=logging.INFO)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # The metrics store reads its scrape config and retention from files PCD Ops writes.
+    try:
+        await asyncio.to_thread(local_metrics.apply_settings)
+    except Exception:
+        logging.getLogger(__name__).exception("Couldn't configure the metrics store")
     from app.agent.runner import scheduler_loop
     task = asyncio.create_task(scheduler_loop())
     yield
@@ -77,6 +84,7 @@ for router in (
     rightsizing.router,
     anomaly.router,
     logs.router,
+    metrics.router,
     settings.router,
     system.router,
     agent.router,

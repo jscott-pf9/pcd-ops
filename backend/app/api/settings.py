@@ -12,7 +12,7 @@ from app.appliance import connection as pcd
 from app.appliance import state
 from app.config import Settings, settings
 from app.dependencies import make_ai_provider
-from app.services import prometheus, settings_store
+from app.services import local_metrics, metrics_catalog, prometheus, settings_store
 
 router = APIRouter()
 
@@ -49,8 +49,13 @@ async def get_settings():
 @router.put("/settings")
 async def update_settings(payload: SettingsPayload):
     """Save the fields sent. A secret sent as '***' or '' keeps the saved value."""
+    sent = payload.model_dump(exclude_unset=True)
+    if sent.get("metrics_retention_days") not in (None, *local_metrics.RETENTION_CHOICES):
+        raise HTTPException(400, detail="Retention must be 30, 90, 180, 365 or 730 days.")
+    if sent.get("metrics_scrape_interval") not in (None, *local_metrics.INTERVAL_CHOICES):
+        raise HTTPException(400, detail="Scrape interval must be 30s or 60s.")
     stored = settings_store.load()
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    for key, value in sent.items():
         if value is None or (key in _SECRETS and value in (_MASK, "")):
             continue
         if isinstance(value, str):
@@ -58,6 +63,10 @@ async def update_settings(payload: SettingsPayload):
         stored[key] = value
         setattr(settings, key, value)
     settings_store.save(stored)
+    metrics_catalog.forget_source()
+    if any(k.startswith("metrics_") for k in sent):
+        # Rewrites the scrape config; a retention change restarts the metrics store.
+        await asyncio.to_thread(local_metrics.apply_settings)
     return {"status": "saved"}
 
 
