@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException
 
-from app.services.db import cache_get
+from app.services import exporters
+from app.services.db import cache_get, cache_set
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+
+EXPORTER_PROBE = "exporters:probe"
 
 
 def _require(key: str):
@@ -22,6 +25,24 @@ async def list_servers():
 async def list_hypervisors():
     """Return all hypervisors with CPU/RAM/disk capacity and current utilization."""
     return _require("inventory:hypervisors")
+
+
+@router.get("/hypervisors/exporters")
+async def exporter_probe():
+    """The last exporter probe: per hypervisor, whether node-exporter (:9388) and
+    libvirt-exporter (:9177) answered, and what they serve."""
+    data, probed_at = cache_get(EXPORTER_PROBE)
+    if data is None:
+        raise HTTPException(503, detail={"code": "no_data", "key": EXPORTER_PROBE})
+    return {"probed_at": probed_at, "hosts": data}
+
+
+@router.post("/hypervisors/probe-exporters")
+async def probe_exporters():
+    """Probe the exporters on every hypervisor that is up, from this appliance."""
+    hosts = await exporters.probe_hosts(_require("inventory:hypervisors"))
+    probed_at = cache_set(EXPORTER_PROBE, hosts)
+    return {"probed_at": probed_at, "hosts": hosts}
 
 
 @router.get("/volumes")

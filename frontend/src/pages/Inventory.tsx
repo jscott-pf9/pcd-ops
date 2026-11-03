@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpDown, ArrowUp, ArrowDown, Download, X, AlertTriangle, Shield } from "lucide-react";
 import { Cell, Pie, PieChart, Tooltip as RTooltip } from "recharts";
 import * as XLSX from "xlsx";
-import { apiFetch } from "../api/client";
+import { apiFetch, errorDetail } from "../api/client";
+import { EXPORTER_STATUS, type ExporterHost, type ExporterResult, getExporterProbe, probeExporters } from "../api/exporters";
 import { useTenants } from "../api/tenants";
 import DataFreshness from "../components/DataFreshness";
 
@@ -349,7 +350,7 @@ export default function Inventory() {
   }
 
   const summary      = useQuery({ queryKey: ["inventory","summary"],        queryFn: () => apiFetch<Summary>("/inventory/summary") });
-  const servers      = useQuery({ queryKey: ["inventory","servers"],        queryFn: () => apiFetch<any[]>("/inventory/servers"),        enabled: tab==="servers" });
+  const servers      = useQuery({ queryKey: ["inventory","servers"],        queryFn: () => apiFetch<any[]>("/inventory/servers"),        enabled: tab==="servers" || tab==="hypervisors" });
   const clusters     = useQuery({ queryKey: ["inventory","clusters"],       queryFn: () => apiFetch<any[]>("/inventory/clusters"),       enabled: tab==="clusters" });
   const hypervisors  = useQuery({ queryKey: ["inventory","hypervisors"],    queryFn: () => apiFetch<any[]>("/inventory/hypervisors"),    enabled: tab==="hypervisors" });
   const volumes      = useQuery({ queryKey: ["inventory","volumes"],        queryFn: () => apiFetch<any[]>("/inventory/volumes"),        enabled: tab==="volumes" });
@@ -542,6 +543,21 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
   // Show SSH/NIC column only when SSH was attempted (key or password configured)
   const hasSsh = (data ?? []).some((h: any) => h.ssh_ok != null);
 
+  // Exporter probe: can this appliance scrape node-exporter and libvirt-exporter directly?
+  const queryClient = useQueryClient();
+  const { data: probe } = useQuery({ queryKey: ["exporters"], queryFn: getExporterProbe, retry: false });
+  const probeMut = useMutation({
+    mutationFn: probeExporters,
+    onSuccess: r => queryClient.setQueryData(["exporters"], r),
+  });
+  const probeByHost = useMemo(() => {
+    const m: Record<string, ExporterHost> = {};
+    (probe?.hosts ?? []).forEach(h => { m[h.hypervisor_id] = h; });
+    return m;
+  }, [probe]);
+  const reachable = (probe?.hosts ?? []).filter(h =>
+    EXPORTER_STATUS[h.node.status].ok && EXPORTER_STATUS[h.libvirt.status].ok).length;
+
   const COLS = [
     { label: "Hostname",     field: "hostname" },
     { label: "State",        field: "state" },
@@ -554,10 +570,23 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
     ...(hasSsh ? [{ label: "SSH / NICs", field: "nic_count" }] : []),
     ...(hasSsh ? [{ label: "OS", field: "os_version" }] : []),
     ...(hasSsh ? [{ label: "Patches", field: "pending_patches" }] : []),
+    ...(probe ? [{ label: "Exporters", field: "" }] : []),
   ];
 
   return (
     <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px", fontSize: 12, flexWrap: "wrap" }}>
+        <button className="btn btn-secondary btn-sm" disabled={probeMut.isPending} onClick={() => probeMut.mutate()}
+          title="Check that this appliance can reach node-exporter (:9388) and libvirt-exporter (:9177) on each hypervisor">
+          {probeMut.isPending ? "Probing…" : "Probe exporters"}
+        </button>
+        {probe && (
+          <span className="text-muted">
+            Exporters reachable on {reachable} of {probe.hosts.length} hosts · probed {new Date(probe.probed_at + "Z").toLocaleString()}
+          </span>
+        )}
+        {probeMut.isError && <span className="text-danger">{errorDetail(probeMut.error)}</span>}
+      </div>
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
         onExport={() => exportCsv("hypervisors.csv",
           ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs","RAM GB",
@@ -602,6 +631,16 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
                 {h.pending_patches == null ? <span className="text-muted">—</span>
                   : h.pending_patches === 0 ? <span className="badge badge-ok">up to date</span>
                   : <span className="badge badge-warn">{h.pending_patches} pending</span>}
+              </td>
+            )}
+            {probe && (
+              <td style={{ whiteSpace: "nowrap" }}>
+                {probeByHost[h.id]
+                  ? <>
+                      <ExporterDot name="node" r={probeByHost[h.id].node} />{" "}
+                      <ExporterDot name="libvirt" r={probeByHost[h.id].libvirt} />
+                    </>
+                  : <span className="text-muted">—</span>}
               </td>
             )}
           </tr>
@@ -654,6 +693,26 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
             } />
           )}
 
+          {probeByHost[drawer.id] && (
+            <>
+              <DrawerSection label="Exporters" />
+              {(["node", "libvirt"] as const).map(name => {
+                const r = probeByHost[drawer.id][name];
+                return (
+                  <DrawerRow key={name} label={name === "node" ? "node-exporter" : "libvirt-exporter"} value={
+                    <span title={r.url}>
+                      <ExporterDot name="" r={r} />{" "}
+                      {EXPORTER_STATUS[r.status].label}
+                      {r.series != null && <span className="text-muted"> · {r.series.toLocaleString()} series</span>}
+                      {r.http_status != null && <span className="text-muted"> · HTTP {r.http_status}</span>}
+                      {r.error && r.status === "error" && <div className="text-muted" style={{ fontSize: 11 }}>{r.error}</div>}
+                    </span>
+                  } />
+                );
+              })}
+            </>
+          )}
+
           {(vmsByHyp[drawer.hostname]?.length > 0) && (
             <div style={{ marginTop: 14 }}>
               <div style={{ fontWeight: 600, fontSize: 12, color: "var(--gray-700)", marginBottom: 8 }}>
@@ -671,6 +730,18 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
         </DetailDrawer>
       )}
     </>
+  );
+}
+
+function ExporterDot({ name, r }: { name: string; r: ExporterResult }) {
+  const st = EXPORTER_STATUS[r.status];
+  return (
+    <span title={`${name ? name + ": " : ""}${st.label}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11,
+               color: st.ok ? "var(--gray-700)" : "var(--red)" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: st.ok ? "var(--green)" : "var(--red)" }} />
+      {name}
+    </span>
   );
 }
 

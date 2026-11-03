@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -133,3 +134,29 @@ def keystone_api(monkeypatch):
     monkeypatch.setattr(requests, "post", api.post)
     monkeypatch.setattr(requests, "delete", api.delete)
     return api
+
+
+@pytest.fixture
+def admin(logged_in, keystone_api):
+    """Logged in, with setup finished (otherwise the gate answers 409)."""
+    assert logged_in.post("/api/access/authorize", headers=CSRF).status_code == 200
+    return logged_in
+
+
+@pytest.fixture
+def http(monkeypatch):
+    """Route every httpx.AsyncClient through a handler; returns the list of requests seen."""
+    seen, routes = [], {}
+    real = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        for prefix, respond in routes.items():
+            if str(request.url).startswith(prefix):
+                return respond(request)
+        return httpx.Response(404, json={})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+    )
+    return seen, routes
