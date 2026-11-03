@@ -11,7 +11,7 @@
 | 3 | Appliance | ✅ Done |
 | 4 | Extension catalog and PCD login | ✅ Done |
 | 5 | Correctness, install and settings experience, App Builder moves out (0.6.0) | 🧪 |
-| 6 | **Next:** host and VM metrics | ⬜ Next |
+| 6 | Host and VM metrics, scraped and kept by PCD Ops (0.7.0) | 🧪 |
 | 7 | Capacity: CPU and memory overcommit, idle VMs, right-sizing | ⬜ |
 | 8 | Hypervisor lifecycle: OS updates, maintenance mode, live migration, rolling upgrades | 🔄 |
 | 9 | Anomaly, drift and alerting | 🔄 |
@@ -95,26 +95,38 @@ Built and covered by tests; needs a pass against a lab PCD (Grafana lookup, Priv
 - ✅ Removed from PCD Ops: `api/generate.py`, `api/deployments.py`, the three pages and their nav, the deployment rows in the event feed, the seeded roles and templates. No export step: no installed appliance used them.
 - 🧪 pcd-app-builder is a separate repo with its own roadmap; it ships to the extension catalog on its own schedule.
 
-## Phase 6 — Host and VM metrics ⬜
+## Phase 6 — Host and VM metrics, kept by PCD Ops 🧪 (0.7.0, branch `feature/phase6-metrics`)
 
-PCD hypervisors run two exporters ([PCD metrics reference](https://docs.platform9.com/private-cloud-director/monitoring-and-observability/monitoring/pcd-metrics-reference)): node-exporter at `<host-ip>:9388/metrics` (host) and libvirt-exporter at `<host-ip>:9177/metrics` (per VM). An agent on each host turns them into `pcd:` metrics and remote-writes them to PCD every 5 minutes. PCD Ops reads only `pcd:vm_*` and `libvirt_domain_info_meta` today.
+PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<host-ip>:9177`) ([PCD metrics reference](https://docs.platform9.com/private-cloud-director/monitoring-and-observability/monitoring/pcd-metrics-reference)). A host agent sends a reduced set of `pcd:` series from them to PCD's Grafana every 5 minutes. That Grafana is SaaS and keeps 14 days. The appliance runs on-premises next to the hypervisors, so PCD Ops scrapes the exporters itself and keeps the data as long as Settings says.
 
-**Step 1: the host metrics PCD already has, through Grafana**
-- ⬜ Per-host CPU, memory, disk and network on Inventory → Hypervisors and the hypervisor drill-down: `pcd:hyp_cpu_total/usage`, `pcd:hyp_mem_total/usage`, `pcd:hyp_disk_space/usage`, `pcd:hyp_disk_read/write_throughput`, `pcd:hyp_net_rx/tx_throughput`
-- ⬜ VM metrics not used yet: `pcd:vm_mem_allocated`, `pcd:vm_rx_bytes/tx_bytes`, `pcd:vm_read/write_latency`, `pcd:vm_cpu_throttling_percentage`
-
-**Step 2: scrape the exporters directly**
+**Probe**
+- 🧪 **Probe exporters** (Inventory → Hypervisors; `services/exporters.py`, `POST /api/inventory/hypervisors/probe-exporters`): from the appliance, can each exporter be reached, is TLS or a login needed, and what does it serve.
 - 🧪 **Lab check** (2026-11-03, jscott-lab, 3 hypervisors). **Probe exporters** on Inventory → Hypervisors does this from the appliance (`services/exporters.py`).
   - Both exporters answer on every host: plain http, no authentication. Checked from a workstation on the hypervisor network; still to confirm from the appliance's own network.
   - libvirt-exporter: `domain` is the Nova server UUID. `libvirt_domain_info_meta` adds `instance_name`, `project_uuid`, `project_name` and `flavor`. Disk and network series are per `target_device`; vCPU series per `vcpu`.
   - node-exporter: CPU per core and mode, about 60 `node_memory_*` families, filesystems by `fstype` and `mountpoint`, disks, network per device (`bond0`, VLANs, taps), vmstat, systemd unit states.
   - Size: about 1,100 node-exporter and 300–850 libvirt-exporter lines per host. With an allowlist, roughly 300 series per host plus 30–60 per VM.
   - Nova's compute service `host` is a UUID per hypervisor, presumably the PCD host ID used by the `host` label on `pcd:*` series.
-- ⬜ Discover hypervisors from Nova (`host_ip`). Scrape both exporters on each host, without needing Grafana or a token, and at a finer resolution than the 5-minute remote-write.
-- ⬜ **Storage decision:** keep a short in-memory window, or run an embedded VictoriaMetrics single-node on the appliance. This sets the data disk size.
-- ⬜ Health: exporter reachable per host. A host whose last sample is older than twice the scrape interval is flagged stale.
+
+**Store** (decided: VictoriaMetrics single-node on the appliance, on a bigger root disk)
+- 🧪 Image: VictoriaMetrics v1.154.1 (sha256-pinned), OpenRC service `pcd-ops-metrics` on `127.0.0.1:8428` only, data in `/var/lib/pcd-ops/metrics`, stops writing with 2 GB left. The manifest asks for a 60 GB disk; cloud-init grows the root filesystem to it.
+- 🧪 PCD Ops writes the scrape config, the targets (one per hypervisor, labelled `hypervisor_id`, `hypervisor` and `host_ip` from Nova, refreshed after every inventory run) and the retention (`services/local_metrics.py`). An allowlist keeps the series PCD Ops uses: about 300 per host and 30–60 per VM.
+- 🧪 Settings → Metrics: scrape on/off, every 30 or 60 s, keep every series, retention 30 days / 90 days (default) / 6 months / 1 year / 2 years with a disk estimate per choice; the store's state, disk use and per-host scrape health. Console: Advanced Options → Metrics Store.
+
+**Views**
+- 🧪 Inventory → Hypervisors: CPU, memory and disk bars, network in/out, stale badge. The host drawer has CPU, memory, disk space, disk and network throughput over 24h to 2 years.
+- 🧪 VM drawer: CPU, memory, CPU wait (steal), disk IOPS and latency, network in/out.
+- 🧪 Topology: CPU and RAM bars on each hypervisor.
+- 🧪 Right-Sizing uses the local store once it has a week of data and then looks back 30 days instead of 7; Anomaly uses it once it has a day.
+
+**Sources** (`services/metrics_catalog.py`): each host and VM metric is defined for the local store (raw exporter series) and for PCD's Grafana (`pcd:*`). Local data is used when it exists; Grafana otherwise, and always for the `openstack_*` series only PCD has (Capacity). VMs join on `domain` = the Nova server UUID in both. Through Grafana, hosts join on Nova's compute service host, the PCD host UUID.
+
+- ⬜ Confirm on the lab appliance: exporters reachable from its network, root filesystem at 60 GB, values match PCD's host dashboards.
+- ⬜ Later: export or back up the store (with Phase 12's backup and restore).
 
 ## Phase 7 — Capacity: overcommit, idle VMs, right-sizing ⬜
+
+Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own store (`services/metrics_catalog.py`), so idle detection and trends can use long windows.
 
 **CPU overcommit analysis**, per host and per aggregate:
 - ⬜ For each host, put side by side:
@@ -242,7 +254,7 @@ Here:
 - **Read-only by default.** Writes are explicit and confirmed; jobs, bulk actions and host maintenance all have a dry-run.
 - **Host maintenance goes one host at a time** and stops on the first failure.
 - **Every feature works without AI.** AI explains and summarizes; it doesn't decide.
-- **Metrics come through the Grafana proxy.** From Phase 6, scraping the hypervisor exporters directly is an alternative.
+- **PCD Ops keeps its own host and VM metrics.** It scrapes the hypervisors' exporters into VictoriaMetrics on the appliance (Phase 6). PCD's Grafana is used for the `openstack_*` series only PCD has, and as a fallback.
 - **Anything merged to `main` ships to installed appliances.** Unreleased work stays on a branch.
 - **PCD Ops observes and maintains; pcd-app-builder builds and deploys.**
 - **Settings is one tabbed page** (ARCHITECTURE_GUIDE).
@@ -253,7 +265,7 @@ Here:
   -- pcd-reports will remain a separate project focused on chargeback/showback, not capacity management.
   -- the other projects are incomplete and non-functional for now.
 - **Does `pcd-lcm` retire** once Phase 8 ships?
-- **Hypervisor exporters:** reachable from the appliance? Authenticated? Where are scraped metrics kept?
+- **Hypervisor exporters:** reachable from the appliance's own network on every install? (Plain http with no login on the lab, from a workstation.)
 - **Host software:** how does PCD upgrade its host agents, and can a rolling upgrade drive it?
 - **Upgrades:** keep in-app self-update, or move to catalog-driven upgrades?
 - **Control-plane logs:** where do they come from in PCD?

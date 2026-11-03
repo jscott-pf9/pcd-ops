@@ -2,7 +2,7 @@
 
 
 
-**Version:** 0.6.0  
+**Version:** 0.6.1  
 **Base URL:** `/api`  
 **Auth:** PCD login (session cookie). See *Authentication* below.
 
@@ -57,6 +57,7 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 - [Inventory](#inventory)
 - [Jobs](#jobs)
 - [Logs](#logs)
+- [Metrics](#metrics)
 - [Misc](#misc)
 - [Reclamation](#reclamation)
 - [Reports](#reports)
@@ -349,7 +350,27 @@ Return all compute instances with status, flavor, hypervisor, and project info.
 
 ### **GET** `/api/inventory/hypervisors`
 
-Return all hypervisors with CPU/RAM/disk capacity and current utilization.
+Return all hypervisors with CPU/RAM/disk capacity, current utilization, and live load
+
+(`metrics`) from PCD Ops' metrics store or PCD's Grafana.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/hypervisors/exporters`
+
+The last exporter probe: per hypervisor, whether node-exporter (:9388) and
+
+libvirt-exporter (:9177) answered, and what they serve.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/inventory/hypervisors/probe-exporters`
+
+Probe the exporters on every hypervisor that is up, from this appliance.
 
 **Response:** 200 — Successful Response  
 
@@ -622,6 +643,50 @@ Paste-and-analyze: accepts raw log lines, returns AI summary.
 
 ---
 
+## Metrics
+
+### **GET** `/api/metrics/status`
+
+PCD Ops' own metrics store (running, targets, disk, projected size) and which source
+
+the host and VM views use: "local", "pcd" (PCD's Grafana, 14 days) or null.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/hosts/{hypervisor_id}`
+
+CPU, memory, disk and network history for one hypervisor. `range` is clamped to what
+
+the source keeps.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `hypervisor_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/vms/{server_id}`
+
+CPU, memory, network, disk and CPU-wait history for one VM.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `server_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ## Misc
 
 ### **GET** `/api/settings`
@@ -645,6 +710,10 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `prometheus_url` | string | no | — | Prometheus Url |
 | `grafana_url` | string | no | — | Grafana Url |
 | `grafana_token` | string | no | — | Grafana Token |
+| `metrics_local_enabled` | boolean | no | — | Metrics Local Enabled |
+| `metrics_scrape_interval` | string | no | — | Metrics Scrape Interval |
+| `metrics_retention_days` | integer | no | — | Metrics Retention Days |
+| `metrics_keep_all_series` | boolean | no | — | Metrics Keep All Series |
 | `ai_backend` | string | no | — | Ai Backend |
 | `ai_url` | string | no | — | Ai Url |
 | `ai_model` | string | no | — | Ai Model |
