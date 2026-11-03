@@ -104,10 +104,12 @@ PCD hypervisors run two exporters ([PCD metrics reference](https://docs.platform
 - ⬜ VM metrics not used yet: `pcd:vm_mem_allocated`, `pcd:vm_rx_bytes/tx_bytes`, `pcd:vm_read/write_latency`, `pcd:vm_cpu_throttling_percentage`
 
 **Step 2: scrape the exporters directly**
-- ⬜ **Lab check first:**
-  - Are `:9388` and `:9177` reachable from the network the appliance is installed on?
-  - Is authentication or TLS needed? The metrics reference doesn't say.
-  - Which raw series sit behind the `pcd:` rules?
+- 🧪 **Lab check** (2026-11-03, jscott-lab, 3 hypervisors). **Probe exporters** on Inventory → Hypervisors does this from the appliance (`services/exporters.py`).
+  - Both exporters answer on every host: plain http, no authentication. Checked from a workstation on the hypervisor network; still to confirm from the appliance's own network.
+  - libvirt-exporter: `domain` is the Nova server UUID. `libvirt_domain_info_meta` adds `instance_name`, `project_uuid`, `project_name` and `flavor`. Disk and network series are per `target_device`; vCPU series per `vcpu`.
+  - node-exporter: CPU per core and mode, about 60 `node_memory_*` families, filesystems by `fstype` and `mountpoint`, disks, network per device (`bond0`, VLANs, taps), vmstat, systemd unit states.
+  - Size: about 1,100 node-exporter and 300–850 libvirt-exporter lines per host. With an allowlist, roughly 300 series per host plus 30–60 per VM.
+  - Nova's compute service `host` is a UUID per hypervisor, presumably the PCD host ID used by the `host` label on `pcd:*` series.
 - ⬜ Discover hypervisors from Nova (`host_ip`). Scrape both exporters on each host, without needing Grafana or a token, and at a finer resolution than the 5-minute remote-write.
 - ⬜ **Storage decision:** keep a short in-memory window, or run an embedded VictoriaMetrics single-node on the appliance. This sets the data disk size.
 - ⬜ Health: exporter reachable per host. A host whose last sample is older than twice the scrape interval is flagged stale.
