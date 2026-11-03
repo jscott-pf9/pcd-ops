@@ -236,3 +236,52 @@ def test_email_goes_to_the_given_recipient(monkeypatch):
     assert sent["to"] == ["a@example.com", "b@example.com"]
     assert asyncio.run(notifications.send_email("s", "b"))
     assert sent["to"] == ["oncall@example.com"]
+
+
+def test_generate_ssh_key(admin):
+    import paramiko
+
+    assert admin.get("/api/settings/ssh/key").json()["public_key"] is None
+    k = admin.post("/api/settings/ssh/key", json={}, headers=CSRF).json()
+    assert k["generated"] and k["public_key"].startswith("ssh-ed25519 ")
+    assert settings.hypervisor_ssh_key_path == k["path"] == settings_store.load()[
+        "hypervisor_ssh_key_path"]
+    assert stat.S_IMODE(os.stat(k["path"]).st_mode) == 0o600
+    paramiko.Ed25519Key.from_private_key_file(k["path"])   # what the SSH collectors load
+    assert admin.get("/api/settings/ssh/key").json()["public_key"] == k["public_key"]
+
+    # A working key is replaced only when asked.
+    assert admin.post("/api/settings/ssh/key", json={}, headers=CSRF).status_code == 409
+    new = admin.post("/api/settings/ssh/key", json={"replace": True}, headers=CSRF).json()
+    assert new["public_key"] != k["public_key"]
+
+
+def test_rightsizing_says_why_it_has_no_data(admin):
+    from app.agent.runner import RIGHTSIZING_ERROR
+    from app.services import db
+
+    r = admin.get("/api/rightsizing/recommendations")
+    assert r.status_code == 503 and r.json()["detail"]["error"] is None
+    db.run_finish(db.run_start(), "error", f"{RIGHTSIZING_ERROR}Grafana refused the token")
+    detail = admin.get("/api/rightsizing/recommendations").json()["detail"]
+    assert detail == {"code": "no_data", "key": "rightsizing:recommendations",
+                      "error": "Grafana refused the token"}
+
+
+def test_refresh_runs_rightsizing_off_schedule(monkeypatch):
+    from app.agent import collector, runner
+    from app.services import db
+
+    ran = []
+
+    async def fake():
+        ran.append(1)
+        db.cache_set("rightsizing:recommendations", [])
+
+    monkeypatch.setattr(collector, "collect_rightsizing", fake)
+    monkeypatch.setattr(runner, "_can_run", lambda tier: True)
+    settings.ai_rightsizing_schedule = "daily@02:00"
+    asyncio.run(runner.run_daily())              # never ran: runs now, not at 02:00
+    asyncio.run(runner.run_daily())              # ran: waits for the schedule
+    asyncio.run(runner.run_daily(force=True))    # Refresh
+    assert len(ran) == 2

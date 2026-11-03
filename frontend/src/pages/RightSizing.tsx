@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Briefcase } from "lucide-react";
-import { apiFetch } from "../api/client";
+import { apiFetch, errorDetail } from "../api/client";
 import DataFreshness from "../components/DataFreshness";
 import { useTenants } from "../api/tenants";
 import { getSettings } from "../api/settings";
@@ -53,10 +53,12 @@ export default function RightSizing() {
   const [showJobModal, setShowJobModal] = useState(false);
   const tenants = useTenants();
 
-  const { data: recs = [], isLoading } = useQuery<Rec[]>({
+  const { data: recs = [], isLoading, error } = useQuery<Rec[]>({
     queryKey: ["rightsizing"],
     queryFn: () => apiFetch("/rightsizing/recommendations"),
+    retry: false,
   });
+  const noData = noDataReason(error);
 
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 60_000 });
   const aiDisabled = settings?.ai_rightsizing_enabled === false;
@@ -95,6 +97,22 @@ export default function RightSizing() {
       )}
 
       {isLoading && !recs.length && <p className="text-muted">Collecting metrics…</p>}
+
+      {noData && (
+        <div className="empty">
+          <div className="empty-title">{noData.failed ? "Right-sizing couldn't run" : "No right-sizing data yet"}</div>
+          <div className="empty-body">
+            {noData.failed
+              ? <>The last run failed: <code>{noData.failed}</code></>
+              : "It needs VM metrics from Grafana (Settings → Connection)."}
+            {" "}Click Refresh to run it now; with AI insights on, this takes a while.
+          </div>
+        </div>
+      )}
+      {error && !noData && <p className="text-danger">{errorDetail(error)}</p>}
+      {!isLoading && !error && recs.length === 0 && (
+        <div className="empty"><div className="empty-title">No VMs found</div></div>
+      )}
 
       {/* ── Summary row ── */}
       {recs.length > 0 && (
@@ -229,6 +247,20 @@ export default function RightSizing() {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** For the 503 the API sends before right-sizing has run: why there's no data (failed = the
+ *  last run's error, if it failed). Null for any other error. */
+function noDataReason(err: unknown): { failed: string | null } | null {
+  if (!err) return null;
+  const msg = String(err instanceof Error ? err.message : err);
+  try {
+    const detail = JSON.parse(msg.slice(msg.indexOf("{"))).detail;
+    if (detail?.code === "no_data") return { failed: detail.error ?? null };
+  } catch {
+    // not JSON
+  }
+  return null;
+}
 
 function pctColor(v: number | null, low: number, high: number): string {
   if (v === null) return "var(--gray-300)";

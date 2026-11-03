@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+from importlib import metadata
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -33,9 +34,14 @@ async def get_version():
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     tag    = _git("describe", "--tags", "--exact-match")
 
+    # The version file is the image's; after an in-app update the installed package is newer.
+    try:
+        pkg_ver = f"v{metadata.version('pcd-ops')}"
+    except metadata.PackageNotFoundError:
+        pkg_ver = None
     resolved_tag = (
         tag.stdout.strip() if tag.returncode == 0
-        else file_ver or None
+        else pkg_ver or file_ver or None
     )
     return {
         "commit": commit.stdout.strip() if commit.returncode == 0 else (file_ver or "unknown"),

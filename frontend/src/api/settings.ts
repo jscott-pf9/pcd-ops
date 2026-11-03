@@ -62,3 +62,11 @@ export const testAI = (body: AIRequest) =>
 export const testMetrics = (body: { grafana_url: string; grafana_token: string; prometheus_url: string }) =>
   apiFetch<{ ok: boolean; grafana_url: string; datasource?: string; prometheus_url?: string; error?: string }>(
     "/settings/metrics/test", { method: "POST", body: JSON.stringify(body) });
+
+export interface SSHKey { path: string; public_key: string | null; generated: boolean }
+
+export const getSSHKey = () => apiFetch<SSHKey>("/settings/ssh/key");
+
+/** Makes a key pair on the appliance and uses it for the hypervisors; returns its public key. */
+export const generateSSHKey = (replace: boolean) =>
+  apiFetch<SSHKey>("/settings/ssh/key", { method: "POST", body: JSON.stringify({ replace }) });

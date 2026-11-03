@@ -2,7 +2,7 @@
 
 
 
-**Version:** 0.5.0  
+**Version:** 0.6.0  
 **Base URL:** `/api`  
 **Auth:** PCD login (session cookie). See *Authentication* below.
 
@@ -725,6 +725,30 @@ run a query through it.
 
 ---
 
+### **GET** `/api/settings/ssh/key`
+
+The public key of the configured hypervisor SSH key, to add to authorized_keys.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/settings/ssh/key`
+
+Generate an ed25519 key pair on the appliance and use it for the hypervisors. The private
+
+key never leaves the appliance. Replacing a working key needs replace=true.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `replace` | boolean | no | `false` | Replace |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ### **GET** `/api/health`
 
 Unauthenticated and cheap (no PCD calls), for the catalog's probe (APPLIANCE_STANDARD §6).
@@ -836,6 +860,8 @@ Delete a capacity report.
 ### **GET** `/api/rightsizing/recommendations`
 
 Return VM right-sizing recommendations with CPU/memory usage metrics and AI-generated analysis.
+
+503 no_data until the first run succeeds; `error` says why the last one failed.
 
 **Response:** 200 — Successful Response  
 

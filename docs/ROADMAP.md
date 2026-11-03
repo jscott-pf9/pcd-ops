@@ -1,6 +1,6 @@
 # PCD Ops — Roadmap
 
-> Last updated: 2026-11-02 · Current release: 0.6.0 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
+> Last updated: 2026-11-03 · Current release: 0.6.1 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
 
 **Legend:** ✅ done · 🧪 built, needs lab/field validation · 🔄 partly done · ⬜ not started
 
@@ -202,7 +202,7 @@ Here:
 
 - ✅ SSH tail of hypervisor logs; natural-language queries (Phase 1)
 - ⬜ **Pin SSH host keys.** Today they're accepted automatically; Phase 8 needs this before it touches hosts.
-- ⬜ **Hypervisor SSH key from the web UI:** generate a key pair on the appliance and show the public key to install on hosts. Today the key file has to be put on the appliance from the console's emergency shell, or a password used.
+- 🧪 **Hypervisor SSH key from the web UI:** Settings → Connection → **Generate key** makes an ed25519 key pair in the state dir and shows the public key to add to each host's `authorized_keys`; the private key never leaves the appliance (0.6.1).
 - ⬜ Time-range queries and kept history. Today there's one snapshot of the last 100–300 lines per file every 15 minutes.
 - ⬜ Control-plane logs, from wherever PCD exposes them.
 

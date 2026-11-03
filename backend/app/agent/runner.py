@@ -39,6 +39,7 @@ JOB_CHECK_INTERVAL = 5 * 60    # scheduled jobs
 TICK = 60                      # how often the scheduler wakes up
 
 _is_running = False
+RIGHTSIZING_ERROR = "rightsizing: "   # prefix of a failed right-sizing run's error, for its page
 
 
 def _can_run(tier: str) -> bool:
@@ -127,8 +128,9 @@ async def run_slow() -> None:
         _is_running = False
 
 
-async def run_daily() -> None:
-    """Right-sizing AI analysis — gated by configured schedule."""
+async def run_daily(force: bool = False) -> None:
+    """Right-sizing AI analysis, per its schedule in Settings. It also runs when it has never run
+    (so the page isn't empty until the first scheduled time) and when force is set (Refresh)."""
     global _is_running
     if _is_running:
         logger.info("Agent already running — skipping daily run.")
@@ -137,7 +139,9 @@ async def run_daily() -> None:
         return
 
     from app.config import settings
-    if not _ai_feature_due("rightsizing:recommendations", settings.ai_rightsizing_schedule, True):
+    never_ran = "rightsizing:recommendations" not in db.cache_meta()
+    if not (force or never_ran or _ai_feature_due("rightsizing:recommendations",
+                                                   settings.ai_rightsizing_schedule, True)):
         logger.info("Right-sizing collection skipped (not yet due per schedule '%s').",
                     settings.ai_rightsizing_schedule)
         return
@@ -149,7 +153,7 @@ async def run_daily() -> None:
         db.run_finish(run_id, "success")
         logger.info("Daily collection run complete (run_id=%d).", run_id)
     except Exception as e:
-        db.run_finish(run_id, "error", str(e))
+        db.run_finish(run_id, "error", f"{RIGHTSIZING_ERROR}{e}")
         logger.exception("Daily collection run failed (run_id=%d).", run_id)
         os_service.report_background_failure(e)
     finally:
@@ -160,7 +164,7 @@ async def run_all() -> None:
     """Run all tiers sequentially. Used for on-demand triggers."""
     await run_fast()
     await run_slow()
-    await run_daily()
+    await run_daily(force=True)
 
 
 async def is_running() -> bool:
