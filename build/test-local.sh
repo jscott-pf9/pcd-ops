@@ -12,6 +12,7 @@
 #   PORT=8180            host port forwarded to guest :80
 #   TIMEOUT=300          seconds to wait for /api/health
 #   KEEP=1               leave the VM running (skips the offline disk checks)
+#   DISK_GB=60           disk size, as the catalog's flavor gives it (the root fs must grow)
 #
 # Needs: qemu-system-x86_64 (KVM), qemu-img, genisoimage, OVMF, sfdisk + debugfs (e2fsprogs).
 set -euo pipefail
@@ -21,13 +22,14 @@ FIRMWARE=${FIRMWARE:-uefi}
 USER_DATA=${1:-build/user-data.sample}
 PORT=${PORT:-8180}
 TIMEOUT=${TIMEOUT:-300}
+DISK_GB=${DISK_GB:-60}
 RUN=${RUN:-build/run/$FIRMWARE}
 IMAGE=${IMAGE:-$(ls -t deploy/packer/alpine/output/*/pcd-ops-*.qcow2 2>/dev/null | head -1)}
 [ -f "${IMAGE:-}" ] || { echo "no image found; build first: deploy/build-image.sh" >&2; exit 1; }
 echo "==> Image: $IMAGE  firmware: $FIRMWARE  user-data: $USER_DATA"
 
 rm -rf "$RUN" && mkdir -p "$RUN/cd/openstack/latest"
-qemu-img create -q -f qcow2 -b "$(realpath "$IMAGE")" -F qcow2 "$RUN/disk.qcow2"
+qemu-img create -q -f qcow2 -b "$(realpath "$IMAGE")" -F qcow2 "$RUN/disk.qcow2" "${DISK_GB}G"
 cp "$USER_DATA" "$RUN/cd/openstack/latest/user_data"
 echo '{"uuid": "00000000-0000-4000-8000-000000000002", "hostname": "pcd-ops-test", "name": "pcd-ops-test"}' \
   > "$RUN/cd/openstack/latest/meta_data.json"
@@ -106,5 +108,19 @@ if guest_cat /etc/pcd-app/config.env | grep -q .; then
 else
   echo "    (missing)"
 fi
+echo "==> root filesystem (disk ${DISK_GB} GB):"
+root_gb=$(/sbin/debugfs -c -R stats "$RUN/disk.raw?offset=$offset" 2>/dev/null | awk '
+  /^Block count:/ {n=$3} /^Block size:/ {b=$3} END {printf "%d", n * b / 1e9}')
+echo "    ${root_gb} GB"
+[ "$root_gb" -ge $(( DISK_GB * 9 / 10 )) ] || { echo "    did not grow to the disk"; healthy=; }
+echo "==> metrics store (pcd-ops-metrics):"
+if guest_cat /var/log/pcd-ops/metrics.log | grep -q 'http://127.0.0.1:8428'; then
+  echo "    listening on 127.0.0.1:8428 only"
+else
+  echo "    did not start:"; guest_cat /var/log/pcd-ops/metrics.log | tail -5 | sed 's/^/    /'
+  healthy=
+fi
+/sbin/debugfs -c -R "ls /var/lib/pcd-ops" "$RUN/disk.raw?offset=$offset" 2>/dev/null | tr -s ' ' '\n' \
+  | grep -qx scrape.yml && echo "    scrape.yml written by PCD Ops" || { echo "    no scrape.yml"; healthy=; }
 rm -f "$RUN/disk.raw"
 [ -n "$healthy" ]

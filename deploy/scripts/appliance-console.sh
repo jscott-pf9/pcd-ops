@@ -107,6 +107,7 @@ draw_advanced() {
   printf "  ${W}│${N}  ${Y}[U]${N}  Force app update (git pull + rebuild)  ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[P]${N}  Patch OS (apk update + upgrade)        ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[L]${N}  View app logs                          ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[M]${N}  Metrics store (status, restart)        ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[N]${N}  Network info                           ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[R]${N}  Reset setup (forget background access) ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[X]${N}  Emergency shell                        ${W}│${N}\n"
@@ -166,6 +167,24 @@ do_view_logs() {
   fi
 }
 
+do_metrics_store() {
+  printf "${CLS}"
+  printf "\n  ${W}Metrics Store${N} ${D}— VictoriaMetrics on 127.0.0.1:8428${N}\n"
+  printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
+  rc-service pcd-ops-metrics status 2>&1 | sed 's/^/  /'
+  printf "\n  Data: %s   Disk free: %s\n" \
+    "$(du -sh /var/lib/pcd-ops/metrics 2>/dev/null | cut -f1)" \
+    "$(df -h /var/lib/pcd-ops | awk 'NR==2 {print $4 " of " $2}')"
+  printf "\n  ${D}Last log lines:${N}\n"
+  tail -n 8 /var/log/pcd-ops/metrics.log 2>/dev/null | cut -c1-150 | sed 's/^/  /'
+  printf "\n  Type ${W}restart${N} to restart it, or Enter to go back: "
+  read -r answer
+  if [ "$answer" = "restart" ]; then
+    rc-service pcd-ops-metrics restart
+    press_any_key
+  fi
+}
+
 do_network_info() {
   printf "${CLS}"
   printf "\n  ${W}Network Information${N}\n"
@@ -210,6 +229,7 @@ advanced_menu() {
       u) do_force_update ;;
       p) do_patch_os ;;
       l) do_view_logs ;;
+      m) do_metrics_store ;;
       n) do_network_info ;;
       r) do_reset_setup ;;
       x) do_emergency_shell ;;

@@ -39,7 +39,7 @@
   "requirements": {
     "vcpus": 2,
     "memory_mb": 4096,
-    "disk_gb": 20
+    "disk_gb": 60
   },
   "network": {
     "port_security": true,
