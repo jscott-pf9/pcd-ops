@@ -88,17 +88,19 @@ async def collect_inventory() -> None:
         _hyp_vcpus[host] += fl.get("vcpus") or 0
         _hyp_mem[host] += fl.get("ram") or 0
 
-    # ── Fetch individual hypervisor details for cpu_info ──────────────────────
-    # cpu_info is only returned by GET /os-hypervisors/{id} (the show endpoint),
-    # not by GET /os-hypervisors/detail (the list endpoint).
-    _hyp_detail_raw = await asyncio.gather(*[
-        asyncio.to_thread(lambda hid=h.id: conn.compute.get_hypervisor(hid))
-        for h in hypervisors
-    ], return_exceptions=True)
-    _hyp_detail: dict[str, any] = {
-        h.id: d for h, d in zip(hypervisors, _hyp_detail_raw)
-        if not isinstance(d, Exception)
-    }
+    # ── Hypervisor details that Nova 2.88 dropped ───────────────────────────────
+    # cpu_info, memory_mb, vcpus and local_gb are gone from the API since microversion
+    # 2.88, which openstacksdk negotiates; 2.87 still returns them, for all hosts at once.
+    def _legacy_detail() -> dict[str, dict]:
+        r = conn.compute.get("/os-hypervisors/detail", microversion="2.87")
+        r.raise_for_status()
+        return {str(d.get("id")): d for d in r.json().get("hypervisors", [])}
+
+    try:
+        _hyp_detail = await asyncio.to_thread(_legacy_detail)
+    except Exception as e:
+        logger.warning("Hypervisor details (microversion 2.87) unavailable: %s", e)
+        _hyp_detail = {}
 
     # ── SSH hardware collection (NICs + physical RAM) ──────────────────────────
     from app.services.ssh import collect_host_hardware
@@ -123,9 +125,7 @@ async def collect_inventory() -> None:
 
     # ── Parse cpu_info JSON ────────────────────────────────────────────────────
     def _parse_cpu_info(h) -> dict:
-        # Prefer the individually-fetched detail which carries cpu_info
-        src = _hyp_detail.get(h.id, h)
-        raw = getattr(src, "cpu_info", None) or getattr(h, "cpu_info", None)
+        raw = _hyp_detail.get(str(h.id), {}).get("cpu_info") or getattr(h, "cpu_info", None)
         if not raw:
             return {}
         if isinstance(raw, dict):
@@ -139,12 +139,14 @@ async def collect_inventory() -> None:
     for h in hypervisors:
         ci    = _parse_cpu_info(h)
         topo  = ci.get("topology") or {}
-        sockets = topo.get("sockets")
-        cores   = topo.get("cores")
-        threads = topo.get("threads")
+        hw    = _hw_by_host.get(h.name, {})
+        old   = _hyp_detail.get(str(h.id), {})
+        # The host's own lscpu when SSH works; Nova's view otherwise
+        sockets = hw.get("cpu_sockets") or topo.get("sockets")
+        cores   = hw.get("cpu_cores") or topo.get("cores")
+        threads = hw.get("cpu_threads") or topo.get("threads")
         logical = (sockets * cores * threads) if (sockets and cores and threads) else None
 
-        hw              = _hw_by_host.get(h.name, {})
         ssh_ok          = (hw.get("connected") if h.name in _ssh_attempted else None)
         nic_count       = hw.get("nic_count")
         ram_mb_ssh      = hw.get("ram_mb")
@@ -161,14 +163,16 @@ async def collect_inventory() -> None:
             "service_host":     (h.service_details or {}).get("host"),
             # Physical specs
             "cpu_vendor":       ci.get("vendor"),
-            "cpu_model":        ci.get("model"),
+            # Nova has libvirt's CPU model name (e.g. "EPYC-Rome-v5"); lscpu has the real one
+            "cpu_model":        hw.get("cpu_model") or ci.get("model"),
             "cpu_arch":         ci.get("arch"),
             "cpu_sockets":      sockets,
             "cpu_cores":        cores,
             "cpu_threads":      threads,
             "cpu_logical":      logical,
-            # Nova 2.88+ removed memory_mb from API; fall back to SSH /proc/meminfo
-            "memory_mb_total":  h.memory_size or ram_mb_ssh or None,
+            # Usable by Linux (MemTotal); installed DIMMs are more (firmware, iGPU, crash kernel)
+            "memory_mb_total":  h.memory_size or old.get("memory_mb") or ram_mb_ssh or None,
+            "memory_mb_installed": hw.get("ram_mb_installed"),
             "nic_count":        nic_count,
             "ssh_ok":           ssh_ok,
             "os_version":       os_version,
@@ -176,11 +180,11 @@ async def collect_inventory() -> None:
             "hypervisor_type":  getattr(h, "hypervisor_type", None),
             "hypervisor_version": getattr(h, "hypervisor_version", None),
             # Utilisation (Nova 2.88+ may omit; derived from server data as fallback)
-            "vcpus_total":      h.vcpus or logical or None,
+            "vcpus_total":      h.vcpus or old.get("vcpus") or logical or None,
             "vcpus_used":       h.vcpus_used if h.vcpus_used is not None else _hyp_vcpus.get(h.name),
             "memory_mb_used":   h.memory_used if h.memory_used is not None else _hyp_mem.get(h.name),
-            "disk_gb_total":    h.local_disk_size or None,
-            "disk_gb_used":     h.local_disk_used or None,
+            "disk_gb_total":    h.local_disk_size or old.get("local_gb") or None,
+            "disk_gb_used":     h.local_disk_used or old.get("local_gb_used") or None,
             "running_vms":      h.running_vms if h.running_vms is not None else _hyp_vms.get(h.name, 0),
         })
     db.cache_set("inventory:hypervisors", hyp_records)

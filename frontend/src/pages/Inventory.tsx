@@ -245,13 +245,13 @@ export default function Inventory() {
           name: "Hypervisors",
           aoa: [
             ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs",
-             "RAM GB","RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
+             "RAM GB","RAM Usable GB","RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
              "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP",
              ...HYP_METRIC_HEADERS],
             ...(hypervisors ?? []).map((h: any) => [
               h.hostname, h.state, h.status, h.running_vms ?? "",
               h.cpu_sockets ?? "", h.cpu_cores ?? "", h.cpu_threads ?? "", h.cpu_logical ?? "",
-              h.memory_mb_total ? Math.round(h.memory_mb_total / 1024) : "",
+              ramGb(h) ?? "", h.memory_mb_total ? Math.round(h.memory_mb_total / 1024) : "",
               h.memory_mb_used ? Math.round(h.memory_mb_used / 1024) : "",
               h.cpu_vendor ?? "", h.cpu_model ?? "", h.cpu_arch ?? "",
               h.nic_count ?? "",
@@ -603,14 +603,14 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
       </div>
       <TableWrap isLoading={isLoading} total={data?.length} filtered={sorted.length}
         onExport={() => exportCsv("hypervisors.csv",
-          ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs","RAM GB",
+          ["Hostname","State","Status","VMs","Sockets","Cores/Socket","Threads","Logical CPUs","RAM GB","RAM Usable GB",
            "RAM Allocated GB","CPU Vendor","CPU Model","CPU Arch","NICs","SSH",
            "OS Version","Pending Patches","Hypervisor Type","Hypervisor Version","IP",
              ...HYP_METRIC_HEADERS],
           sorted.map((h: any) => [
             h.hostname, h.state, h.status, h.running_vms ?? "",
             h.cpu_sockets ?? "", h.cpu_cores ?? "", h.cpu_threads ?? "", h.cpu_logical ?? "",
-            h.memory_mb_total ? Math.round(h.memory_mb_total / 1024) : "",
+            ramGb(h) ?? "", h.memory_mb_total ? Math.round(h.memory_mb_total / 1024) : "",
             h.memory_mb_used ? Math.round(h.memory_mb_used / 1024) : "",
             h.cpu_vendor ?? "", h.cpu_model ?? "", h.cpu_arch ?? "",
             h.nic_count ?? "",
@@ -629,9 +629,13 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
             <td>{h.running_vms ?? "—"}</td>
             <td>{h.cpu_sockets ?? "—"}</td>
             <td>{h.cpu_cores ?? "—"}</td>
-            <td>{h.memory_mb_total ? `${Math.round(h.memory_mb_total / 1024)} GB` : "—"}</td>
-            <td className="text-mono" style={{ fontSize: 11, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {[h.cpu_vendor, h.cpu_model].filter(Boolean).join(" ") || "—"}
+            <td title={h.memory_mb_installed && h.memory_mb_total
+                  ? `${Math.round(h.memory_mb_total / 1024)} GB usable by the OS` : undefined}>
+              {ramGb(h) != null ? `${ramGb(h)} GB` : "—"}
+            </td>
+            <td className="text-mono" title={cpuName(h) ?? undefined}
+              style={{ fontSize: 11, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {cpuName(h) ?? "—"}
             </td>
             <td className="text-mono" style={{ fontSize: 11 }}>{h.hypervisor_type ?? "—"}</td>
             {hasMetrics && <LoadCells h={h} />}
@@ -683,7 +687,11 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
           )}
 
           <DrawerSection label="Memory" />
-          <DrawerRow label="Physical RAM"  value={drawer.memory_mb_total ? `${Math.round(drawer.memory_mb_total / 1024)} GB` : "—"} />
+          {drawer.memory_mb_installed != null && (
+            <DrawerRow label="Installed"   value={`${Math.round(drawer.memory_mb_installed / 1024)} GB`} />
+          )}
+          <DrawerRow label={drawer.memory_mb_installed != null ? "Usable by OS" : "Physical RAM"}
+            value={drawer.memory_mb_total ? `${Math.round(drawer.memory_mb_total / 1024)} GB` : "—"} />
           {drawer.memory_mb_used != null && (
             <DrawerRow label="Allocated"   value={`${Math.round(drawer.memory_mb_used / 1024)} GB`} />
           )}
@@ -757,6 +765,19 @@ function HypervisorsTable({ data, isLoading, search, servers }: any) {
       )}
     </>
   );
+}
+
+/** Installed RAM (DIMMs, over SSH) when known, else what the OS can use; in GB. */
+function ramGb(h: any): number | null {
+  const mb = h.memory_mb_installed ?? h.memory_mb_total;
+  return mb ? Math.round(mb / 1024) : null;
+}
+
+/** "AMD Ryzen 7 5700U…" from lscpu already names the vendor; Nova's "EPYC-Rome-v5" doesn't. */
+function cpuName(h: any): string | null {
+  const { cpu_vendor: v, cpu_model: m } = h;
+  if (!m) return v || null;
+  return v && !m.toLowerCase().startsWith(v.toLowerCase()) ? `${v} ${m}` : m;
 }
 
 const HYP_METRIC_HEADERS = ["CPU %", "Memory %", "Disk %", "Net In B/s", "Net Out B/s"];
