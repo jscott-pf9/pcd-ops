@@ -11,10 +11,12 @@ OpenStack SDK calls are blocking, so they run via asyncio.to_thread().
 import asyncio
 import json
 import logging
+import math as _math
+from collections import Counter
 from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
-from app.services import db, local_metrics, metrics_catalog, server_groups, storage
+from app.services import db, local_metrics, metrics_catalog, reclamation, server_groups, storage
 from app.services.openstack import get_connection
 from app.services.prometheus import MetricsNotConfigured, prometheus_client
 
@@ -121,7 +123,9 @@ async def collect_inventory() -> None:
         asyncio.to_thread(lambda: list(conn.network.ips())),
         asyncio.to_thread(lambda: list(conn.image.images())),
         asyncio.to_thread(lambda: list(conn.network.security_groups())),
-        asyncio.to_thread(lambda: list(conn.network.ports(device_owner="compute:nova"))),
+        # VM ports: device_owner is compute:<availability zone>, e.g. compute:nova
+        asyncio.to_thread(lambda: [p for p in conn.network.ports()
+                                   if (p.device_owner or "").startswith("compute:")]),
         asyncio.to_thread(lambda: list(conn.compute.flavors())),
         asyncio.to_thread(lambda: list(conn.compute.keypairs())),
         asyncio.to_thread(lambda: list(conn.compute.aggregates())),
@@ -371,6 +375,8 @@ async def collect_inventory() -> None:
         iid = (s.image or {}).get("id", "") if isinstance(s.image, dict) else ""
         if iid:
             image_usage.setdefault(iid, []).append(s.name)
+    # Volumes made from an image use it too (boot-from-volume VMs show no image in Nova)
+    volume_image_use = Counter((v.volume_image_metadata or {}).get("image_id") for v in volumes)
     db.cache_set("inventory:images", [
         {
             "id":           img.id,
@@ -383,6 +389,7 @@ async def collect_inventory() -> None:
             "is_protected": img.is_protected,
             "created_at":   img.created_at,
             "used_by_vms":  image_usage.get(img.id, []),
+            "used_by_volumes": volume_image_use.get(img.id, 0),
             **_image_kind({**(img.properties or {}), "instance_uuid": img.instance_uuid}),
             "min_disk_gb":  img.min_disk,
             "min_ram_mb":   img.min_ram,
@@ -509,67 +516,235 @@ async def collect_inventory() -> None:
 
 # ── Reclamation ────────────────────────────────────────────────────────────────
 
+IDLE_REFRESH_S = 3600   # idle VMs are worked out from up to weeks of data: at most hourly
+
+
+async def _idle_stats(src: str | None) -> tuple[dict[str, dict], dict]:
+    """95th percentile of each VM's CPU %, network bytes/s and IOPS over the idle window, by
+    server id, and the rule's settings. Recomputed at most hourly or when the settings change."""
+    from app.config import settings as _s
+    days = _s.reclamation_idle_days
+    rule = {"days": days, "cpu_pct": _s.reclamation_idle_cpu_pct,
+            "net_kbps": _s.reclamation_idle_net_kbps, "iops": _s.reclamation_idle_iops,
+            "source": src}
+    cached, at = db.cache_get("reclamation:idle_stats")
+    if (cached and at and cached.get("key") == rule
+            and (datetime.utcnow() - datetime.fromisoformat(at)).total_seconds() < IDLE_REFRESH_S):
+        return cached["stats"], cached["rule"]
+    key = dict(rule)
+    rule["note"] = None
+    stats: dict[str, dict] = {}
+    if src is None:
+        rule["note"] = ("No VM metrics: PCD Ops' metrics store has no data and no Grafana "
+                        "token is set.")
+    elif src == "local" and metrics_catalog._collected_days() < days:
+        rule["note"] = (f"Needs {days} days of metrics; PCD Ops' store has "
+                        f"{metrics_catalog._collected_days():.1f}.")
+    elif src == "pcd" and days > metrics_catalog.PCD_RETENTION_DAYS:
+        rule["note"] = (f"PCD's Grafana keeps {metrics_catalog.PCD_RETENTION_DAYS} days, less "
+                        f"than the {days}-day window.")
+    else:
+        def p95(expr: str) -> str:
+            return f"quantile_over_time(0.95, ({expr})[{days}d:1h])"
+        vm = lambda m: metrics_catalog.promql("vm", m, src)  # noqa: E731
+        exprs = {"cpu_pct": vm("cpu_pct"), "iops": vm("disk_iops"),
+                 "net_bps": f"({vm('net_rx_bps')}) + ({vm('net_tx_bps')})"}
+        prom = metrics_catalog.client(src)
+        results = await asyncio.gather(*(prom.query(p95(e)) for e in exprs.values()),
+                                       return_exceptions=True)
+        for name, res in zip(exprs, results):
+            if isinstance(res, Exception):
+                rule["note"] = f"Couldn't query VM metrics: {res}"
+                stats = {}
+                break
+            for row in res:
+                dom = row["metric"].get("domain")
+                try:
+                    v = float(row["value"][1])
+                except (TypeError, ValueError):
+                    continue
+                if dom and _math.isfinite(v):
+                    stats.setdefault(dom, {})[name] = round(v, 3)
+    db.cache_set("reclamation:idle_stats", {"key": key, "stats": stats, "rule": rule})
+    return stats, rule
+
+
+async def _libvirt_domains(
+        src: str | None) -> tuple[list[dict] | None, set[str] | None, str | None]:
+    """Every domain each hypervisor's libvirt exporter reports, and the hypervisors whose
+    exporter answered its last scrape. Only PCD Ops' own store labels them by hypervisor."""
+    if src != "local":
+        return None, None, ("Comparing PCD's VMs with what the hosts run needs PCD Ops' "
+                            "metrics store.")
+    try:
+        meta, up = await asyncio.gather(
+            metrics_catalog.local_client.query("libvirt_domain_info_meta"),
+            metrics_catalog.local_client.query('up{job="libvirt"}'),
+        )
+    except Exception as e:
+        return None, None, f"Couldn't read libvirt data from PCD Ops' metrics store: {e}"
+    hosts_up = {r["metric"]["hypervisor_id"] for r in up
+                if r["value"][1] == "1" and r["metric"].get("hypervisor_id")}
+    return [r["metric"] for r in meta if r["metric"].get("domain")], hosts_up, None
+
+
+def _deleted_users(conn, user_ids: set[str]) -> set[str]:
+    """User IDs Keystone says don't exist. Looked up one by one: SSO users may be missing from a
+    user list but still resolve by ID."""
+    from openstack.exceptions import ResourceNotFound
+    gone = set()
+    for uid in user_ids:
+        try:
+            conn.identity.get_user(uid)
+        except ResourceNotFound:
+            gone.add(uid)
+        except Exception as e:  # can't tell: don't call it deleted
+            logger.debug("User lookup %s failed: %s", uid, e)
+    return gone
+
+
 async def collect_reclamation() -> None:
+    """Reclamation & Warnings: what could be freed, and what looks wrong
+    (services/reclamation.py has the rules)."""
     logger.info("Collecting reclamation candidates…")
     conn = get_connection()
+    run_start = datetime.utcnow().isoformat()
+    notes: dict[str, str] = {}
 
-    all_volumes = await asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True)))
-    all_servers = await asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True)))
-    all_fips = await asyncio.to_thread(lambda: list(conn.network.ips()))
+    async def optional(name: str, fn):
+        try:
+            return await asyncio.to_thread(fn)
+        except Exception as e:
+            logger.warning("Reclamation: couldn't list %s: %s", name, e)
+            notes[name] = f"Couldn't list {name} from PCD: {e}"
+            return None
 
-    attached_gb: dict[str, int] = {}
-    for v in all_volumes:
-        for att in (v.attachments or []):
-            sid = att.get("server_id")
-            if sid:
-                attached_gb[sid] = attached_gb.get(sid, 0) + (v.size or 0)
+    (servers_raw, volumes_raw, fips_raw, projects_raw, ports_raw, routers_raw, networks_raw,
+     images_raw, groups_raw, sgs_raw, snaps_raw, roles_raw) = await asyncio.gather(
+        asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True))),
+        asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True))),
+        optional("floating IPs", lambda: list(conn.network.ips())),
+        optional("projects", lambda: list(conn.identity.projects())),
+        optional("ports", lambda: list(conn.network.ports())),
+        optional("routers", lambda: list(conn.network.routers())),
+        optional("networks", lambda: list(conn.network.networks())),
+        optional("images", lambda: list(conn.image.images())),
+        optional("server groups", lambda: list(conn.compute.server_groups(all_projects=True))),
+        optional("security groups", lambda: list(conn.network.security_groups())),
+        optional("snapshots", lambda: list(conn.block_storage.snapshots(all_projects=True))),
+        optional("role assignments", lambda: list(conn.identity.role_assignments())),
+    )
 
-    stopped_servers = [
-        {
-            "id": s.id,
-            "name": s.name,
-            "status": s.status,
-            "project_id": s.project_id,
-            "updated_at": s.updated_at,
-            "attached_disk_gb": attached_gb.get(s.id, 0),
-            "vcpus": (s.flavor or {}).get("vcpus") or 0,
-            "ram_mb": (s.flavor or {}).get("ram") or 0,
-        }
-        for s in all_servers
-        if s.status in ("SHUTOFF", "ERROR", "SHELVED_OFFLOADED")
-    ]
+    servers = [reclamation.server_record(s) for s in servers_raw]
+    volumes = [reclamation.volume_record(v) for v in volumes_raw]
+    fips = None if fips_raw is None else [{
+        "id": f.id, "floating_ip_address": f.floating_ip_address, "project_id": f.project_id,
+        "port_id": f.port_id, "router_id": f.router_id, "updated_at": f.updated_at,
+    } for f in fips_raw]
+    ports = None if ports_raw is None else [reclamation.port_record(p) for p in ports_raw]
+    routers = None if routers_raw is None else [{
+        "id": r.id, "name": r.name, "status": r.status, "project_id": r.project_id,
+        "gateway": bool(r.external_gateway_info),
+    } for r in routers_raw]
+    networks = None if networks_raw is None else [{
+        "id": n.id, "name": n.name, "project_id": n.project_id, "shared": bool(n.is_shared),
+        "external": bool(n.is_router_external), "subnet_ids": n.subnet_ids or [],
+        "created_at": n.created_at,
+    } for n in networks_raw]
+    images = None if images_raw is None else [{
+        "id": i.id, "name": i.name or "(unnamed)", "visibility": i.visibility, "status": i.status,
+        "size_gb": round((i.size or 0) / (1024**3), 2), "is_protected": bool(i.is_protected),
+        "owner": i.owner, "created_at": i.created_at, "updated_at": i.updated_at,
+        **_image_kind({**(i.properties or {}), "instance_uuid": i.instance_uuid}),
+    } for i in images_raw]
+    groups = None if groups_raw is None else [{
+        "id": g.id, "name": g.name, "project_id": g.project_id,
+        "policy": g.policy or (g.policies or [None])[0], "members": g.member_ids or [],
+    } for g in groups_raw]
 
-    unattached_volumes = [
-        {
-            "id": v.id,
-            "name": v.name or "(unnamed)",
-            "size": v.size,
-            "volume_type": v.volume_type,
-            "availability_zone": v.availability_zone,
-            "is_bootable": v.is_bootable,
-            "description": v.description or "",
-            "project_id": v.project_id,
-            "created_at": v.created_at,
-            "updated_at": v.updated_at,
-        }
-        for v in all_volumes
-        if v.status == "available" and not v.attachments
-    ]
+    # VMs against what the hosts run, and who owns them
+    src = await metrics_catalog.source()
+    domains, hosts_up, libvirt_note = await _libvirt_domains(src)
+    if libvirt_note:
+        notes["libvirt"] = libvirt_note
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    host_of = {}
+    for h in hyps or []:
+        for key in (h.get("service_host"), h.get("hostname")):
+            if key:
+                host_of[key] = str(h["id"])
+    project_ids = None if projects_raw is None else {p.id for p in projects_raw}
+    deleted_users = await asyncio.to_thread(
+        _deleted_users, conn, {s["user_id"] for s in servers if s["user_id"]})
+    orphans = reclamation.orphaned_vms(
+        servers, domains, hosts_up, host_of,
+        project_ids if project_ids is not None else {s["project_id"] for s in servers},
+        deleted_users)
+    idle_stats, idle_rule = await _idle_stats(await metrics_catalog.source(
+        min_days=idle_rule_days()))
+    if idle_rule["note"]:
+        notes["idle"] = idle_rule["note"]
+    th = {"cpu_pct": idle_rule["cpu_pct"], "net_kbps": idle_rule["net_kbps"],
+          "iops": idle_rule["iops"],
+          "window_start": (datetime.utcnow() - timedelta(days=idle_rule["days"])).isoformat()}
 
-    unused_floating_ips = [
-        {"id": fip.id, "floating_ip_address": fip.floating_ip_address, "project_id": fip.project_id}
-        for fip in all_fips
-        if fip.port_id is None
-    ]
+    cats: dict[str, list[dict] | None] = {
+        "stopped_servers": reclamation.stopped_servers(servers, volumes),
+        "idle_servers": reclamation.idle_servers(servers, idle_stats, th),
+        "orphaned_vms": orphans,
+        "empty_server_groups": None if groups is None else reclamation.empty_server_groups(groups),
+        "unattached_volumes": reclamation.unattached_volumes(
+            volumes, None if images is None else {i["id"] for i in images}),
+        "unused_images": None if images is None else reclamation.unused_images(
+            images, reclamation.image_use(servers, volumes, domains)),
+        "unused_floating_ips": None if fips is None else reclamation.unused_floating_ips(fips),
+        "orphaned_ports": None if ports is None or routers is None else reclamation.orphaned_ports(
+            ports, {s["id"] for s in servers}, {r["id"] for r in routers}),
+        "unused_routers": None if None in (routers, ports, fips) else reclamation.unused_routers(
+            routers, ports, fips),
+        "unused_networks": None if None in (networks, ports) else reclamation.unused_networks(
+            networks, ports),
+    }
+    if None in (projects_raw, ports_raw, routers_raw, networks_raw, images_raw, sgs_raw,
+                snaps_raw, fips_raw):
+        cats["empty_tenants"] = None
+    else:
+        owned = Counter()
+        for coll in (servers, volumes, fips, ports, routers, networks):
+            owned.update(r["project_id"] for r in coll)
+        owned.update(s.project_id for s in snaps_raw)
+        owned.update(i["owner"] for i in images)
+        owned.update(g.project_id for g in sgs_raw if g.name != "default")
+        roles = Counter((a.scope or {}).get("project", {}).get("id") for a in roles_raw or [])
+        cats["empty_tenants"] = reclamation.empty_tenants([{
+            "id": p.id, "name": p.name, "enabled": p.is_enabled, "description": p.description,
+            "domain_id": p.domain_id, "is_domain": p.is_domain,
+        } for p in projects_raw], owned, roles)
 
-    db.cache_set("reclamation:candidates", {
-        "stopped_servers": stopped_servers,
-        "unattached_volumes": unattached_volumes,
-        "unused_floating_ips": unused_floating_ips,
-    })
+    data: dict = {"notes": notes, "idle_rule": idle_rule,
+                  "orphan_check": {"source": src, "hosts_compared": len(hosts_up or ())}}
+    for name, items in cats.items():
+        if items is None:   # its source failed: keep first-seen ages for next time
+            data[name] = []
+            notes.setdefault(name, "Not checked this time: a list it needs couldn't be read.")
+            continue
+        first = db.seen_update(name, [c["id"] for c in items])
+        for c in items:
+            c["first_seen"] = first.get(c["id"])
+            c["since"] = reclamation.earliest(c["first_seen"], c.pop("since_hint", None))
+        data[name] = items
+    # A VM that looks orphaned for one run only is usually mid-migration or just deleted.
+    pending = [c for c in data["orphaned_vms"] if (c["first_seen"] or "") >= run_start]
+    data["orphaned_vms"] = [c for c in data["orphaned_vms"] if c not in pending]
+    data["orphan_check"]["pending"] = len(pending)
 
-    logger.info("Reclamation: %d stopped, %d unattached vols, %d unused FIPs",
-                len(stopped_servers), len(unattached_volumes), len(unused_floating_ips))
+    db.cache_set("reclamation:candidates", data)
+    logger.info("Reclamation: %s", {k: len(data[k]) for k in reclamation.CATEGORIES})
+
+
+def idle_rule_days() -> int:
+    from app.config import settings as _s
+    return _s.reclamation_idle_days
 
 
 # ── Capacity ───────────────────────────────────────────────────────────────────
@@ -898,7 +1073,8 @@ async def collect_snapshots() -> None:
 #   memory-pressure  — ram_avg >= HIGH (regardless of CPU)
 #   cpu-pressure     — cpu_avg >= HIGH
 #   right-sized      — both within LOW..HIGH band
-#   idle             — cpu_avg < LOW, ram_avg < LOW, near-zero I/O
+#   idle             — Reclamation's idle rule (services/reclamation.py: 95th-percentile
+#                      CPU, network and IOPS under Settings' thresholds over its window)
 #   no-data          — no Prometheus series found
 
 import re as _re
@@ -930,14 +1106,11 @@ RS_CPU_LOW  = 20.0   # % below → underutilised CPU
 RS_CPU_HIGH = 80.0   # % above → CPU-pressured
 RS_MEM_LOW  = 20.0   # % below → underutilised RAM
 RS_MEM_HIGH = 80.0   # % above → RAM-pressured
-RS_IO_IDLE  = 0.5    # avg IOPS below which disk is considered idle
 RS_STEP     = "2h"   # ~84 data points over 7 days
 RS_LOCAL_DAYS = 30            # with PCD Ops' own metrics store
 RS_LOCAL_STEP = "6h"          # 120 points over 30 days
 RS_LOCAL_MIN_DAYS = 7         # until the store has this much, use PCD's Grafana if set
 
-
-import math as _math
 
 def _series_from_range(data: list[dict]) -> list[dict]:
     """Flatten Prometheus range result → [{ts, v}], dropping non-finite values, ≤60 pts."""
@@ -1016,6 +1189,10 @@ async def collect_rightsizing() -> None:
         key=lambda f: (f["vcpus"], f["ram_mb"]),
     )
 
+    # Idle is Reclamation's rule, so both pages call the same VMs idle.
+    recl, _ = db.cache_get("reclamation:candidates")
+    idle_ids = {v["id"] for v in (recl or {}).get("idle_servers", [])}
+
     from app.config import settings as _settings
     ai_on = _settings.ai_rightsizing_enabled   # turned off for the rest of the run if AI fails
     recommendations = []
@@ -1048,11 +1225,7 @@ async def collect_rightsizing() -> None:
         elif cpu_avg is not None and cpu_avg >= RS_CPU_HIGH:
             classification = "cpu-pressure"
             risk = "high" if cpu_avg >= 90 else "medium"
-        elif (
-            (cpu_avg is None or cpu_avg < RS_CPU_LOW) and
-            (mem_avg is None or mem_avg < RS_MEM_LOW) and
-            (io_avg  is None or io_avg  < RS_IO_IDLE)
-        ):
+        elif uuid in idle_ids:
             classification = "idle"
             risk = "low"
         elif (

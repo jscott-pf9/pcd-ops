@@ -16,7 +16,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 
-from app.services import db
+from app.services import db, reclamation
 from app.services.openstack import get_connection
 
 logger = logging.getLogger(__name__)
@@ -302,91 +302,75 @@ async def _run_snapshot_rotate(config: dict) -> dict:
 
 
 async def _run_resource_reclamation(config: dict) -> dict:
+    """Stopped VMs and unattached volumes, chosen by the same rules as the Reclamation page
+    (services/reclamation.py). A volume's unattached time is the earlier of when PCD Ops first saw
+    it unattached and Cinder's updated_at (which a detach sets), never its age."""
     conn = get_connection()
     stopped_days      = int(config.get("stopped_days", 30))
     unattached_days   = int(config.get("unattached_days", 30))
     action            = config.get("action", "shelve")
     dry_run           = bool(config.get("dry_run", True))
-    cutoff_stopped    = datetime.utcnow() - timedelta(days=stopped_days)
-    cutoff_unattached = datetime.utcnow() - timedelta(days=unattached_days)
 
     tenants_cache, _ = db.cache_get("inventory:tenants")
     tenant_map = {t["id"]: t["name"] for t in (tenants_cache or [])}
 
-    servers, volumes = await asyncio.gather(
+    servers_raw, volumes_raw = await asyncio.gather(
         asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True))),
         asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True))),
     )
-
-    # Build server_id → attached_gb map
-    attached_gb: dict[str, int] = {}
-    for v in volumes:
-        for att in (v.attachments or []):
-            sid = att.get("server_id")
-            if sid:
-                attached_gb[sid] = attached_gb.get(sid, 0) + (v.size or 0)
+    servers = [reclamation.server_record(s) for s in servers_raw]
+    volumes = [reclamation.volume_record(v) for v in volumes_raw]
+    seen_volumes = db.seen_get("unattached_volumes")
 
     vms_actioned, volumes_deleted = [], []
 
-    for s in servers:
-        if s.status not in ("SHUTOFF", "ERROR", "SHELVED_OFFLOADED"):
+    for s in reclamation.stopped_servers(servers, volumes):
+        offline_days = _age_days(s["updated_at"])
+        if not s["updated_at"] or offline_days < stopped_days:
             continue
-        updated = s.updated_at
-        if isinstance(updated, str):
-            try:
-                updated = datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
-            except ValueError:
-                continue
-        if updated >= cutoff_stopped:
-            continue
-        offline_days = (datetime.utcnow() - updated).days
-        logger.info("reclamation: %s VM %s (%dd offline)", "DRY" if dry_run else action, s.name, offline_days)
+        logger.info("reclamation: %s VM %s (%dd offline)",
+                    "DRY" if dry_run else action, s["name"], offline_days)
         success = True
         if not dry_run:
             try:
                 if action == "delete":
-                    await asyncio.to_thread(lambda sid=s.id: conn.compute.delete_server(sid, force=True))
+                    await asyncio.to_thread(
+                        lambda sid=s["id"]: conn.compute.delete_server(sid, force=True))
                 else:
-                    await asyncio.to_thread(lambda sid=s.id: conn.compute.shelve_server(sid))
+                    await asyncio.to_thread(lambda sid=s["id"]: conn.compute.shelve_server(sid))
             except Exception as e:
-                logger.warning("Failed to %s VM %s: %s", action, s.name, e)
+                logger.warning("Failed to %s VM %s: %s", action, s["name"], e)
                 success = False
         if success:
             vms_actioned.append({
-                "id":           s.id,
-                "name":         s.name,
+                "id":           s["id"],
+                "name":         s["name"],
                 "action":       action,
                 "offline_days": offline_days,
-                "attached_gb":  attached_gb.get(s.id, 0),
-                "tenant_name":  tenant_map.get(s.project_id, "—"),
+                "attached_gb":  s["attached_disk_gb"],
+                "tenant_name":  tenant_map.get(s["project_id"], "—"),
             })
 
-    for v in volumes:
-        if v.status != "available" or v.attachments:
+    for v in reclamation.unattached_volumes(volumes):
+        since = reclamation.earliest(seen_volumes.get(v["id"]), v["since_hint"])
+        days = _age_days(since)
+        if not since or days < unattached_days:
             continue
-        created = v.created_at
-        if isinstance(created, str):
-            try:
-                created = datetime.fromisoformat(created.replace("Z", "+00:00")).replace(tzinfo=None)
-            except ValueError:
-                continue
-        if created >= cutoff_unattached:
-            continue
-        logger.info("reclamation: %s volume %s", "DRY" if dry_run else "DELETE", v.name or v.id)
+        logger.info("reclamation: %s volume %s", "DRY" if dry_run else "DELETE", v["name"])
         success = True
         if not dry_run:
             try:
-                await asyncio.to_thread(lambda vid=v.id: conn.block_storage.delete_volume(vid))
+                await asyncio.to_thread(lambda vid=v["id"]: conn.block_storage.delete_volume(vid))
             except Exception as e:
-                logger.warning("Failed to delete volume %s: %s", v.id, e)
+                logger.warning("Failed to delete volume %s: %s", v["id"], e)
                 success = False
         if success:
             volumes_deleted.append({
-                "id":              v.id,
-                "name":            v.name or "(unnamed)",
-                "size_gb":         v.size or 0,
-                "unattached_days": _age_days(v.created_at),
-                "tenant_name":     tenant_map.get(v.project_id, "—"),
+                "id":              v["id"],
+                "name":            v["name"],
+                "size_gb":         v["size"],
+                "unattached_days": days,
+                "tenant_name":     tenant_map.get(v["project_id"], "—"),
             })
 
     prefix = "[DRY RUN] " if dry_run else ""

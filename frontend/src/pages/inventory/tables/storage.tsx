@@ -115,7 +115,7 @@ export function ImagesTable({ data, isLoading, search, tenantFilter, ctx }: Tabl
   (data ?? []).forEach(i => { counts[i.kind] = (counts[i.kind] ?? 0) + 1; });
   const rows = filterRows(data, search, tenantFilter, ["name", "status", "visibility", "disk_format", "owner"], "owner")
     .filter(img => !type || img.kind === type)
-    .map(img => ({ ...img, vm_count: img.used_by_vms?.length ?? 0 }));
+    .map(img => ({ ...img, vm_count: img.used_by_vms?.length ?? 0, use_count: (img.used_by_vms?.length ?? 0) + (img.used_by_volumes ?? 0) }));
   const { sorted, sort, toggle } = useSort<any>(rows);
   const { rowProps, card } = useRows("images", ctx);
   return (
@@ -130,7 +130,7 @@ export function ImagesTable({ data, isLoading, search, tenantFilter, ctx }: Tabl
       </div>
     <TableWrap kind="images" ctx={ctx} isLoading={isLoading} total={data?.length} rows={sorted} card={card}>
       <HeaderRow sort={sort} toggle={toggle} cols={[["Name", "name"], ["Type", "kind"], ["Status", "status"],
-        ["Visibility", "visibility"], ["Format", "disk_format"], ["Size", "size_gb"], ["VMs Using", "vm_count"],
+        ["Visibility", "visibility"], ["Format", "disk_format"], ["Size", "size_gb"], ["Used By", "use_count"],
         ["Created", "created_at"]]} />
       {sorted.map(img => (
         <tr key={img.id} {...rowProps(img)}>
@@ -145,9 +145,10 @@ export function ImagesTable({ data, isLoading, search, tenantFilter, ctx }: Tabl
           <td className="text-mono" style={{ fontSize: 11 }}>{img.disk_format}</td>
           <td>{img.size_gb > 0 ? fmtSize(img.size_gb) : "—"}</td>
           <td>
-            {img.vm_count > 0
-              ? <span className="badge badge-info">{img.vm_count} VM{img.vm_count !== 1 ? "s" : ""}</span>
-              : muted("unused")}
+            {img.use_count > 0 ? <>
+              {img.vm_count > 0 && <span className="badge badge-info">{img.vm_count} VM{img.vm_count !== 1 ? "s" : ""}</span>}{" "}
+              {img.used_by_volumes > 0 && <span className="badge badge-neutral">{img.used_by_volumes} volume{img.used_by_volumes !== 1 ? "s" : ""}</span>}
+            </> : muted("unused")}
           </td>
           <td>{fmtDate(img.created_at)}</td>
         </tr>

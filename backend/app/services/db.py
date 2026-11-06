@@ -95,6 +95,13 @@ def init_db() -> None:
                 component  TEXT,
                 tenant     TEXT
             );
+            CREATE TABLE IF NOT EXISTS reclamation_seen (
+                kind       TEXT NOT NULL,
+                id         TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen  TEXT NOT NULL,
+                PRIMARY KEY (kind, id)
+            );
         """)
 
 
@@ -125,6 +132,31 @@ def cache_meta() -> dict[str, str]:
     with _connect() as conn:
         rows = conn.execute("SELECT key, collected_at FROM cache").fetchall()
     return {row["key"]: row["collected_at"] for row in rows}
+
+
+# ── Reclamation first-seen ─────────────────────────────────────────────────────
+
+def seen_update(kind: str, ids: list[str]) -> dict[str, str]:
+    """Record that `ids` are the current candidates of `kind`: new ones get first_seen now,
+    ones no longer listed are forgotten. Returns {id: first_seen}."""
+    now = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.executemany(
+            "INSERT INTO reclamation_seen (kind, id, first_seen, last_seen) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (kind, id) DO UPDATE SET last_seen = excluded.last_seen",
+            [(kind, i, now, now) for i in ids],
+        )
+        conn.execute("DELETE FROM reclamation_seen WHERE kind = ? AND last_seen < ?", (kind, now))
+        rows = conn.execute(
+            "SELECT id, first_seen FROM reclamation_seen WHERE kind = ?", (kind,)).fetchall()
+    return {r["id"]: r["first_seen"] for r in rows}
+
+
+def seen_get(kind: str) -> dict[str, str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, first_seen FROM reclamation_seen WHERE kind = ?", (kind,)).fetchall()
+    return {r["id"]: r["first_seen"] for r in rows}
 
 
 # ── Agent run log ──────────────────────────────────────────────────────────────

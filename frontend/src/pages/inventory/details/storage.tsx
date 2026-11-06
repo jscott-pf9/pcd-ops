@@ -205,6 +205,7 @@ export function ImageDetail({ item: img, ctx }: DetailProps) {
           ["Protected", <Pill on={img.is_protected} />],
           ["Owner", ctx.tenant(img.owner)],
           ["Created", fmtDateTime(img.created_at)],
+          ["Volumes made from it", String(img.used_by_volumes ?? 0)],
         ]} />
       </Section>
       <Section title={`Used by (${users.length || img.used_by_vms?.length || 0})`}>

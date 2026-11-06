@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     ai_rightsizing_schedule: str = "daily@02:00"
     ai_anomaly_schedule:     str = "hourly"
 
+    # Reclamation: a running VM is idle when its 95th-percentile CPU, network and disk I/O over
+    # the window are all under these (services/reclamation.py; Right-Sizing uses the same rule)
+    reclamation_idle_days:     int = 14
+    reclamation_idle_cpu_pct:  float = 5.0
+    reclamation_idle_net_kbps: float = 10.0
+    reclamation_idle_iops:     float = 1.0
+
     # Data retention (days; 0 = keep forever)
     job_run_retention_days:  int = 30
     report_retention_days:   int = 30
