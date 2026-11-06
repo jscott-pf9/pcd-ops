@@ -95,8 +95,8 @@ const AI_FEATURES: FeatureConfig[] = [
   {
     enableKey: "ai_anomaly_enabled",
     scheduleKey: "ai_anomaly_schedule",
-    label: "Anomaly Detection",
-    description: "Analyzes cluster metrics for unusual patterns and flags findings.",
+    label: "Anomaly Explanation",
+    description: "Explains the current anomaly findings: what they have in common and what to check. Detection itself is statistical and runs every 15 minutes without AI.",
   },
   {
     enableKey: "ai_logs_enabled",

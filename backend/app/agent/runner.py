@@ -1,9 +1,9 @@
 """
 Agent runner — orchestrates collection across all domains and logs each run.
 
-Fast  (inventory, reclamation, capacity, overcommit, config changes, snapshots, logs):
-      every 15 min.
-Slow  (anomaly, capacity trends — 1 AI call each):         every 1 hour.
+Fast  (inventory, reclamation, capacity, overcommit, config changes, anomalies, snapshots,
+      logs): every 15 min.
+Slow  (capacity trends, the AI's anomaly explanation — 1 AI call each): every 1 hour.
 Daily (right-sizing — 1 AI call per VM):                   per its schedule in Settings
                                                             (checked hourly).
 """
@@ -84,7 +84,8 @@ async def run_fast() -> None:
         ])
         # After inventory, which they map hosts through.
         errors += await _gather_named([("host_metrics", collector.collect_host_metrics()),
-                                       ("overcommit", collector.collect_overcommit())])
+                                       ("overcommit", collector.collect_overcommit()),
+                                       ("anomaly", collector.collect_anomaly())])
         # After overcommit, whose results they read.
         errors += await _gather_named([("capacity", collector.collect_capacity()),
                                        ("drift", collector.collect_drift())])
@@ -115,11 +116,12 @@ async def run_slow() -> None:
     run_id = db.run_start()
     try:
         tasks = [("capacity_trends", collector.collect_capacity_trends())]
-        if _ai_feature_due("anomaly:latest", settings.ai_anomaly_schedule, settings.ai_anomaly_enabled):
-            tasks.append(("anomaly", collector.collect_anomaly()))
+        if _ai_feature_due("anomaly:explanation", settings.ai_anomaly_schedule,
+                           settings.ai_anomaly_enabled):
+            tasks.append(("anomaly_explanation", collector.explain_anomalies()))
         else:
-            logger.info("Anomaly AI skipped (disabled or not yet due per schedule '%s').",
-                        settings.ai_anomaly_schedule)
+            logger.info("Anomaly AI explanation skipped (disabled or not yet due per schedule "
+                        "'%s').", settings.ai_anomaly_schedule)
         errors = await _gather_named(tasks)
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))

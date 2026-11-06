@@ -29,7 +29,7 @@ const DOMAIN_GROUPS: { label: string; keys: string[] }[] = [
   },
   {
     label: "Metrics & Analysis",
-    keys: ["capacity:summary", "capacity:trends", "anomaly:latest",
+    keys: ["capacity:summary", "capacity:trends", "anomaly:latest", "anomaly:explanation", "drift:status",
            "rightsizing:recommendations"],
   },
   {

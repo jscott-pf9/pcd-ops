@@ -198,7 +198,11 @@ alert rules say. Returns {channel: null if sent, else why not}.
 
 ### **GET** `/api/anomaly/`
 
-Return the latest anomaly detection results (metric drift and outlier analysis).
+The latest statistical anomalies: VMs and hosts whose last hour is far from their usual
+
+(z-score against the same hour on earlier days, or the whole window while history is short),
+each with now, usual, z, severity, since and a 48-hour sparkline. `explanation` is the AI's
+reading of them, when AI is on; `explanation_current` says whether it covers these findings.
 
 **Response:** 200 — Successful Response  
 

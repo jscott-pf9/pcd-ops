@@ -13,11 +13,12 @@ import json
 import logging
 import math as _math
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.dependencies import get_ai_provider
 from app.services import (
     alerts,
+    anomaly,
     capacity,
     db,
     drift,
@@ -1491,131 +1492,153 @@ async def collect_rightsizing() -> None:
     logger.info("Right-sizing complete: %s", by_class)
 
 
-# ── Anomaly Detection (AI — slow) ─────────────────────────────────────────────
-
-# Name in the AI's context → metric in services/metrics_catalog.py
-ANOMALY_METRICS = {
-    "cpu_throttle":  "cpu_wait_pct",
-    "mem_usage_pct": "mem_pct",
-    "read_iops":     "read_iops",
-    "write_iops":    "write_iops",
-}
-
-LOOKBACK_HOURS = 24
+# ── Anomaly Detection ─────────────────────────────────────────────────────────
 
 
-def _parse_findings(text: str) -> list[dict]:
-    """Extract structured findings from AI analysis text."""
-    import re
-    findings = []
-    severity_pattern = re.compile(r'\b(critical|high|medium|low)\b', re.IGNORECASE)
-    vm_pattern = re.compile(
-        r'\b('
-        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-        r'|instance-[\w-]+'
-        r'|vm-[\w-]+'
-        r'|[\w][\w-]*-\d+'
-        r')\b',
-        re.IGNORECASE,
-    )
-
-    for line in text.split('\n'):
-        line = line.strip().lstrip('•-*0123456789. ')
-        if not line or len(line) < 20:
-            continue
-        sev_match = severity_pattern.search(line)
-        vm_match  = vm_pattern.search(line)
-        if sev_match:
-            findings.append({
-                "description": line,
-                "severity":    sev_match.group(1).lower(),
-                "instance":    vm_match.group(1) if vm_match else None,
-            })
-    return findings[:10]  # cap at 10
+def _anomaly_query(src: str, rule) -> str | None:
+    """Hourly means over the window: one point per hour per VM or host."""
+    if rule.metric == "net_bps":
+        rx = metrics_catalog.promql(rule.group, "net_rx_bps", src)
+        tx = metrics_catalog.promql(rule.group, "net_tx_bps", src)
+        expr = f"({rx}) + ({tx})" if rx and tx else None
+    else:
+        expr = metrics_catalog.promql(rule.group, rule.metric, src)
+    return expr and f"avg_over_time(({expr})[1h:5m])"
 
 
 async def collect_anomaly() -> None:
-    from app.config import settings as _settings
-    if not getattr(_settings, "ai_anomaly_enabled", True):
-        logger.info("Anomaly AI analysis disabled — skipping.")
-        return
-    logger.info("Collecting anomaly analysis (AI)…")
-    ai = get_ai_provider()
-
+    """Findings where a VM's or host's last hour is far from its usual (services/anomaly.py),
+    from PCD Ops' metrics store or PCD's Grafana. New or more severe findings raise alerts.
+    The AI explanation is separate (explain_anomalies)."""
+    src = await metrics_catalog.source()
     end = datetime.utcnow()
-    start = end - timedelta(hours=LOOKBACK_HOURS)
-
-    src = await metrics_catalog.source(min_days=LOOKBACK_HOURS / 24)
+    start = end - timedelta(days=anomaly.WINDOW_DAYS)
+    now = end.replace(tzinfo=timezone.utc).timestamp()
+    out = {"source": src, "window_days": anomaly.WINDOW_DAYS, "history_hours": 0,
+           "note": None, "findings": [], "checked": {"vm": 0, "host": 0}}
     if src is None:
-        raise MetricsNotConfigured("No VM metrics: PCD Ops' metrics store has no data yet and "
-                                   "no Grafana token is set.")
-    metric_results = await asyncio.gather(*[
-        metrics_catalog.client(src).query_range(
-            metrics_catalog.promql("vm", metric, src), start, end, step="15m")
-        for metric in ANOMALY_METRICS.values()
-    ], return_exceptions=True)
+        out["note"] = ("No metrics: PCD Ops' metrics store has no data and no Grafana token is "
+                       "set.")
+        db.cache_set("anomaly:latest", out)
+        return
 
-    # Build summary stats per domain for AI context
-    metric_data: dict = {}
-    for name, result in zip(ANOMALY_METRICS.keys(), metric_results):
-        if isinstance(result, Exception):
-            metric_data[name] = []
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    servers, _ = db.cache_get("inventory:servers")
+    host_key = metrics_catalog.KEY[("host", src)]
+    nova_id = {(h["id"] if src == "local" else h.get("service_host")): h for h in hyps or []}
+    vm_by_id = {s["id"]: s for s in servers or []}
+    prom = metrics_catalog.client(src)
+    rules = [(r, q) for r in anomaly.RULES if (q := _anomaly_query(src, r))]
+    results = await asyncio.gather(
+        *(prom.query_range(q, start, end, step="1h") for _, q in rules), return_exceptions=True)
+
+    findings, checked, hours = [], {"vm": set(), "host": set()}, 0.0
+    for (rule, _), res in zip(rules, results):
+        if isinstance(res, Exception):
+            logger.warning("Anomaly query for %s %s failed: %s", rule.group, rule.metric, res)
+            out["note"] = f"Couldn't query {rule.group} {rule.label.lower()}: {res}"
             continue
-        # Aggregate: max value per domain
-        domain_maxes = {}
-        for series in result:
-            d = series.get("metric", {}).get("domain", "unknown")
-            vals = [float(v[1]) for v in series.get("values", []) if _math.isfinite(float(v[1]))]
-            if vals:
-                domain_maxes[d] = max(vals)
-        metric_data[name] = domain_maxes
+        for series in res:
+            labels = series.get("metric", {})
+            if rule.group == "vm":
+                rid = labels.get("domain")
+                vm = vm_by_id.get(rid or "")
+                if not vm:
+                    continue
+                name, tenant, host = vm["name"], vm.get("project_id"), vm.get("hypervisor_hostname")
+            else:
+                h = nova_id.get(labels.get(host_key))
+                if not h:
+                    continue
+                rid, name, tenant, host = h["id"], h["hostname"], None, h["hostname"]
+            points = []
+            for ts, v in series.get("values", []):
+                try:
+                    points.append((int(float(ts)), float(v)))
+                except (TypeError, ValueError):
+                    continue
+            checked[rule.group].add(rid)
+            hours = max(hours, anomaly.history_hours(points))
+            f = anomaly.score(points, rule, now)
+            if f:
+                findings.append({"id": f"{rule.group}:{rid}:{rule.metric}", "kind": rule.group,
+                                 "resource_id": rid, "name": name, "project_id": tenant,
+                                 "host": host, "metric": rule.metric, "label": rule.label,
+                                 "unit": rule.unit, **f})
 
-    # Replace UUID domain keys with VM names so the AI outputs human-readable names
-    server_list, _ = db.cache_get("inventory:servers")
-    uuid_to_name = {s["id"]: s["name"] for s in (server_list or [])}
-    for metric_name in list(metric_data.keys()):
-        if isinstance(metric_data[metric_name], dict):
-            metric_data[metric_name] = {
-                uuid_to_name.get(d, d): v
-                for d, v in metric_data[metric_name].items()
-            }
-
-    analysis = _clean_analysis(await ai.analyze(
-        f"You are analyzing {LOOKBACK_HOURS}-hour PCD cluster metrics. "
-        "Identify anomalies, unusual spikes, or concerning patterns. "
-        "For each finding state: affected VM/domain, metric name, severity (low/medium/high/critical), "
-        "and a brief description. Start each finding on a new line with '- '. "
-        "Focus only on genuine anomalies, not normal low utilization.",
-        metric_data,
-    ))
-
-    findings = _parse_findings(analysis or "")
-
-    # Belt-and-suspenders: replace any UUID that slipped through in the instance field
-    import re as _re
-    _uuid_re = _re.compile(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-        _re.IGNORECASE,
-    )
+    first = db.seen_update("anomaly", [f["id"] for f in findings])
     for f in findings:
-        if f.get("instance") and _uuid_re.match(f["instance"]):
-            f["instance"] = uuid_to_name.get(f["instance"], f["instance"])
+        f["since"] = first.get(f["id"])
+    order = {"critical": 0, "high": 1, "medium": 2}
+    findings.sort(key=lambda f: (order[f["severity"]], -abs(f["z"])))
+    out.update(findings=findings, history_hours=round(hours, 1),
+               checked={k: len(v) for k, v in checked.items()})
+    if hours < anomaly.MIN_HISTORY_H and not out["note"]:
+        out["note"] = (f"Needs {anomaly.MIN_HISTORY_H} hours of metrics to learn what's usual; "
+                       f"there are {hours:.0f}.")
+    elif hours < anomaly.SEASONAL_MIN_DAYS * 24 and not out["note"]:
+        out["note"] = (f"Compared with the whole {hours / 24:.1f} days of metrics so far; from "
+                       f"{anomaly.SEASONAL_MIN_DAYS} days on, with the same hour on earlier days.")
 
-    high_sev = [f for f in findings if f["severity"] in ("high", "critical")]
+    prev, _ = db.cache_get("anomaly:latest")
+    before = {f["id"]: f["severity"] for f in (prev or {}).get("findings", [])}
+    db.cache_set("anomaly:latest", out)
+    logger.info("Anomaly detection (%s): %d finding(s) over %d VMs and %d hosts", src,
+                len(findings), out["checked"]["vm"], out["checked"]["host"])
 
-    # Alert if high-severity findings and notifications are configured
-    if high_sev:
-        worst = "critical" if any(f["severity"] == "critical" for f in high_sev) else "high"
+    for f in findings:
+        if not anomaly.worse(f["severity"], before.get(f["id"])):
+            continue
+        what = "above" if f["direction"] == "up" else "below"
+        res = f"{'VM' if f['kind'] == 'vm' else 'host'} {f['name']}"
         await alerts.raise_alert(alerts.Alert(
-            "anomaly", "anomaly:ai", worst, f"{len(high_sev)} anomaly finding(s) detected",
-            "\n".join(f"• {f['description']}" for f in high_sev[:10]), link="/anomaly"))
+            "anomaly", f"anomaly:{f['id']}", f["severity"],
+            f"{f['label']} on {res} is far {what} usual",
+            fields=[["Now", _fmt_metric(f["current"], f["unit"])],
+                    ["Usual", _fmt_metric(f["usual"], f["unit"])],
+                    ["Deviation", f"{f['z']:+.1f}σ"]]
+            + ([["Host", f["host"]]] if f["kind"] == "vm" and f.get("host") else []),
+            link=f"/anomaly?id={f['id']}"))
 
-    db.cache_set("anomaly:latest", {
-        "lookback_hours": LOOKBACK_HOURS,
-        "period_start": start.isoformat(),
-        "period_end": end.isoformat(),
-        "analysis": analysis,
-        "findings": findings,
-        "metric_summary": {k: len(v) for k, v in metric_data.items() if isinstance(v, dict)},
-    })
-    logger.info("Anomaly analysis collected. %d findings (%d high-severity).", len(findings), len(high_sev))
+
+def _fmt_metric(v: float, unit: str) -> str:
+    if unit == "pct":
+        return f"{v:.1f}%"
+    if unit == "bps":
+        for div, u in ((1e9, "GB/s"), (1e6, "MB/s"), (1e3, "KB/s")):
+            if abs(v) >= div:
+                return f"{v / div:.1f} {u}"
+        return f"{v:.0f} B/s"
+    if unit == "ms":
+        return f"{v:.1f} ms"
+    if unit == "pps":
+        return f"{v:.0f} pages/s"
+    return f"{v:.0f}"
+
+
+async def explain_anomalies() -> None:
+    """The AI's reading of the current findings, if there are any. It explains; it never
+    decides what is a finding."""
+    from app.config import settings as _settings
+    if not _settings.ai_anomaly_enabled:
+        return
+    data, _ = db.cache_get("anomaly:latest")
+    findings = (data or {}).get("findings") or []
+    if not findings:
+        db.cache_set("anomaly:explanation", {"text": None, "finding_ids": []})
+        return
+    ai = get_ai_provider()
+    context = [{"resource": f"{f['kind']} {f['name']}", "host": f.get("host"),
+                "metric": f["label"], "now": _fmt_metric(f["current"], f["unit"]),
+                "usual": _fmt_metric(f["usual"], f["unit"]), "z": f["z"],
+                "severity": f["severity"], "since": f.get("since")} for f in findings[:30]]
+    text = _clean_analysis(await ai.analyze(
+        "These are statistical anomalies in a PCD (OpenStack) cloud: each VM or host metric's "
+        "last hour compared with its usual level at that time of day. In a few short "
+        "paragraphs, say what they most likely have in common (for example several VMs on one "
+        "host, or one tenant), what could cause them, and what to check first. Do not list the "
+        "findings again and do not invent findings. Plain text, no markdown headers.",
+        {"findings": context},
+    ))
+    db.cache_set("anomaly:explanation", {"text": text, "finding_ids": [f["id"] for f in findings]})
+    logger.info("Anomaly explanation written for %d finding(s).", len(findings))

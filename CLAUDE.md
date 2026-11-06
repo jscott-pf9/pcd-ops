@@ -102,6 +102,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `services/capacity.py`, `services/rightsizing.py` — what the cloud can allocate (Placement for vCPUs and RAM, Cinder backends' written GB for storage; not quota sums) and what-if with a tenant's quotas; the suggested flavor (smaller or bigger) and whether a host in the VM's cluster has room for it
 - `services/overcommit.py` — CPU and memory overcommit (pure functions): Placement's allocation per host (resource provider UUID = Nova hypervisor id) against the 95th percentile of host load and VM CPU wait; a status and reason per host, summed per cluster
 - `services/reclamation.py` — Reclamation & Warnings rules (pure functions over records): stopped, idle and orphaned VMs, unused images, orphaned ports, unused routers and networks, empty tenants. The collector, the `resource-reclamation` job and Right-Sizing's idle class all use them. PCD's `admin` project is never shown as a tenant
+- `services/anomaly.py` — statistical anomaly detection: each VM's and host's last hour against its usual (same hour on earlier days, z-score, minimum real change); the AI only explains the findings (`collector.explain_anomalies`)
 - `services/drift.py` — config change log: snapshots of flavors, security groups, aggregates, hosts and tenant quotas, diffed each collection (`drift_changes` table)
 - `services/alerts.py`, `services/notifications.py` — what raises an alert (anomalies, config changes, jobs: on/off and minimum severity in Settings), the cooldown, and delivery to email, the generic webhook and Slack; every alert is recorded (`alerts` table, `GET /api/alerts`)
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
@@ -129,7 +130,7 @@ Each feature has a backend router and a frontend page:
 | Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All; live properties from `GET /inventory/{kind}/{id}/details` with the user's token) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
 | Right-Sizing | `api/rightsizing.py` | `pages/RightSizing.tsx` |
-| Anomaly Detection | `api/anomaly.py` | `pages/Anomaly.tsx` |
+| Anomaly Detection | `api/anomaly.py` (`services/anomaly.py`) | `pages/Anomaly.tsx`, `pages/anomaly.ts` |
 | Log Analysis | `api/logs.py` | `pages/Logs.tsx` |
 | Login | `api/auth.py` | `pages/Login.tsx` |
 | Setup / background access | `api/access.py` | `pages/Setup.tsx`, `components/PcdAccess.tsx` |
