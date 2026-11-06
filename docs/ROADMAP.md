@@ -1,6 +1,6 @@
 # PCD Ops — Roadmap
 
-> Last updated: 2026-11-03 · Current release: 0.6.1 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
+> Last updated: 2026-11-06 · Current release: 0.6.1 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
 
 **Legend:** ✅ done · 🧪 built, needs lab/field validation · 🔄 partly done · ⬜ not started
 
@@ -249,7 +249,16 @@ Here:
   - Backup and restore of settings and the database.
 - ⬜ **Audit log of every write.** Only reclamation, snapshots and access log events today. This matters more once Phase 8 can migrate VMs and reboot hosts.
 - ⬜ `/api/health` returns 503 `starting` until the app is ready.
-- ⬜ **Scale:** pagination, and fewer live OpenStack calls per request (14 call sites today). Test against a large cloud.
+- ⬜ **Scale testing.** Every page has only been tried on the lab: 3 hypervisors, a few dozen VMs and volumes, a handful of networks. Clouds with thousands of VMs and volumes and hundreds of networks and hypervisors will break some layouts and some loading. Test against a large cloud, or a synthetic inventory of that size, then fix what breaks. Known weak spots:
+  - **Inventory tables** render every row, with no pagination or virtual scrolling. Sorting, filtering and the hover card all work on the full list in the browser.
+  - **Detail pages** find their item, and the items related to it, in whole inventory lists. A VM's page loads eight of them (VMs, hypervisors, volumes, floating IPs, security groups, server groups, images, flavors). Related tables are unbounded: a backend's volumes, a flavor's or security group's VMs, a cluster's hosts and VMs. These need server-side lookups, and related tables need limits with a link to the filtered tab.
+  - **Tenant dropdown and tab bar:** the dropdown lists every tenant, and 12 tabs wrap on narrow screens.
+  - **Topology:** draws every hypervisor and VM; the 8-network limit is already a workaround.
+  - **Cluster graphs** select hosts with a regex of every host ID in the PromQL query. Hundreds of hosts make it long, and it may hit query-length limits.
+  - **Backend I/O** joins libvirt disk stats to `pcd_ops_volume_disk`. With thousands of volumes the join is heavy, and every inventory run writes a series per attached volume.
+  - **Metrics store:** about 300 series per host and 30–60 per VM. That's roughly 100k active series at 200 hosts and 1,000 VMs. Check the scrape load on the appliance, the 60 GB disk estimate at each retention, and query times on 1-year ranges.
+  - **Export All** fetches every list and builds the workbook in the browser.
+  - **Backend:** one inventory run collects everything at once. Large responses go out unpaginated, and requests make live OpenStack calls (14 call sites today).
 - ⬜ A read-only role alongside admin.
 - ⬜ A full in-app help panel. Phase 5 adds only field-level help.
 
