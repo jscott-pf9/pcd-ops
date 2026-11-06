@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageDays, ageText, CATEGORIES, filterItems, frees, freesText, noteFor } from "./model";
+import { ageDays, ageText, CATEGORIES, filterItems, frees, freesText, moneyText, monthly, NO_PRICES, noteFor, priced } from "./model";
 
 const NOW = Date.parse("2026-11-06T12:00:00Z");
 const F = { tenant: "", minAge: 0, q: "", system: false };
@@ -56,5 +56,17 @@ describe("reclamation model", () => {
     expect(noteFor("orphaned_vms", { libvirt: "needs the store" })).toBe("needs the store");
     expect(noteFor("unused_routers", { unused_routers: "not checked" })).toBe("not checked");
     expect(noteFor("unused_images", {})).toBeNull();
+  });
+
+  it("prices what reclaiming saves a month", () => {
+    const p = { ...NO_PRICES, currency: "€", vcpu: 10, ram_gb: 2.5, volume_gb: 0.1, ip: 3 };
+    expect(priced(NO_PRICES)).toBe(false);
+    expect(priced(p)).toBe(true);
+    const f = frees("stopped_servers", [{ vcpus: 4, ram_mb: 8192, attached_disk_gb: 100 }]);
+    expect(monthly(f, p)).toBe(40 + 20 + 10);
+    expect(monthly(frees("unused_floating_ips", [{}, {}]), p)).toBe(6);
+    expect(moneyText(70, p)).toBe("€70.00/month");
+    expect(moneyText(1234.4, p)).toBe("€1,234/month");
+    expect(moneyText(0, p)).toBe("—");
   });
 });

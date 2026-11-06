@@ -48,6 +48,14 @@ const TYPE_ICONS: Record<string, string> = {
   "rightsizing-resize":   "⚡",
 };
 
+/** The resource-reclamation job's newer categories, as its result names them. */
+const RECLAIMED: Record<string, string> = {
+  unused_floating_ips: "Floating IPs",
+  orphaned_ports: "Orphaned ports",
+  empty_server_groups: "Empty server groups",
+  unused_images: "Unused images",
+};
+
 const INTERVALS = ["", "hourly", "daily", "weekly", "monthly"] as const;
 const INTERVAL_LABELS: Record<string, string> = {
   "": "On demand only", hourly: "Every hour",
@@ -623,6 +631,24 @@ function RunDetail({ run, jobType }: { run: JobRun; jobType: string }) {
             </table>
           </div>
         )}
+        {Object.entries((parsed.deleted ?? {}) as Record<string, any[]>).filter(([, items]) => items.length).map(([cat, items]) => (
+          <div key={cat} style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-500)", marginBottom: 3 }}>
+              {RECLAIMED[cat] ?? cat} deleted
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <tbody>
+                {items.map((v, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid var(--gray-100)" }}>
+                    <td style={{ padding: "2px 8px 2px 0", color: "var(--gray-700)" }}>{v.name}</td>
+                    <td style={{ color: "var(--gray-500)", textAlign: "right" }}>{v.days}d unused</td>
+                    <td style={{ color: "var(--gray-400)", textAlign: "right", paddingLeft: 8 }}>{v.tenant_name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
       </div>
     );
   }

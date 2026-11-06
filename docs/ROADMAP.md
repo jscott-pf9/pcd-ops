@@ -176,8 +176,8 @@ Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own
 - 🧪 **What-if** on the Capacity page (vCPUs, RAM, volume GB, vDisks, optional tenant), and in Forecast Plans: a tenant plan is also checked against the tenant's Nova and Cinder quotas (cores, RAM, volume GB, and vDisks against the volumes quota), read with the user's token; it fits only if both allow it.
 - 🧪 **Right-sizing:** VMs under CPU or memory pressure get a bigger flavor (the smallest that runs the pressured resource at 70 % CPU or 75 % RAM, no smaller in the other); over-provisioned and idle ones a smaller flavor as before. Only public, enabled flavors. Each suggestion says whether it fits now: a host in the VM's cluster with room under its allocation ratio, matching the flavor's `aggregate_instance_extra_specs` (*fits*, *same host only*, *no room*). The resize job can act on pressure classes too and skips a VM whose flavor doesn't fit. The suggested flavor is the formula's, and the job no longer says "AI-suggested".
 - ✅ **Reclamation:** measure how long a volume has been unattached, not its age (0.7.1).
-- ⬜ **Reclamation:** estimate savings in money (needs prices per resource).
-- ⬜ **Reclamation job:** also act on the new categories (ports, server groups, images).
+- 🧪 **Reclamation savings:** monthly prices per vCPU, GB of RAM, GB of volume, GB of image and IP address (Settings, set from the Reclamation overview; 0 = not counted, so nothing shows until one is set) give each category and the total what reclaiming saves a month; Export All's summary sheet has it too.
+- 🧪 **Reclamation job:** also releases unused floating IPs and deletes orphaned ports, empty server groups and unused private images (never public, community, shared or protected ones), each after its own number of days, 0 (the default) leaving them alone, so existing jobs do what they did. An item is deleted only if it is a candidate both now, checked against PCD as the job runs, and at the last collection, which gives its age and the full rules (an image a host boots from that Nova doesn't know about is in use).
 
 ## Phase 8 — Hypervisor lifecycle 🔄
 

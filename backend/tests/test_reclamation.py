@@ -214,6 +214,65 @@ def test_job_uses_unattached_time_not_age(monkeypatch):
     assert [v["name"] for v in res["volumes_deleted"]] == ["detached-long-ago"]
 
 
+def test_job_deletes_newer_categories_only_when_set_and_still_unused(monkeypatch):
+    from app.agent import jobs
+
+    old, new = "2025-06-01T00:00:00", "2099-01-01T00:00:00"
+    db.cache_set("reclamation:candidates", {
+        "unused_floating_ips": [{"id": "f-old", "name": "1.2.3.4", "since": old},
+                                {"id": "f-new", "name": "1.2.3.5", "since": new},
+                                {"id": "f-used-now", "name": "1.2.3.6", "since": old}],
+        "orphaned_ports": [{"id": "p-old", "name": "p", "since": old, "project_id": "p1"}],
+        "empty_server_groups": [{"id": "g-old", "name": "g", "since": old}],
+        "unused_images": [{"id": "i-private", "name": "mine", "since": old},
+                          {"id": "i-public", "name": "shared", "since": old}],
+    })
+
+    def ip(id, port=None):
+        return NS(id=id, floating_ip_address=id, project_id="p1", port_id=port, router_id=None,
+                  updated_at=old)
+
+    def image(id, visibility):
+        return NS(id=id, name=id, visibility=visibility, status="active", size=1, owner="p1",
+                  is_protected=False, created_at=old, updated_at=old)
+
+    deleted = []
+    conn = NS(
+        compute=NS(servers=lambda **kw: [],
+                   server_groups=lambda **kw: [NS(id="g-old", name="g", project_id="p1",
+                                                  policy="anti-affinity", policies=None,
+                                                  member_ids=[])],
+                   delete_server_group=lambda i: deleted.append(i)),
+        block_storage=NS(volumes=lambda **kw: []),
+        network=NS(ips=lambda: [ip("f-old"), ip("f-new"), ip("f-used-now", port="x")],
+                   ports=lambda: [NS(id="p-old", name="p", status="DOWN", device_owner="",
+                                     device_id="", network_id="n", project_id="p1",
+                                     fixed_ips=[], allowed_address_pairs=[],
+                                     created_at=old, updated_at=old)],
+                   routers=lambda: [],
+                   delete_ip=lambda i: deleted.append(i), delete_port=lambda i: deleted.append(i)),
+        image=NS(images=lambda: [image("i-private", "private"), image("i-public", "public")],
+                 delete_image=lambda i: deleted.append(i)),
+    )
+    monkeypatch.setattr(jobs, "get_connection", lambda: conn)
+
+    # Not set: the job leaves them alone, as before
+    res = asyncio.run(jobs._run_resource_reclamation({"dry_run": False}))
+    assert res["deleted"] == {} and deleted == []
+
+    cfg = {"dry_run": False, "unused_floating_ips_days": 30, "orphaned_ports_days": 30,
+           "empty_server_groups_days": 30, "unused_images_days": 30}
+    res = asyncio.run(jobs._run_resource_reclamation(cfg))
+    # f-new is too recent, f-used-now got a port since the collection, i-public is public
+    assert sorted(deleted) == ["f-old", "g-old", "i-private", "p-old"]
+    assert [d["name"] for d in res["deleted"]["unused_floating_ips"]] == ["1.2.3.4"]
+    assert "1 orphaned port(s) >30d" in res["summary"]
+
+    deleted.clear()
+    asyncio.run(jobs._run_resource_reclamation({**cfg, "dry_run": True}))
+    assert deleted == []
+
+
 # ── API ──────────────────────────────────────────────────────────────────────────
 
 def test_candidates_503_until_collected(admin):

@@ -28,6 +28,12 @@ export interface AppSettings {
   reclamation_idle_cpu_pct?: number;
   reclamation_idle_net_kbps?: number;
   reclamation_idle_iops?: number;
+  reclamation_currency?: string;
+  reclamation_price_vcpu?: number;
+  reclamation_price_ram_gb?: number;
+  reclamation_price_volume_gb?: number;
+  reclamation_price_image_gb?: number;
+  reclamation_price_ip?: number;
   // Data retention
   job_run_retention_days?: number;
   report_retention_days?: number;

@@ -136,3 +136,23 @@ export function noteFor(cat: CategoryKey, notes: Record<string, string> = {}): s
   if (cat === "orphaned_vms") return notes.libvirt ?? null;
   return null;
 }
+
+// ── What it saves ──────────────────────────────────────────────────────────────
+
+/** Monthly price per unit, from Settings (reclamation_price_*); 0 = not priced. */
+export interface Prices { currency: string; vcpu: number; ram_gb: number; volume_gb: number; image_gb: number; ip: number }
+
+export const NO_PRICES: Prices = { currency: "$", vcpu: 0, ram_gb: 0, volume_gb: 0, image_gb: 0, ip: 0 };
+
+export const priced = (p: Prices) => p.vcpu > 0 || p.ram_gb > 0 || p.volume_gb > 0 || p.image_gb > 0 || p.ip > 0;
+
+/** What freeing `f` saves a month at `p`. */
+export const monthly = (f: Frees, p: Prices) =>
+  f.vcpus * p.vcpu + f.ram_gb * p.ram_gb + f.volume_gb * p.volume_gb + f.image_gb * p.image_gb + f.ips * p.ip;
+
+/** "$1,234/month"; "—" for nothing. */
+export function moneyText(v: number, p: Prices): string {
+  if (!v) return "—";
+  const digits = v < 100 ? 2 : 0;
+  return `${p.currency}${v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}/month`;
+}

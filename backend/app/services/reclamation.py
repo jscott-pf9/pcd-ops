@@ -75,6 +75,25 @@ def port_record(p) -> dict:
 
 # ── Compute ──────────────────────────────────────────────────────────────────────
 
+def fip_record(f) -> dict:
+    return {"id": f.id, "floating_ip_address": f.floating_ip_address,
+            "project_id": f.project_id, "port_id": f.port_id, "router_id": f.router_id,
+            "updated_at": _ts(f.updated_at)}
+
+
+def image_record(i) -> dict:
+    """An image without its kind (image or snapshot), which the collector adds."""
+    return {"id": i.id, "name": i.name or "(unnamed)", "visibility": i.visibility,
+            "status": i.status, "size_gb": round((i.size or 0) / (1024**3), 2),
+            "is_protected": bool(i.is_protected), "owner": i.owner,
+            "created_at": i.created_at, "updated_at": i.updated_at}
+
+
+def group_record(g) -> dict:
+    return {"id": g.id, "name": g.name, "project_id": g.project_id,
+            "policy": g.policy or (g.policies or [None])[0], "members": g.member_ids or []}
+
+
 def attached_gb(volumes: list[dict]) -> dict[str, int]:
     out: dict[str, int] = {}
     for v in volumes:

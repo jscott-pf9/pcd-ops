@@ -5,7 +5,8 @@ Job types:
   snapshot-cleanup      Delete volume snapshots older than max_age_days (optionally per tenant)
   snapshot-create       Create volume snapshots for VMs matching tenant/name filter
   snapshot-rotate       Enforce per-volume retention count for prefixed snapshots
-  resource-reclamation  Shelve/delete stopped VMs and unattached volumes past thresholds
+  resource-reclamation  Shelve/delete stopped VMs, delete unattached volumes and (when set)
+                        unused floating IPs, orphaned ports, empty server groups, private images
   capacity-report       AI-generated capacity summary (stored as report, optionally emailed)
   rightsizing-resize    Resize VMs to their suggested flavor where a host has room
 """
@@ -304,7 +305,9 @@ async def _run_snapshot_rotate(config: dict) -> dict:
 async def _run_resource_reclamation(config: dict) -> dict:
     """Stopped VMs and unattached volumes, chosen by the same rules as the Reclamation page
     (services/reclamation.py). A volume's unattached time is the earlier of when PCD Ops first saw
-    it unattached and Cinder's updated_at (which a detach sets), never its age."""
+    it unattached and Cinder's updated_at (which a detach sets), never its age. Floating IPs,
+    orphaned ports, empty server groups and private images too when their days are set
+    (_reclaim_more)."""
     conn = get_connection()
     stopped_days      = int(config.get("stopped_days", 30))
     unattached_days   = int(config.get("unattached_days", 30))
@@ -373,11 +376,86 @@ async def _run_resource_reclamation(config: dict) -> dict:
                 "tenant_name":     tenant_map.get(v["project_id"], "—"),
             })
 
+    deleted = await _reclaim_more(conn, config, servers, volumes, dry_run, tenant_map)
+
     prefix = "[DRY RUN] " if dry_run else ""
     summary = (f"{prefix}{action.title()} {len(vms_actioned)} VM(s) offline >{stopped_days}d, "
                f"deleted {len(volumes_deleted)} volume(s) unattached >{unattached_days}d")
+    for cat, items in deleted.items():
+        summary += f", {len(items)} {RECLAIM_MORE[cat][0]}(s) >{config[cat + '_days']}d"
     return {"summary": summary, "dry_run": dry_run, "action": action,
-            "vms_actioned": vms_actioned, "volumes_deleted": volumes_deleted}
+            "vms_actioned": vms_actioned, "volumes_deleted": volumes_deleted,
+            "deleted": deleted}
+
+
+# Categories the job deletes besides stopped VMs and volumes, each only when its
+# "<category>_days" setting is above 0: (noun, how to delete one).
+RECLAIM_MORE = {
+    "unused_floating_ips": ("floating IP", lambda c, i: c.network.delete_ip(i)),
+    "orphaned_ports": ("orphaned port", lambda c, i: c.network.delete_port(i)),
+    "empty_server_groups": ("empty server group", lambda c, i: c.compute.delete_server_group(i)),
+    "unused_images": ("unused image", lambda c, i: c.image.delete_image(i)),
+}
+
+
+async def _live_candidates(conn, cats: list[str], servers: list[dict],
+                           volumes: list[dict]) -> dict[str, set[str]]:
+    """Ids each category's rule picks from PCD right now."""
+    async def fetch(fn):
+        return await asyncio.to_thread(lambda: list(fn()))
+    out: dict[str, set[str]] = {}
+    if "unused_floating_ips" in cats:
+        fips = [reclamation.fip_record(f) for f in await fetch(conn.network.ips)]
+        out["unused_floating_ips"] = {f["id"] for f in reclamation.unused_floating_ips(fips)}
+    if "orphaned_ports" in cats:
+        ports, routers = await asyncio.gather(fetch(conn.network.ports), fetch(conn.network.routers))
+        found = reclamation.orphaned_ports([reclamation.port_record(p) for p in ports],
+                                           {s["id"] for s in servers}, {r.id for r in routers})
+        out["orphaned_ports"] = {p["id"] for p in found}
+    if "empty_server_groups" in cats:
+        groups = await fetch(lambda: conn.compute.server_groups(all_projects=True))
+        found = reclamation.empty_server_groups([reclamation.group_record(g) for g in groups])
+        out["empty_server_groups"] = {g["id"] for g in found}
+    if "unused_images" in cats:
+        images = [reclamation.image_record(i) for i in await fetch(conn.image.images)]
+        found = reclamation.unused_images(images, reclamation.image_use(servers, volumes))
+        # Only a project's own images: public, community and shared ones others may boot later
+        out["unused_images"] = {i["id"] for i in found
+                                if i["visibility"] == "private" and not i["is_protected"]}
+    return out
+
+
+async def _reclaim_more(conn, config: dict, servers: list[dict], volumes: list[dict],
+                        dry_run: bool, tenant_map: dict) -> dict[str, list[dict]]:
+    """Delete the newer categories' candidates that have been candidates for their setting's
+    days. An item must be one now (checked live, so nothing that came into use since the last
+    collection is touched) and at the last collection, which has how long it has been one and
+    the rules' full inputs (an image a host boots from that Nova doesn't know is in use)."""
+    days = {cat: int(config.get(f"{cat}_days") or 0) for cat in RECLAIM_MORE}
+    cats = [c for c, d in days.items() if d > 0]
+    if not cats:
+        return {}
+    cached, _ = db.cache_get("reclamation:candidates")
+    live = await _live_candidates(conn, cats, servers, volumes)
+    out: dict[str, list[dict]] = {}
+    for cat in cats:
+        noun, delete = RECLAIM_MORE[cat]
+        done = out[cat] = []
+        for item in (cached or {}).get(cat) or []:
+            age = _age_days(item.get("since"))
+            if item["id"] not in live[cat] or not item.get("since") or age < days[cat]:
+                continue
+            logger.info("reclamation: %s %s %s", "DRY" if dry_run else "DELETE", noun,
+                        item.get("name") or item["id"])
+            if not dry_run:
+                try:
+                    await asyncio.to_thread(delete, conn, item["id"])
+                except Exception as e:
+                    logger.warning("Failed to delete %s %s: %s", noun, item["id"], e)
+                    continue
+            done.append({"id": item["id"], "name": item.get("name") or item["id"][:8],
+                         "days": age, "tenant_name": tenant_map.get(item.get("project_id"), "—")})
+    return out
 
 
 async def _run_capacity_report(config: dict) -> dict:

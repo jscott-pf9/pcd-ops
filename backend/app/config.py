@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     reclamation_idle_cpu_pct:  float = 5.0
     reclamation_idle_net_kbps: float = 10.0
     reclamation_idle_iops:     float = 1.0
+    # What reclaiming saves: a monthly price per unit, in reclamation_currency (0 = not shown)
+    reclamation_currency:        str = "$"
+    reclamation_price_vcpu:      float = 0.0   # per vCPU
+    reclamation_price_ram_gb:    float = 0.0
+    reclamation_price_volume_gb: float = 0.0
+    reclamation_price_image_gb:  float = 0.0
+    reclamation_price_ip:        float = 0.0   # per IP address
 
     # Data retention (days; 0 = keep forever)
     job_run_retention_days:  int = 30

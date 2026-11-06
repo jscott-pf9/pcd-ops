@@ -870,6 +870,12 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `reclamation_idle_cpu_pct` | number | no | — | Reclamation Idle Cpu Pct |
 | `reclamation_idle_net_kbps` | number | no | — | Reclamation Idle Net Kbps |
 | `reclamation_idle_iops` | number | no | — | Reclamation Idle Iops |
+| `reclamation_currency` | string | no | — | Reclamation Currency |
+| `reclamation_price_vcpu` | number | no | — | Reclamation Price Vcpu |
+| `reclamation_price_ram_gb` | number | no | — | Reclamation Price Ram Gb |
+| `reclamation_price_volume_gb` | number | no | — | Reclamation Price Volume Gb |
+| `reclamation_price_image_gb` | number | no | — | Reclamation Price Image Gb |
+| `reclamation_price_ip` | number | no | — | Reclamation Price Ip |
 | `job_run_retention_days` | integer | no | — | Job Run Retention Days |
 | `report_retention_days` | integer | no | — | Report Retention Days |
 | `hypervisor_ssh_user` | string | no | — | Hypervisor Ssh User |

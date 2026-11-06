@@ -647,10 +647,7 @@ async def collect_reclamation() -> None:
 
     servers = [reclamation.server_record(s) for s in servers_raw]
     volumes = [reclamation.volume_record(v) for v in volumes_raw]
-    fips = None if fips_raw is None else [{
-        "id": f.id, "floating_ip_address": f.floating_ip_address, "project_id": f.project_id,
-        "port_id": f.port_id, "router_id": f.router_id, "updated_at": f.updated_at,
-    } for f in fips_raw]
+    fips = None if fips_raw is None else [reclamation.fip_record(f) for f in fips_raw]
     ports = None if ports_raw is None else [reclamation.port_record(p) for p in ports_raw]
     routers = None if routers_raw is None else [{
         "id": r.id, "name": r.name, "status": r.status, "project_id": r.project_id,
@@ -662,15 +659,10 @@ async def collect_reclamation() -> None:
         "created_at": n.created_at,
     } for n in networks_raw]
     images = None if images_raw is None else [{
-        "id": i.id, "name": i.name or "(unnamed)", "visibility": i.visibility, "status": i.status,
-        "size_gb": round((i.size or 0) / (1024**3), 2), "is_protected": bool(i.is_protected),
-        "owner": i.owner, "created_at": i.created_at, "updated_at": i.updated_at,
+        **reclamation.image_record(i),
         **_image_kind({**(i.properties or {}), "instance_uuid": i.instance_uuid}),
     } for i in images_raw]
-    groups = None if groups_raw is None else [{
-        "id": g.id, "name": g.name, "project_id": g.project_id,
-        "policy": g.policy or (g.policies or [None])[0], "members": g.member_ids or [],
-    } for g in groups_raw]
+    groups = None if groups_raw is None else [reclamation.group_record(g) for g in groups_raw]
 
     # VMs against what the hosts run, and who owns them
     src = await metrics_catalog.source()
