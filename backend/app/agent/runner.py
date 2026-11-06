@@ -230,6 +230,10 @@ async def _run_retention_cleanup() -> None:
         n = db.purge_job_runs(runs_days)
         if n:
             logger.info("Retention cleanup: removed %d job runs older than %dd.", n, runs_days)
+    if runs_days > 0:
+        n = db.purge_alerts(runs_days)
+        if n:
+            logger.info("Retention cleanup: removed %d alerts older than %dd.", n, runs_days)
     if reports_days > 0:
         n = db.purge_reports(reports_days)
         if n:

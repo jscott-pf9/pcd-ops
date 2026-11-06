@@ -220,13 +220,15 @@ Here:
 **Later**
 - ⬜ Rolling upgrades of the PCD host software, not only the OS. This depends on how PCD upgrades its host agents.
 
-## Phase 9 — Anomaly, drift and alerting 🔄
+## Phase 9 — Anomaly, drift and alerting 🔄 (0.8.x, on `feature/phase7`)
 
-- 🔄 **Alerts:** email and a generic webhook exist; their settings save since 0.6.0.
+Phase 8 is on hold; Phase 9 ships after Phase 7 as 0.8.1 (alerting), 0.8.2 (config change log), 0.8.3 (statistical anomalies).
+
+- 🧪 **Alerts** (0.8.1; `services/alerts.py`): anomalies, config changes and jobs raise alerts, each source on or off with a minimum severity; the same alert again within the cooldown (60 minutes) is recorded but not sent unless it got more severe. Sent to every configured channel: email, the generic webhook (its JSON keeps its old keys and adds the alert's source, key, fields and link) and **Slack** (incoming webhook, Block Kit, colored by severity, with a link to the page when the appliance's address is set). Settings → Alerts: the rules, a test button per channel, and the recent alerts with what each channel did. Jobs: a failed run alerts high, a run with items that failed (a snapshot, a resize, a delete) medium, success only if asked. Alerts also go to the event log; SMTP no longer blocks the server while it sends.
 - ⬜ **Statistical detection first:** a baseline per VM and host (z-score or seasonal) finds anomalies, and the AI explains them. Today each VM's 24-hour peaks go to the AI, and findings are pulled from its free-text answer with a regex.
 - ⬜ **Config drift:** snapshot flavors, security groups, quotas, aggregates and host config, then diff. Only a docstring today.
-- ⬜ Slack, Microsoft Teams and PagerDuty.
-- ⬜ Notifications on job success and failure, and on maintenance windows. Selected events routed to alerts.
+- ⬜ Microsoft Teams and PagerDuty (Slack done in 0.8.1).
+- ⬜ Notifications on maintenance windows (job success and failure done in 0.8.1).
 
 ## Phase 10 — Reports and exports 🔄
 

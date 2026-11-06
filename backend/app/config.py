@@ -80,6 +80,16 @@ class Settings(BaseSettings):
     smtp_from:     str = ""
     alert_email_to: str = ""
     webhook_url:   str = ""
+    slack_webhook_url: str = ""   # a Slack app's incoming webhook
+    alert_base_url:    str = ""   # this appliance's address, for links in alerts
+    # What raises an alert (services/alerts.py): on/off and the lowest severity sent
+    alert_cooldown_min:    int = 60     # the same alert again within this is not sent
+    alert_anomaly_enabled: bool = True
+    alert_anomaly_min:     str = "high"
+    alert_drift_enabled:   bool = True
+    alert_drift_min:       str = "medium"
+    alert_jobs_enabled:    bool = True
+    alert_jobs_success:    bool = False  # also when a job succeeds
 
     # GitHub feedback — token needs issues:write scope on the target repo
     github_token: str = ""

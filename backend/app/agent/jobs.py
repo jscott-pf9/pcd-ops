@@ -12,12 +12,14 @@ Job types:
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import uuid
 from datetime import datetime, timedelta
 
-from app.services import db, reclamation, rightsizing
+from app.config import settings
+from app.services import alerts, db, reclamation, rightsizing
 from app.services.openstack import get_connection
 
 logger = logging.getLogger(__name__)
@@ -149,6 +151,7 @@ async def _run_snapshot_cleanup(config: dict) -> dict:
                 await asyncio.to_thread(lambda sid=s.id: conn.block_storage.delete_snapshot(sid))
             except Exception as e:
                 logger.warning("Failed to delete snapshot %s: %s", s.id, e)
+                _fail("delete snapshot " + str(s.name or s.id), e)
                 success = False
         if success:
             size_gb = s.size or 0
@@ -225,6 +228,7 @@ async def _run_snapshot_create(config: dict) -> dict:
                     })
                 except Exception as e:
                     logger.warning("Failed to create snapshot for volume %s: %s", vol.id, e)
+                    _fail("snapshot of volume " + str(vol.name or vol.id), e)
                     skipped.append({"id": vol.id, "name": vol.name or vol.id, "reason": str(e)})
             else:
                 created.append({
@@ -292,6 +296,7 @@ async def _run_snapshot_rotate(config: dict) -> dict:
                     await asyncio.to_thread(lambda sid=s.id: conn.block_storage.delete_snapshot(sid))
                 except Exception as e:
                     logger.warning("Failed to delete snapshot %s: %s", s.id, e)
+                    _fail("delete snapshot " + str(s.name or s.id), e)
                     success = False
             if success:
                 deleted.append({
@@ -351,6 +356,7 @@ async def _run_resource_reclamation(config: dict) -> dict:
                     await asyncio.to_thread(lambda sid=s["id"]: conn.compute.shelve_server(sid))
             except Exception as e:
                 logger.warning("Failed to %s VM %s: %s", action, s["name"], e)
+                _fail(f"{action} VM {s['name']}", e)
                 success = False
         if success:
             vms_actioned.append({
@@ -374,6 +380,7 @@ async def _run_resource_reclamation(config: dict) -> dict:
                 await asyncio.to_thread(lambda vid=v["id"]: conn.block_storage.delete_volume(vid))
             except Exception as e:
                 logger.warning("Failed to delete volume %s: %s", v["id"], e)
+                _fail(f"delete volume {v['name']}", e)
                 success = False
         if success:
             volumes_deleted.append({
@@ -460,6 +467,7 @@ async def _reclaim_more(conn, config: dict, servers: list[dict], volumes: list[d
                     await asyncio.to_thread(delete, conn, item["id"])
                 except Exception as e:
                     logger.warning("Failed to delete %s %s: %s", noun, item["id"], e)
+                    _fail(f"delete {noun} {item.get('name') or item['id']}", e)
                     continue
             done.append({"id": item["id"], "name": item.get("name") or item["id"][:8],
                          "days": age, "tenant_name": tenant_map.get(item.get("project_id"), "—")})
@@ -694,6 +702,7 @@ async def _run_rightsizing_resize(config: dict) -> dict:
                 await asyncio.to_thread(lambda vid=vm_id: conn.compute.confirm_server_resize(vid))
             except Exception as e:
                 logger.warning("Failed to resize %s: %s", vm_name, e)
+                _fail(f"resize {vm_name}", e)
                 skipped.append({"name": vm_name, "reason": str(e)})
                 action_ok = False
 
@@ -733,11 +742,25 @@ _EXECUTORS = {
 }
 
 
+# Per-item failures in the running job (a snapshot that couldn't be made, a VM that didn't
+# resize): the job carries on, and execute_job alerts on them once.
+_FAILED: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("job_failed",
+                                                                          default=None)
+
+
+def _fail(what: str, e: Exception) -> None:
+    failed = _FAILED.get()
+    if failed is not None:
+        failed.append(f"{what}: {e}")
+
+
 async def execute_job(job: dict) -> None:
-    """Run a job, log the run, update job status."""
+    """Run a job, log the run, update job status, and alert (services/alerts.py) when it fails,
+    when some of its items fail, or, if Settings say so, when it succeeds."""
     job_id  = job["id"]
     type_   = job["type"]
     config  = job.get("config") or {}
+    name    = job.get("name") or type_
 
     executor = _EXECUTORS.get(type_)
     if not executor:
@@ -746,14 +769,33 @@ async def execute_job(job: dict) -> None:
 
     run_id = db.job_run_start(job_id)
     logger.info("Job %d (%s) started (run_id=%d)", job_id, type_, run_id)
+    failed: list[str] = []
+    token = _FAILED.set(failed)
+    alert = None
     try:
         result = await executor(config)
+        if failed and isinstance(result, dict):
+            result["failed"] = failed[:50]
         result_str = json.dumps(result) if isinstance(result, dict) else str(result)
         db.job_run_finish(run_id, job_id, "success", result=result_str)
-        summary = result.get("summary", "") if isinstance(result, dict) else result
+        summary = result.get("summary", "") if isinstance(result, dict) else str(result)
         logger.info("Job %d (%s) complete: %s", job_id, type_, summary[:120])
+        if failed:
+            alert = alerts.Alert(
+                "job", f"job:{job_id}", "medium", f"Job {name}: {len(failed)} item(s) failed",
+                summary, fields=[[f"Failed {i + 1}", f] for i, f in enumerate(failed[:5])],
+                link="/jobs")
+        elif settings.alert_jobs_success:
+            alert = alerts.Alert("job", f"job:{job_id}:ok", "low", f"Job {name} succeeded",
+                                 summary, link="/jobs")
     except Exception as e:
         db.job_run_finish(run_id, job_id, "error", error=str(e))
         logger.exception("Job %d (%s) failed", job_id, type_)
         from app.services.openstack import report_background_failure
         report_background_failure(e)
+        alert = alerts.Alert("job", f"job:{job_id}", "high", f"Job {name} failed", str(e),
+                             fields=[["Type", type_]], link="/jobs")
+    finally:
+        _FAILED.reset(token)
+    if alert:
+        await alerts.raise_alert(alert)

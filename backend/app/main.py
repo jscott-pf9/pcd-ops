@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     access,
     agent,
+    alerts,
     anomaly,
     auth,
     capacity,
@@ -91,6 +92,7 @@ for router in (
     jobs.router,
     reports.router,
     events.router,
+    alerts.router,
 ):
     app.include_router(router, prefix="/api")
 

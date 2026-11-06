@@ -45,6 +45,15 @@ export interface AppSettings {
   smtp_from?: string;
   alert_email_to?: string;
   webhook_url?: string;
+  slack_webhook_url?: string;
+  alert_base_url?: string;
+  alert_cooldown_min?: number;
+  alert_anomaly_enabled?: boolean;
+  alert_anomaly_min?: Severity;
+  alert_drift_enabled?: boolean;
+  alert_drift_min?: Severity;
+  alert_jobs_enabled?: boolean;
+  alert_jobs_success?: boolean;
   // AI feature toggles
   ai_rightsizing_enabled?: boolean;
   ai_anomaly_enabled?: boolean;
@@ -56,6 +65,8 @@ export interface AppSettings {
   /** Read-only. */
   grafana_url_default?: string;
 }
+
+export type Severity = "low" | "medium" | "high" | "critical";
 
 export const getSettings = () => apiFetch<AppSettings>("/settings");
 

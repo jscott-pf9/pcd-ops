@@ -12,14 +12,14 @@ from app.appliance import connection as pcd
 from app.appliance import state
 from app.config import Settings, settings
 from app.dependencies import make_ai_provider
-from app.services import local_metrics, metrics_catalog, prometheus, settings_store
+from app.services import alerts, local_metrics, metrics_catalog, prometheus, settings_store
 
 router = APIRouter()
 
 # App settings only. PCD itself is reached with the logged-in user's token or the background
 # application credential (app/api/access.py), never a stored account (APPLIANCE_STANDARD §7.8).
 _SECRETS = ("grafana_token", "ai_api_key", "ai_private_api_key", "smtp_password",
-            "hypervisor_ssh_password")
+            "hypervisor_ssh_password", "slack_webhook_url")
 _MASK = "***"
 # Everything the Settings page edits. The GitHub feedback token stays in .env.
 EDITABLE = tuple(k for k in Settings.model_fields if not k.startswith("github_"))
@@ -54,6 +54,9 @@ async def update_settings(payload: SettingsPayload):
         raise HTTPException(400, detail="Retention must be 30, 90, 180, 365 or 730 days.")
     if sent.get("metrics_scrape_interval") not in (None, *local_metrics.INTERVAL_CHOICES):
         raise HTTPException(400, detail="Scrape interval must be 30s or 60s.")
+    for key in ("alert_anomaly_min", "alert_drift_min"):
+        if sent.get(key) not in (None, *alerts.SEVERITIES):
+            raise HTTPException(400, detail="Minimum severity must be low, medium, high or critical.")
     stored = settings_store.load()
     for key, value in sent.items():
         if value is None or (key in _SECRETS and value in (_MASK, "")):

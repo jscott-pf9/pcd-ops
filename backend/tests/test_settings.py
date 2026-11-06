@@ -183,7 +183,7 @@ def test_email_goes_to_the_given_recipient(monkeypatch):
     sent = {}
 
     class FakeSMTP:
-        def __init__(self, host, port):
+        def __init__(self, host, port, **kw):
             sent["server"] = (host, port)
 
         def __enter__(self):

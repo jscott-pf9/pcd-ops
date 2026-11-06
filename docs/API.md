@@ -49,6 +49,7 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 
 - [Access](#access)
 - [Agent](#agent)
+- [Alerts](#alerts)
 - [Anomaly](#anomaly)
 - [Auth](#auth)
 - [Capacity](#capacity)
@@ -153,6 +154,40 @@ Return recent agent run history (most recent first).
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `limit` | query | integer | no | `50` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Alerts
+
+### **GET** `/api/alerts`
+
+Recent alerts, newest first: source, key, severity, title, body, `results` per channel
+
+(null = sent, else why not) and whether the cooldown suppressed it.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `limit` | query | integer | no | `100` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/alerts/test`
+
+Send a test alert to one channel (email, webhook, slack) or all of them, whatever the
+
+alert rules say. Returns {channel: null if sent, else why not}.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `channel` | string | no | — | Channel |
 
 **Response:** 200 — Successful Response  
 
@@ -888,6 +923,15 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `smtp_from` | string | no | — | Smtp From |
 | `alert_email_to` | string | no | — | Alert Email To |
 | `webhook_url` | string | no | — | Webhook Url |
+| `slack_webhook_url` | string | no | — | Slack Webhook Url |
+| `alert_base_url` | string | no | — | Alert Base Url |
+| `alert_cooldown_min` | integer | no | — | Alert Cooldown Min |
+| `alert_anomaly_enabled` | boolean | no | — | Alert Anomaly Enabled |
+| `alert_anomaly_min` | string | no | — | Alert Anomaly Min |
+| `alert_drift_enabled` | boolean | no | — | Alert Drift Enabled |
+| `alert_drift_min` | string | no | — | Alert Drift Min |
+| `alert_jobs_enabled` | boolean | no | — | Alert Jobs Enabled |
+| `alert_jobs_success` | boolean | no | — | Alert Jobs Success |
 
 **Response:** 200 — Successful Response  
 

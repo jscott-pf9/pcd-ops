@@ -95,6 +95,18 @@ def init_db() -> None:
                 component  TEXT,
                 tenant     TEXT
             );
+            CREATE TABLE IF NOT EXISTS alerts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                at         TEXT NOT NULL,
+                source     TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                severity   TEXT NOT NULL,
+                title      TEXT NOT NULL,
+                body       TEXT,
+                results    TEXT,
+                suppressed INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS alerts_key ON alerts (key, at);
             CREATE TABLE IF NOT EXISTS reclamation_seen (
                 kind       TEXT NOT NULL,
                 id         TEXT NOT NULL,
@@ -428,3 +440,44 @@ def report_get(report_id: str) -> dict | None:
             "SELECT data FROM capacity_reports WHERE id = ?", (report_id,)
         ).fetchone()
     return json.loads(row["data"]) if row else None
+
+
+# ── Alerts (services/alerts.py) ──────────────────────────────────────────────────
+
+def alert_record(source: str, key: str, severity: str, title: str, body: str, results: str,
+                 suppressed: bool) -> dict:
+    at = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO alerts (at, source, key, severity, title, body, results, suppressed)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (at, source, key, severity, title, body, results, int(suppressed)))
+    return {"id": cur.lastrowid, "at": at, "source": source, "key": key, "severity": severity,
+            "title": title, "body": body, "results": json.loads(results or "{}"),
+            "suppressed": suppressed}
+
+
+def alert_last(key: str) -> dict | None:
+    """The last alert with this key that was sent (not suppressed)."""
+    with _connect() as conn:
+        row = conn.execute("SELECT at, severity FROM alerts WHERE key = ? AND suppressed = 0"
+                           " ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+    return dict(row) if row else None
+
+
+def alert_list(limit: int = 100) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["results"] = json.loads(d["results"] or "{}")
+        d["suppressed"] = bool(d["suppressed"])
+        out.append(d)
+    return out
+
+
+def purge_alerts(older_than_days: int) -> int:
+    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
+    with _connect() as conn:
+        return conn.execute("DELETE FROM alerts WHERE at < ?", (cutoff,)).rowcount

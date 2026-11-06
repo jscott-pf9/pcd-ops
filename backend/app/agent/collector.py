@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
 from app.services import (
+    alerts,
     capacity,
     db,
     local_metrics,
@@ -1445,7 +1446,6 @@ async def collect_anomaly() -> None:
         return
     logger.info("Collecting anomaly analysis (AI)…")
     ai = get_ai_provider()
-    from app.services.notifications import send_alert
 
     end = datetime.utcnow()
     start = end - timedelta(hours=LOOKBACK_HOURS)
@@ -1510,10 +1510,10 @@ async def collect_anomaly() -> None:
 
     # Alert if high-severity findings and notifications are configured
     if high_sev:
-        subject = f"{len(high_sev)} anomaly finding(s) detected"
-        body    = f"PCD Ops detected {len(high_sev)} high-severity anomalies:\n\n" + \
-                  "\n".join(f"• {f['description']}" for f in high_sev)
-        await send_alert(subject, body, severity="high", findings=high_sev)
+        worst = "critical" if any(f["severity"] == "critical" for f in high_sev) else "high"
+        await alerts.raise_alert(alerts.Alert(
+            "anomaly", "anomaly:ai", worst, f"{len(high_sev)} anomaly finding(s) detected",
+            "\n".join(f"• {f['description']}" for f in high_sev[:10]), link="/anomaly"))
 
     db.cache_set("anomaly:latest", {
         "lookback_hours": LOOKBACK_HOURS,
