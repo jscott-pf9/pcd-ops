@@ -160,7 +160,7 @@ async def job_types():
         },
         "rightsizing-resize": {
             "label": "Right-Sizing Resize",
-            "description": "Resize over-provisioned and idle VMs to their AI-suggested smaller flavor.",
+            "description": "Resize VMs to their suggested flavor (smaller when over-provisioned or idle, bigger under pressure), where a host has room.",
             "config_schema": {
                 "tenant_id":  {"type": "tenant_select", "default": "",                           "label": "Tenant (blank = all)"},
                 "dry_run":    {"type": "boolean",       "default": True,                         "label": "Dry run"},

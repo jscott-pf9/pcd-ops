@@ -206,7 +206,12 @@ Who is logged in, and what the UI should show next (login, setup or the app).
 
 ### **GET** `/api/capacity/summary`
 
-Return current capacity summary: vCPU, RAM, and storage totals with used/free/percent.
+What the cloud can allocate and what is allocated: vCPUs and RAM from Placement
+
+(host CPUs or memory minus reserved, times the allocation ratio; `physical` and `ratio` say
+which), storage from Cinder's backends (GB written against the disks' size; `provisioned` is
+volumes' GB, `provisionable` what thin backends let Cinder provision). Not the sum of tenant
+quotas.
 
 **Response:** 200 — Successful Response  
 
@@ -214,7 +219,9 @@ Return current capacity summary: vCPU, RAM, and storage totals with used/free/pe
 
 ### **GET** `/api/capacity/trends`
 
-Return capacity trend data over a rolling window with per-resource time series and AI analysis.
+Allocation against capacity over up to 30 days from PCD Ops' metrics store, with a linear
+
+forecast per resource and AI analysis. `note` says why there is none.
 
 **Response:** 200 — Successful Response  
 
@@ -233,7 +240,10 @@ reason for each host. Thresholds are in `thresholds`.
 
 ### **POST** `/api/capacity/what-if`
 
-Simulate the impact of adding resources; returns current vs projected utilization and whether it fits.
+Simulate adding resources: current vs projected capacity and whether it fits. With
+
+`tenant_id`, also the tenant's quotas (cores, RAM, volume GB, and vDisks against the volumes
+quota), and `would_fit` needs both.
 
 **Request body** (`application/json`)
 
@@ -243,6 +253,7 @@ Simulate the impact of adding resources; returns current vs projected utilizatio
 | `additional_ram_gb` | number | no | `0` | Additional Ram Gb |
 | `additional_storage_gb` | number | no | `0` | Additional Storage Gb |
 | `additional_vdisks` | integer | no | `0` | Additional Vdisks |
+| `tenant_id` | string | no | — | Tenant Id |
 
 **Response:** 200 — Successful Response  
 
@@ -264,7 +275,9 @@ Extract structured resource requirements (vCPUs, RAM, storage) from a natural la
 
 ### **GET** `/api/capacity/plans`
 
-List capacity plans, each annotated with a live what-if simulation against current capacity.
+List capacity plans, each with a what-if against current capacity (and its tenant's
+
+quotas, for a tenant plan).
 
 **Response:** 200 — Successful Response  
 
@@ -1138,7 +1151,9 @@ Delete a capacity report.
 
 Return VM right-sizing recommendations with CPU/memory usage metrics and AI-generated analysis.
 
-503 no_data until the first run succeeds; `error` says why the last one failed.
+A suggested flavor carries `fit`: whether a host in the VM's cluster has room for it now
+(fits, same_host, no_room, unknown). 503 no_data until the first run succeeds; `error` says
+why the last one failed.
 
 **Response:** 200 — Successful Response  
 

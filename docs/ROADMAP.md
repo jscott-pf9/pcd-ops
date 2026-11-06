@@ -170,16 +170,11 @@ Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own
 - 🧪 Shown on Reclamation as **Idle VMs**. Right-Sizing's `idle` class is now the same set of VMs (it was its own 20 % rule).
 - ⬜ Needs a full window of data: 14 days in PCD Ops' store, or PCD's Grafana (14 days kept). Until then the category says why it's empty.
 
-**Capacity and right-sizing**
-- ⬜ **Physical capacity.** Totals come from Placement and hypervisors, not the sum of tenant quotas (`openstack_nova_limits_*_max`). Today an empty Prometheus means empty totals.
-- ⬜ **Forecast Plans:**
-  - Per-tenant what-if. Plans store a `tenant_id`, but simulation is cluster-wide.
-  - Simulate vDisks.
-  - A UI for `/capacity/what-if`.
-- ⬜ **Right-sizing:**
-  - Recommend upsizing for VMs under CPU or memory pressure.
-  - Check that the target flavor fits the host and aggregate before resizing.
-  - Call the suggested flavor formula-based: the UI says "AI-suggested", but the AI only comments.
+**Capacity and right-sizing** (0.7.3; `services/capacity.py`, `services/rightsizing.py`)
+- 🧪 **Physical capacity.** Capacity Planning's totals are what the cloud can allocate, not the sum of tenant quotas: vCPUs and RAM from Placement (host CPUs or memory, less reserved, times the allocation ratio; the hypervisors' own counts at 1:1 without it), storage as GB written against the size of Cinder's backends, a shared store counted once. Provisioned volume GB, and what thin backends let Cinder provision, are shown beside it: the lab's 7 TB NFS share would otherwise count as 148 TB at its 20× oversubscription, and other data on it fills it too. Each card says what its total is made of. Works without Prometheus or Grafana.
+- 🧪 **Trends** come from PCD Ops' metrics store, which keeps the totals each collection (`pcd_ops_capacity_used` / `_total`), over up to 30 days; until it has history the section says so. The tenant-quota series from PCD's Grafana are no longer used. Also fixed: the memory and storage charts filled grey (a gradient id with spaces).
+- 🧪 **What-if** on the Capacity page (vCPUs, RAM, volume GB, vDisks, optional tenant), and in Forecast Plans: a tenant plan is also checked against the tenant's Nova and Cinder quotas (cores, RAM, volume GB, and vDisks against the volumes quota), read with the user's token; it fits only if both allow it.
+- 🧪 **Right-sizing:** VMs under CPU or memory pressure get a bigger flavor (the smallest that runs the pressured resource at 70 % CPU or 75 % RAM, no smaller in the other); over-provisioned and idle ones a smaller flavor as before. Only public, enabled flavors. Each suggestion says whether it fits now: a host in the VM's cluster with room under its allocation ratio, matching the flavor's `aggregate_instance_extra_specs` (*fits*, *same host only*, *no room*). The resize job can act on pressure classes too and skips a VM whose flavor doesn't fit. The suggested flavor is the formula's, and the job no longer says "AI-suggested".
 - ✅ **Reclamation:** measure how long a volume has been unattached, not its age (0.7.1).
 - ⬜ **Reclamation:** estimate savings in money (needs prices per resource).
 - ⬜ **Reclamation job:** also act on the new categories (ports, server groups, images).

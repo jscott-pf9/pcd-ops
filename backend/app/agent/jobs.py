@@ -7,7 +7,7 @@ Job types:
   snapshot-rotate       Enforce per-volume retention count for prefixed snapshots
   resource-reclamation  Shelve/delete stopped VMs and unattached volumes past thresholds
   capacity-report       AI-generated capacity summary (stored as report, optionally emailed)
-  rightsizing-resize    Resize over-provisioned VMs to their suggested smaller flavor
+  rightsizing-resize    Resize VMs to their suggested flavor where a host has room
 """
 
 import asyncio
@@ -16,7 +16,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 
-from app.services import db, reclamation
+from app.services import db, reclamation, rightsizing
 from app.services.openstack import get_connection
 
 logger = logging.getLogger(__name__)
@@ -554,7 +554,9 @@ async def _run_capacity_report(config: dict) -> dict:
 
 
 async def _run_rightsizing_resize(config: dict) -> dict:
-    """Resize over-provisioned / idle VMs to their AI-suggested smaller flavor."""
+    """Resize VMs of the chosen classifications to their suggested flavor: smaller for
+    over-provisioned and idle VMs, bigger for CPU or memory pressure. A VM whose flavor no host
+    in its cluster has room for now is skipped."""
     conn = get_connection()
     dry_run         = bool(config.get("dry_run", True))
     classifications = config.get("classifications", ["overprovisioned", "idle"])
@@ -574,7 +576,12 @@ async def _run_rightsizing_resize(config: dict) -> dict:
     ]
 
     resized, skipped = [], []
-    for rec in candidates:
+    oc, _ = db.cache_get("capacity:overcommit")
+    clusters, _ = db.cache_get("inventory:clusters")
+    for rec in rightsizing.with_fit(candidates, oc, clusters):
+        if rec["fit"]["status"] != "fits":
+            skipped.append({"name": rec["server_name"], "reason": rec["fit"]["reason"]})
+            continue
         vm_id     = rec["server_id"]
         vm_name   = rec["server_name"]
         cur_fl    = rec["current_flavor"]
@@ -616,7 +623,7 @@ async def _run_rightsizing_resize(config: dict) -> dict:
             })
 
     prefix = "[DRY RUN] " if dry_run else ""
-    summary = (f"{prefix}Resized {len(resized)} VM(s) to smaller flavors; "
+    summary = (f"{prefix}Resized {len(resized)} VM(s) to their suggested flavors; "
                f"{len(skipped)} skipped. Classifications: {', '.join(classifications)}.")
     return {
         "summary": summary,

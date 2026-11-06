@@ -78,13 +78,14 @@ async def run_fast() -> None:
         errors = await _gather_named([
             ("inventory",   collector.collect_inventory()),
             ("reclamation", collector.collect_reclamation()),
-            ("capacity",    collector.collect_capacity()),
             ("snapshots",   collector.collect_snapshots()),
             ("logs",        collector.collect_logs()),
         ])
-        # After inventory, which it maps hosts through.
+        # After inventory, which they map hosts through.
         errors += await _gather_named([("host_metrics", collector.collect_host_metrics()),
                                        ("overcommit", collector.collect_overcommit())])
+        # After overcommit, whose Placement totals it reads.
+        errors += await _gather_named([("capacity", collector.collect_capacity())])
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))
             logger.error("Fast collection run failed (run_id=%d): %s", run_id, errors)

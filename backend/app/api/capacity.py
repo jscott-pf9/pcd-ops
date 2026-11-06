@@ -1,13 +1,19 @@
+import asyncio
 import json
+import logging
 import re
 
+import openstack
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.dependencies import get_ai_provider
+from app.services import capacity, db
 from app.services.ai.base import AIProvider
-from app.services import db
 from app.services.db import cache_get
+from app.services.openstack import user_connection
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/capacity", tags=["capacity"])
 
@@ -16,7 +22,11 @@ router = APIRouter(prefix="/capacity", tags=["capacity"])
 
 @router.get("/summary")
 async def capacity_summary():
-    """Return current capacity summary: vCPU, RAM, and storage totals with used/free/percent."""
+    """What the cloud can allocate and what is allocated: vCPUs and RAM from Placement
+    (host CPUs or memory minus reserved, times the allocation ratio; `physical` and `ratio` say
+    which), storage from Cinder's backends (GB written against the disks' size; `provisioned` is
+    volumes' GB, `provisionable` what thin backends let Cinder provision). Not the sum of tenant
+    quotas."""
     data, _ = cache_get("capacity:summary")
     if data is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "capacity:summary"})
@@ -25,7 +35,8 @@ async def capacity_summary():
 
 @router.get("/trends")
 async def capacity_trends():
-    """Return capacity trend data over a rolling window with per-resource time series and AI analysis."""
+    """Allocation against capacity over up to 30 days from PCD Ops' metrics store, with a linear
+    forecast per resource and AI analysis. `note` says why there is none."""
     data, _ = cache_get("capacity:trends")
     if data is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "capacity:trends"})
@@ -50,33 +61,57 @@ class WhatIfRequest(BaseModel):
     additional_ram_gb: float = 0
     additional_storage_gb: float = 0
     additional_vdisks: int = 0
+    tenant_id: str | None = None
 
 
-def _simulate(summary: dict, req: WhatIfRequest) -> dict:
-    def _project(r, delta):
-        new_used = r["used"] + delta
-        new_free = (r["free"] - delta) if r["free"] is not None else None
-        fits = new_free is None or new_free >= 0
-        return {**r, "used": round(new_used, 1),
-                "free": round(new_free, 1) if new_free is not None else None,
-                "fits": fits}
+def _add(r) -> dict:
+    return {"vcpus": r["additional_vcpus"], "ram_gb": r["additional_ram_gb"],
+            "storage_gb": r["additional_storage_gb"], "vdisks": r["additional_vdisks"]}
 
-    projected = {
-        "vcpus":      _project(summary["vcpus"],      req.additional_vcpus),
-        "ram_gb":     _project(summary["ram_gb"],      req.additional_ram_gb),
-        "storage_gb": _project(summary["storage_gb"],  req.additional_storage_gb),
-    }
-    return {"current": summary, "projected": projected,
-            "would_fit": all(v["fits"] for v in projected.values())}
+
+def _tenant_quota(conn, project_id: str) -> dict | None:
+    """A tenant's Nova and Cinder quotas with what is in use, in plan units; None if PCD
+    wouldn't say (no access, or the tenant is gone)."""
+    if not re.fullmatch(r"[\w-]+", project_id):
+        return None
+    try:
+        c = conn.compute.get(f"/os-quota-sets/{project_id}/detail")
+        b = conn.block_storage.get(f"/os-quota-sets/{project_id}?usage=True")
+        c.raise_for_status()
+        b.raise_for_status()
+        return capacity.tenant_quota(c.json()["quota_set"], b.json()["quota_set"])
+    except Exception as e:
+        logger.warning("Quota lookup for tenant %s failed: %s", project_id, e)
+        return None
+
+
+async def _simulations(conn, items: list[tuple[dict, str | None]]) -> list[dict | None]:
+    """What-if for each (resources to add, tenant id), with each tenant's quota looked up once."""
+    summary, _ = cache_get("capacity:summary")
+    if summary is None:
+        return [None] * len(items)
+    tenants = sorted({t for _, t in items if t})
+    quotas = dict(zip(tenants, await asyncio.gather(
+        *(asyncio.to_thread(_tenant_quota, conn, t) for t in tenants))))
+    out = []
+    for add, t in items:
+        sim = capacity.simulate(summary, add, quotas.get(t) if t else None)
+        if t and quotas.get(t) is None:
+            sim["quota_error"] = "Couldn't read the tenant's quotas"
+        out.append(sim)
+    return out
 
 
 @router.post("/what-if")
-async def what_if(request: WhatIfRequest):
-    """Simulate the impact of adding resources; returns current vs projected utilization and whether it fits."""
-    summary, _ = cache_get("capacity:summary")
-    if summary is None:
+async def what_if(request: WhatIfRequest,
+                  conn: openstack.connection.Connection = Depends(user_connection)):
+    """Simulate adding resources: current vs projected capacity and whether it fits. With
+    `tenant_id`, also the tenant's quotas (cores, RAM, volume GB, and vDisks against the volumes
+    quota), and `would_fit` needs both."""
+    if cache_get("capacity:summary")[0] is None:
         raise HTTPException(503, detail={"code": "no_data", "key": "capacity:summary"})
-    return _simulate(summary, request)
+    [sim] = await _simulations(conn, [(_add(request.model_dump()), request.tenant_id)])
+    return sim
 
 
 # ── NLP: parse plain-text description into resource numbers ───────────────────
@@ -136,27 +171,19 @@ class PlanCreate(BaseModel):
 
 
 @router.get("/plans")
-async def list_plans():
-    """List capacity plans, each annotated with a live what-if simulation against current capacity."""
+async def list_plans(conn: openstack.connection.Connection = Depends(user_connection)):
+    """List capacity plans, each with a what-if against current capacity (and its tenant's
+    quotas, for a tenant plan)."""
     plans = db.plan_list()
-    summary, _ = cache_get("capacity:summary")
-    # Annotate each plan with current fit status
-    for plan in plans:
-        if summary:
-            req = WhatIfRequest(
-                additional_vcpus=plan["additional_vcpus"],
-                additional_ram_gb=plan["additional_ram_gb"],
-                additional_storage_gb=plan["additional_storage_gb"],
-                additional_vdisks=plan["additional_vdisks"],
-            )
-            plan["simulation"] = _simulate(summary, req)
-        else:
-            plan["simulation"] = None
+    sims = await _simulations(conn, [(_add(p), p.get("tenant_id")) for p in plans])
+    for plan, sim in zip(plans, sims):
+        plan["simulation"] = sim
     return plans
 
 
 @router.post("/plans", status_code=201)
-async def create_plan(body: PlanCreate):
+async def create_plan(body: PlanCreate,
+                      conn: openstack.connection.Connection = Depends(user_connection)):
     """Create a capacity plan and return it with a what-if simulation."""
     plan = db.plan_create(
         name=body.name,
@@ -168,14 +195,7 @@ async def create_plan(body: PlanCreate):
         storage_gb=body.additional_storage_gb,
         vdisks=body.additional_vdisks,
     )
-    summary, _ = cache_get("capacity:summary")
-    if summary:
-        req = WhatIfRequest(
-            additional_vcpus=plan["additional_vcpus"],
-            additional_ram_gb=plan["additional_ram_gb"],
-            additional_storage_gb=plan["additional_storage_gb"],
-        )
-        plan["simulation"] = _simulate(summary, req)
+    [plan["simulation"]] = await _simulations(conn, [(_add(plan), plan.get("tenant_id"))])
     return plan
 
 

@@ -17,16 +17,18 @@ from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
 from app.services import (
+    capacity,
     db,
     local_metrics,
     metrics_catalog,
     overcommit,
     reclamation,
+    rightsizing,
     server_groups,
     storage,
 )
 from app.services.openstack import get_connection
-from app.services.prometheus import MetricsNotConfigured, prometheus_client
+from app.services.prometheus import MetricsNotConfigured
 
 logger = logging.getLogger(__name__)
 
@@ -897,81 +899,25 @@ async def collect_overcommit() -> None:
 
 
 async def collect_capacity() -> None:
-    logger.info("Collecting capacity…")
-    conn = get_connection()
-
-    servers_task = asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True)))
-
-    # Prometheus gives us accurate cluster-wide totals and usage
-    prom_queries = [
-        prometheus_client.query("sum(openstack_nova_limits_vcpus_used)"),
-        prometheus_client.query("sum(openstack_nova_limits_vcpus_max)"),
-        prometheus_client.query("sum(openstack_nova_limits_memory_used)"),
-        prometheus_client.query("sum(openstack_nova_limits_memory_max)"),
-        prometheus_client.query("sum(openstack_cinder_limits_volume_used_gb)"),
-        prometheus_client.query("sum(openstack_cinder_limits_volume_max_gb)"),
-    ]
-
-    servers, *prom_results = await asyncio.gather(servers_task, *prom_queries, return_exceptions=True)
-
-    def _prom_val(result, fallback=None):
-        if isinstance(result, Exception) or not result:
-            return fallback
-        try:
-            return float(result[0]["value"][1])
-        except (IndexError, KeyError, ValueError):
-            return fallback
-
-    # Prefer Prometheus values; fall back to server+flavor derivation if unavailable
-    prom_vcpus_used  = _prom_val(prom_results[0])
-    prom_vcpus_total = _prom_val(prom_results[1])
-    prom_ram_used_mb = _prom_val(prom_results[2])
-    prom_ram_total_mb= _prom_val(prom_results[3])
-    prom_stor_used   = _prom_val(prom_results[4])
-    prom_stor_total  = _prom_val(prom_results[5])
-
-    used_vcpus   = prom_vcpus_used  if prom_vcpus_used  is not None else sum(s.flavor.get("vcpus", 0) or 0 for s in servers if s.status not in ("DELETED", "ERROR"))
-    total_vcpus  = prom_vcpus_total if prom_vcpus_total is not None else None
-    used_ram_gb  = (prom_ram_used_mb  / 1024) if prom_ram_used_mb  is not None else sum((s.flavor.get("ram", 0) or 0) / 1024 for s in servers if s.status not in ("DELETED", "ERROR"))
-    total_ram_gb = (prom_ram_total_mb / 1024) if prom_ram_total_mb is not None else None
-    used_stor_gb  = prom_stor_used  if prom_stor_used  is not None else 0
-    total_stor_gb = prom_stor_total if prom_stor_total is not None else None
-
-    def _resource(used, total):
-        return {
-            "used": round(used, 1),
-            "total": round(total, 1) if total is not None else None,
-            "free": round(total - used, 1) if total is not None else None,
-        }
-
-    db.cache_set("capacity:summary", {
-        "vcpus":      _resource(used_vcpus,  total_vcpus),
-        "ram_gb":     _resource(used_ram_gb,  total_ram_gb),
-        "storage_gb": _resource(used_stor_gb, total_stor_gb),
-    })
-    logger.info("Capacity: %.0f/%.0f vCPUs, %.0f/%.0f GB RAM, %.0f/%.0f GB storage",
-                used_vcpus, total_vcpus or 0, used_ram_gb, total_ram_gb or 0, used_stor_gb, total_stor_gb or 0)
+    """What the cloud can allocate and what is allocated (services/capacity.py): Placement for
+    vCPUs and RAM, Cinder's backends for storage. Runs after inventory and overcommit, whose
+    results it reads, and keeps the history in PCD Ops' metrics store for the trends."""
+    oc, _ = db.cache_get("capacity:overcommit")
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    backends, _ = db.cache_get("inventory:storage_backends")
+    s = capacity.summary((oc or {}).get("totals"), hyps or [], backends or [])
+    db.cache_set("capacity:summary", s)
+    await local_metrics.push(capacity.samples(s))
+    logger.info("Capacity: %.0f/%s vCPUs, %.0f/%s GB RAM, %.0f/%s GB storage",
+                s["vcpus"]["used"], s["vcpus"]["total"], s["ram_gb"]["used"],
+                s["ram_gb"]["total"], s["storage_gb"]["used"], s["storage_gb"]["total"])
 
 
 # ── Capacity Trends & Forecast ────────────────────────────────────────────────
 
-TREND_METRICS = {
-    "vcpus": {
-        "used":  "sum(openstack_nova_limits_vcpus_used)",
-        "total": "sum(openstack_nova_limits_vcpus_max)",
-    },
-    "ram_gb": {
-        "used":  "sum(openstack_nova_limits_memory_used) / 1024",
-        "total": "sum(openstack_nova_limits_memory_max) / 1024",
-    },
-    "storage_gb": {
-        "used":  "sum(openstack_cinder_limits_volume_used_gb)",
-        "total": "sum(openstack_cinder_limits_volume_max_gb)",
-    },
-}
-
-TREND_DAYS = 7
-TREND_STEP = "1h"   # ~168 data points over 7 days
+TREND_DAYS = 30            # from PCD Ops' metrics store, as far back as it has the history
+TREND_STEP = "1h"          # collect_capacity writes every 15 minutes
+TREND_MIN_POINTS = 3
 
 
 def _linear_regression(xs: list[float], ys: list[float]) -> tuple[float, float, float]:
@@ -1005,18 +951,33 @@ def _days_until(slope: float, intercept: float, total: float, target_pct: float,
 
 
 async def collect_capacity_trends() -> None:
-    logger.info("Collecting capacity trends from Prometheus…")
+    """Allocation against capacity over up to TREND_DAYS, from the history collect_capacity
+    keeps in PCD Ops' metrics store, with a linear forecast of when each runs out."""
+    logger.info("Collecting capacity trends…")
     ai = get_ai_provider()
 
     end = datetime.utcnow()
-    start = end - timedelta(days=TREND_DAYS)
+    days = min(TREND_DAYS, max(1.0, metrics_catalog._collected_days()))
+    start = end - timedelta(days=days)
+    qstep = TREND_STEP if days >= 2 else "15m"   # while the history is short, every sample
+    note = None
+    if not await metrics_catalog._local_ok():
+        note = ("Capacity history is kept in PCD Ops' metrics store, which is off or has no "
+                "data yet.")
+    prom = metrics_catalog.local_client
+
+    def q(series: str, resource: str) -> str:
+        return f'max(last_over_time({series}{{resource="{resource}"}}))'
 
     trends: dict = {}
-    for resource, queries in TREND_METRICS.items():
+    for resource in ("vcpus", "ram_gb", "storage_gb"):
+        if note:
+            trends[resource] = {"series": [], "trend": None, "forecast": None}
+            continue
         try:
             used_series, total_series = await asyncio.gather(
-                prometheus_client.query_range(queries["used"],  start, end, step=TREND_STEP),
-                prometheus_client.query_range(queries["total"], start, end, step=TREND_STEP),
+                prom.query_range(q("pcd_ops_capacity_used", resource), start, end, step=qstep),
+                prom.query_range(q("pcd_ops_capacity_total", resource), start, end, step=qstep),
             )
 
             # Build aligned time-series list
@@ -1024,7 +985,7 @@ async def collect_capacity_trends() -> None:
             total_map = {v[0]: float(v[1]) for r in total_series for v in r.get("values", [])}
             common_ts = sorted(set(used_map) & set(total_map))
 
-            if not common_ts:
+            if len(common_ts) < TREND_MIN_POINTS:
                 trends[resource] = {"series": [], "trend": None, "forecast": None}
                 continue
 
@@ -1071,6 +1032,7 @@ async def collect_capacity_trends() -> None:
             logger.warning("Trend collection failed for %s: %s", resource, e)
             trends[resource] = {"series": [], "trend": None, "forecast": None}
 
+    window = max(1, round(days))
     # AI interpretation
     forecast_summary = {
         r: {
@@ -1082,11 +1044,11 @@ async def collect_capacity_trends() -> None:
     }
     analysis = None
     from app.config import settings as _settings
-    if _settings.ai_capacity_enabled:
+    if _settings.ai_capacity_enabled and not note:
         try:
             analysis = await ai.analyze(
                 "You are analyzing OpenStack cluster capacity trends. "
-                f"Based on the {TREND_DAYS}-day usage data below, identify: "
+                f"Based on the {window}-day allocation data below, identify: "
                 "(1) resources trending toward saturation, "
                 "(2) any concerning growth rates, "
                 "(3) estimated runway before intervention is needed, "
@@ -1097,7 +1059,8 @@ async def collect_capacity_trends() -> None:
             logger.warning("AI capacity analysis failed: %s", e)
 
     db.cache_set("capacity:trends", {
-        "window_days": TREND_DAYS,
+        "window_days": window,
+        "note": note,
         "resources": trends,
         "ai_analysis": analysis,
         "period_start": start.isoformat(),
@@ -1304,11 +1267,15 @@ async def collect_rightsizing() -> None:
         asyncio.to_thread(lambda: list(conn.compute.flavors())),
     )
 
-    # Sort flavors ascending by vcpus then ram so we pick the smallest adequate fit
+    # Flavors any project can resize to, smallest first so the first that fits is chosen
     all_flavors = sorted(
-        [{"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram} for f in flavors_raw],
+        [{"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram,
+          "extra_specs": getattr(f, "extra_specs", None) or {}}
+         for f in flavors_raw if f.is_public is not False and not f.is_disabled],
         key=lambda f: (f["vcpus"], f["ram_mb"]),
     )
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    hyp_of_name = {h["hostname"]: h["id"] for h in hyps or []}
 
     # Idle is Reclamation's rule, so both pages call the same VMs idle.
     recl, _ = db.cache_get("reclamation:candidates")
@@ -1396,17 +1363,16 @@ async def collect_rightsizing() -> None:
                                server.name, e)
                 ai_on = False
 
-        # Compute suggested (smaller) flavor for overprovisioned/idle VMs
+        # The suggested flavor: smaller for spare capacity, bigger under pressure
+        cur = {"vcpus": vcpus, "ram_mb": ram_mb}
         suggested_flavor = None
-        if classification in ("overprovisioned", "idle") and vcpus > 0 and ram_mb > 0:
-            import math as _math
-            need_vcpus = max(1, _math.ceil((cpu_avg or 5) / 100 * vcpus * 1.5))
-            need_ram   = max(512, _math.ceil((mem_avg or 5) / 100 * ram_mb * 1.5))
-            for f in all_flavors:
-                if (f["vcpus"] >= need_vcpus and f["ram_mb"] >= need_ram
-                        and (f["vcpus"] < vcpus or f["ram_mb"] < ram_mb)):
-                    suggested_flavor = f
-                    break
+        if classification in ("overprovisioned", "idle"):
+            suggested_flavor = rightsizing.smaller_flavor(cur, cpu_avg, mem_avg, all_flavors)
+        elif classification in ("cpu-pressure", "memory-pressure"):
+            suggested_flavor = rightsizing.larger_flavor(
+                cur, cpu_avg, mem_avg, all_flavors,
+                cpu_short=cpu_avg is not None and cpu_avg >= RS_CPU_HIGH,
+                mem_short=mem_avg is not None and mem_avg >= RS_MEM_HIGH)
 
         recommendations.append({
             "server_id":    uuid,
@@ -1415,6 +1381,7 @@ async def collect_rightsizing() -> None:
             "project_id":   server.project_id,
             "tenant_name":  meta.get("project_name"),
             "hypervisor":   meta.get("host_name") or meta.get("hypervisor"),
+            "hypervisor_id": hyp_of_name.get(getattr(server, "hypervisor_hostname", None)),
             "current_flavor":   {"name": flavor_name, "vcpus": vcpus, "ram_mb": ram_mb},
             "suggested_flavor": suggested_flavor,
             "classification": classification,

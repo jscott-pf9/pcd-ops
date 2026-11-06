@@ -20,6 +20,8 @@ interface Rec {
   tenant_name: string | null;
   current_flavor:   { name: string; vcpus: number; ram_mb: number };
   suggested_flavor: { id: string; name: string; vcpus: number; ram_mb: number } | null;
+  /** Whether a host in its cluster has room for the suggested flavor now. */
+  fit?: { status: "fits" | "same_host" | "no_room" | "unknown"; hosts: string[]; reason: string };
   classification: Classification;
   risk: "high" | "medium" | "low" | "unknown";
   cpu_avg_pct: number | null;
@@ -41,6 +43,19 @@ const CC: Record<Classification, { label: string; color: string; bg: string; des
   "idle":            { label: "Idle",             color: "var(--gray-500)",   bg: "var(--gray-100)",     desc: "No measurable CPU, RAM, or disk activity" },
   "no-data":         { label: "No Metrics",       color: "var(--gray-400)",   bg: "var(--gray-50)",      desc: "VM offline or not scraped" },
 };
+
+const FIT: Record<string, { label: string; color: string }> = {
+  fits:      { label: "fits",            color: "var(--green)" },
+  same_host: { label: "same host only",  color: "var(--yellow)" },
+  no_room:   { label: "no room",         color: "var(--red)" },
+  unknown:   { label: "fit unknown",     color: "var(--gray-400)" },
+};
+
+/** Classes the resize job can act on: down to a smaller flavor, or up to a bigger one. */
+const RESIZE_CLASSES: [Classification, string][] = [
+  ["overprovisioned", "Overprovisioned"], ["idle", "Idle"],
+  ["cpu-pressure", "CPU pressure"], ["memory-pressure", "Memory pressure"],
+];
 
 const ATTENTION_CLASSES: Classification[] = ["memory-pressure", "cpu-pressure", "overprovisioned"];
 const ALL_FILTERS = ["all", "attention", "memory-pressure", "cpu-pressure", "overprovisioned", "right-sized", "idle", "no-data"] as const;
@@ -184,11 +199,18 @@ export default function RightSizing() {
                     <div style={{ fontSize: 11, color: "var(--gray-400)" }}>
                       {rec.current_flavor.vcpus}v · {Math.round(rec.current_flavor.ram_mb / 1024)}GB
                     </div>
-                    {rec.suggested_flavor && (
-                      <div style={{ fontSize: 10, color: "var(--green)", marginTop: 2 }}>
-                        → {rec.suggested_flavor.name}
-                      </div>
-                    )}
+                    {rec.suggested_flavor && (() => {
+                      const up = rec.suggested_flavor.vcpus > rec.current_flavor.vcpus
+                        || rec.suggested_flavor.ram_mb > rec.current_flavor.ram_mb;
+                      const fit = rec.fit && FIT[rec.fit.status];
+                      return (
+                        <div style={{ fontSize: 10, marginTop: 2 }}
+                          title={`Suggested flavor: ${rec.suggested_flavor.vcpus}v · ${Math.round(rec.suggested_flavor.ram_mb / 1024)}GB, the smallest that runs its average load with room to spare${rec.fit ? `. ${rec.fit.reason}` : ""}`}>
+                          <span style={{ color: up ? "#B45309" : "var(--green)" }}>{up ? "↑" : "↓"} {rec.suggested_flavor.name}</span>
+                          {fit && <div style={{ color: fit.color }}>{fit.label}</div>}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -327,14 +349,17 @@ function ResizeJobModal({ onClose, tenants }: { onClose: () => void; tenants: Ma
 
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">Target Classifications</label>
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            {["overprovisioned", "idle"].map(cls => (
+          <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+            {RESIZE_CLASSES.map(([cls, label]) => (
               <label key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: "pointer" }}>
                 <input type="checkbox" checked={classifications.includes(cls)}
                   onChange={() => toggleClass(cls)} />
-                {cls.charAt(0).toUpperCase() + cls.slice(1)}
+                {label}
               </label>
             ))}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--gray-500)", marginTop: 4 }}>
+            A VM is skipped when no host in its cluster has room for its suggested flavor.
           </div>
         </div>
 
