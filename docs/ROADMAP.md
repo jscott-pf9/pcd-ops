@@ -12,7 +12,7 @@
 | 4 | Extension catalog and PCD login | ✅ Done |
 | 5 | Correctness, install and settings experience, App Builder moves out (0.6.0) | 🧪 |
 | 6 | Host and VM metrics, scraped and kept by PCD Ops (0.7.0) | 🧪 |
-| 7 | Capacity: CPU and memory overcommit, idle VMs, right-sizing | ⬜ |
+| 7 | Reclamation & warnings, CPU and memory overcommit, idle VMs, right-sizing (0.7.x) | 🔄 |
 | 8 | Hypervisor lifecycle: OS updates, maintenance mode, live migration, rolling upgrades | 🔄 |
 | 9 | Anomaly, drift and alerting | 🔄 |
 | 10 | Reports and exports | 🔄 |
@@ -35,7 +35,7 @@ FastAPI + React app. A background agent fills a SQLite cache from openstacksdk (
   - security-group audit (flags `0.0.0.0/0` ingress);
   - hypervisor drill-down with hosted VMs; NIC count, RAM, OS version and pending patches over SSH.
 - ✅ **Topology:** tenant filter; stopped VMs and unattached volumes highlighted.
-- ✅ **Reclamation:** stopped VMs (SHUTOFF, ERROR, SHELVED_OFFLOADED), unattached volumes, unused floating IPs; single and bulk delete with confirmation.
+- ✅ **Reclamation:** stopped VMs (SHUTOFF, ERROR, SHELVED_OFFLOADED), unattached volumes, unused floating IPs; single and bulk delete with confirmation. Grown into Reclamation & Warnings in Phase 7.
 - ✅ **Snapshots:** list and delete Cinder snapshots; create/rotate policies (run as jobs).
 - ✅ **Capacity:** summary, 7-day trend, straight-line forecast of days to 80/90/100%, AI commentary. **Forecast Plans:** what-if plans written in plain English, saved and simulated.
 - ✅ **Right-sizing:** 7 days of `pcd:vm_*` metrics, 20%/80% thresholds, suggested smaller flavor, AI commentary. Collects even when AI is off (0.4.0).
@@ -138,9 +138,24 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 - ⬜ Confirm on the lab appliance: exporters reachable from its network, root filesystem at 60 GB, values match PCD's host dashboards.
 - ⬜ Later: export or back up the store (with Phase 12's backup and restore).
 
-## Phase 7 — Capacity: overcommit, idle VMs, right-sizing ⬜
+## Phase 7 — Reclamation, overcommit, idle VMs, right-sizing 🔄 (0.7.x, branch `feature/phase7`)
 
-Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own store (`services/metrics_catalog.py`), so idle detection and trends can use long windows.
+Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own store (`services/metrics_catalog.py`), so idle detection and trends can use long windows. Ships as 0.7.1, 0.7.2, …: reclamation and warnings first, then overcommit (0.7.2), then capacity and right-sizing (0.7.3). Each later step is planned when it's picked up.
+
+**Reclamation & warnings** (0.7.1; rules in `services/reclamation.py`, page in `pages/reclamation/`)
+- 🧪 One page, tabs Overview · Compute · Storage · Network · Tenants; tab, tenant, minimum age and filter in the URL. The overview totals what could be freed (vCPU, RAM, volume and image storage, IP addresses) and lists warnings. Each category has CSV export, and single and bulk delete where it's safe.
+- 🧪 **Compute:** stopped VMs; idle VMs (below); empty server groups (delete). **Orphaned VMs** (warning, report only):
+  - unknown to PCD: a host runs a libvirt domain Nova has no server for;
+  - missing from host: Nova places a VM on a host that doesn't run it, or runs it elsewhere (only hosts whose libvirt exporter answered; VMs mid-task skipped);
+  - owner deleted: its project or user is gone from Keystone.
+  - Host comparisons need PCD Ops' metrics store. A VM is listed only if it still looks wrong at the next collection, so migrations and deletes in progress don't raise warnings.
+- 🧪 **Storage:** unattached volumes; unused images and snapshots (no VM, no volume made from it, no libvirt root disk; protected ones can't be deleted). Volumes Glance's Cinder store keeps image data in (`glance_image_id` metadata) are never listed while their image exists; a store volume whose image is gone is listed as leaked. The old page listed every store volume as unattached.
+- 🧪 **Network:** unused floating IPs; orphaned ports (unbound, VM gone, router gone; VIPs, which are another port's allowed address, excluded); unused routers (no interfaces, or only to networks with no VMs, and no floating IPs; delete detaches interfaces and clears the gateway first); tenant networks with no VMs (delete takes their subnets; 409 names the ports in use).
+- 🧪 **Tenants:** projects that own nothing (servers, volumes, snapshots, networks, ports, routers, floating IPs, images, non-default security groups), with their role assignments. Report only. `admin`, PCD's hidden background tenant, is never listed; `service` and domain projects only on request.
+- 🧪 **Ages:** each candidate's "for N days" is the earlier of when PCD Ops first saw it in that category (`reclamation_seen`) and PCD's own timestamp of the change (a stop, a detach, a port update). History starts at 0.7.1.
+- 🧪 The `resource-reclamation` job selects with the same rules; a volume's age is how long it has been unattached, no longer how old it is, and Glance store volumes are never deleted.
+- 🧪 Inventory: images used only by volumes made from them no longer show as unused; tenant names show for `service` resources too; floating IPs find their VM in every availability zone (VM ports are `compute:<AZ>`).
+- 🧪 Lab check (2026-11-06): 3 stopped VMs, 2 empty server groups, 1 leaked image store volume, 23 unused images and snapshots, 3 unbound ports left by earlier App Catalog deploys (the LINSTOR NFS VIP correctly excluded), 1 network with no VMs, no empty tenants, no orphaned VMs. Hiding a VM from Nova's list made it show as unknown to PCD after the second collection.
 
 **CPU overcommit analysis**, per host and per aggregate:
 - ⬜ For each host, put side by side:
@@ -154,9 +169,10 @@ Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own
 - ⬜ RAM allocated (Placement MEMORY_MB, `pcd:vm_mem_allocated`) vs physical (`pcd:hyp_mem_total`) vs the allocation ratio and reserved memory.
 - ⬜ Compared with real usage (`pcd:hyp_mem_usage`, `pcd:vm_mem_usage`). Flags swap and pressure risk where allocation is above 1:1 and usage is high.
 
-**Idle VM detection**
-- ⬜ Running VMs with no meaningful CPU (`pcd:vm_cpu_usage`), network (`pcd:vm_rx_bytes/tx_bytes`) or disk I/O (`pcd:vm_read/write_iops`) over a set window (default 14 days, thresholds in Settings).
-- ⬜ Shown on Reclamation as **Idle**, beside the existing power-state rule (stopped VMs), and fed to right-sizing.
+**Idle VM detection** (0.7.1)
+- 🧪 Running VMs whose 95th-percentile CPU, network and disk IOPS over a window are all under thresholds (defaults: 14 days, 5 %, 10 KB/s, 1 IOPS; changed on the Reclamation page, saved in Settings). VMs younger than the window are left out. Worked out at most hourly with one `quantile_over_time` subquery per metric.
+- 🧪 Shown on Reclamation as **Idle VMs**. Right-Sizing's `idle` class is now the same set of VMs (it was its own 20 % rule).
+- ⬜ Needs a full window of data: 14 days in PCD Ops' store, or PCD's Grafana (14 days kept). Until then the category says why it's empty.
 
 **Capacity and right-sizing**
 - ⬜ **Physical capacity.** Totals come from Placement and hypervisors, not the sum of tenant quotas (`openstack_nova_limits_*_max`). Today an empty Prometheus means empty totals.
@@ -168,7 +184,9 @@ Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own
   - Recommend upsizing for VMs under CPU or memory pressure.
   - Check that the target flavor fits the host and aggregate before resizing.
   - Call the suggested flavor formula-based: the UI says "AI-suggested", but the AI only comments.
-- ⬜ **Reclamation:** measure how long a volume has been unattached, not its age; estimate savings.
+- ✅ **Reclamation:** measure how long a volume has been unattached, not its age (0.7.1).
+- ⬜ **Reclamation:** estimate savings in money (needs prices per resource).
+- ⬜ **Reclamation job:** also act on the new categories (ports, server groups, images).
 
 ## Phase 8 — Hypervisor lifecycle 🔄
 
@@ -222,7 +240,7 @@ Here:
 ## Phase 10 — Reports and exports 🔄
 
 - ✅ Inventory exports CSV and XLSX (`pages/Inventory.tsx`).
-- ⬜ That export becomes a shared button, added to Reclamation, Snapshots, Right-Sizing, Capacity (including overcommit), Anomaly, Events and OS Updates.
+- 🔄 That export becomes a shared button (`components/ExportButton.tsx`): ✅ Reclamation (0.7.1). ⬜ Snapshots, Right-Sizing, Capacity (including overcommit), Anomaly, Events and OS Updates.
 - ⬜ **Scheduled exports:** a new job type `export`. Pick tables, CSV or XLSX, and a schedule; the file is built on the server, emailed and/or kept for download, with retention.
 - ⬜ A Reports page of its own. Capacity reports live inside Jobs today.
 

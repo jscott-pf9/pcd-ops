@@ -77,9 +77,11 @@ async def list_networks():
 _HIDDEN_TENANTS = {"admin", "service"}
 
 @router.get("/tenants")
-async def list_tenants():
-    """Return all projects/tenants (admin and service tenants excluded)."""
-    return [t for t in _require("inventory:tenants") if t.get("name", "").lower() not in _HIDDEN_TENANTS]
+async def list_tenants(all: bool = False):
+    """Return the projects/tenants to pick from (admin and service excluded). `all=true`: every
+    project but admin (PCD's hidden background tenant), for showing names."""
+    hidden = {"admin"} if all else _HIDDEN_TENANTS
+    return [t for t in _require("inventory:tenants") if t.get("name", "").lower() not in hidden]
 
 
 @router.get("/summary")

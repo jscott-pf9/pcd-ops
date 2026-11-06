@@ -27,7 +27,7 @@ import CapacityPlans from "./pages/CapacityPlans";
 import Inventory from "./pages/Inventory";
 import InventoryDetail from "./pages/inventory/Detail";
 import Logs from "./pages/Logs";
-import Reclamation from "./pages/Reclamation";
+import Reclamation from "./pages/reclamation/Reclamation";
 import RightSizing from "./pages/RightSizing";
 import Snapshots from "./pages/Snapshots";
 import Jobs from "./pages/Jobs";

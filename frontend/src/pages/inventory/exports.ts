@@ -3,7 +3,7 @@ import { fmtDate, mbToGb, ramGb } from "./format";
 import type { Kind } from "./kinds";
 import type { Ctx } from "./summaries";
 
-type Cell = string | number | null | undefined;
+export type Cell = string | number | null | undefined;
 export interface Sheet { name: string; file: string; headers: string[]; rows: (items: any[], ctx: Ctx) => Cell[][] }
 
 const r1 = (v?: number | null) => (v == null ? "" : Math.round(v * 10) / 10);
@@ -178,6 +178,11 @@ function download(filename: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
   Object.assign(document.createElement("a"), { href: url, download: filename }).click();
   URL.revokeObjectURL(url);
+}
+
+/** Save rows as a CSV file. */
+export function downloadCsv(filename: string, headers: string[], rows: Cell[][]) {
+  download(filename, toCsv(headers, rows));
 }
 
 /** The tab's CSV files, for the rows it shows. */

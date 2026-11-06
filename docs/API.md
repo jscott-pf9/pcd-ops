@@ -2,7 +2,7 @@
 
 
 
-**Version:** 0.6.1  
+**Version:** 0.7.0  
 **Base URL:** `/api`  
 **Auth:** PCD login (session cookie). See *Authentication* below.
 
@@ -396,7 +396,15 @@ Return all Neutron networks with external/shared flags and project ownership.
 
 ### **GET** `/api/inventory/tenants`
 
-Return all projects/tenants (admin and service tenants excluded).
+Return the projects/tenants to pick from (admin and service excluded). `all=true`: every
+
+project but admin (PCD's hidden background tenant), for showing names.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `all` | query | boolean | no | `false` |  |
 
 **Response:** 200 — Successful Response  
 
@@ -834,6 +842,10 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `ai_capacity_enabled` | boolean | no | — | Ai Capacity Enabled |
 | `ai_rightsizing_schedule` | string | no | — | Ai Rightsizing Schedule |
 | `ai_anomaly_schedule` | string | no | — | Ai Anomaly Schedule |
+| `reclamation_idle_days` | integer | no | — | Reclamation Idle Days |
+| `reclamation_idle_cpu_pct` | number | no | — | Reclamation Idle Cpu Pct |
+| `reclamation_idle_net_kbps` | number | no | — | Reclamation Idle Net Kbps |
+| `reclamation_idle_iops` | number | no | — | Reclamation Idle Iops |
 | `job_run_retention_days` | integer | no | — | Job Run Retention Days |
 | `report_retention_days` | integer | no | — | Report Retention Days |
 | `hypervisor_ssh_user` | string | no | — | Hypervisor Ssh User |
@@ -941,7 +953,9 @@ setup_required: no admin has authorized background access, or it stopped working
 
 ### **GET** `/api/reclamation/candidates`
 
-Return idle VMs, unattached volumes, and unused floating IPs for reclamation.
+Everything Reclamation & Warnings lists, by category (services/reclamation.py), with
+
+`notes` saying why a category couldn't be checked, `idle_rule` and `orphan_check`.
 
 **Response:** 200 — Successful Response  
 
@@ -984,6 +998,80 @@ Release an unused floating IP back to the pool (irreversible).
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `fip_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/ports/{port_id}`
+
+Delete an orphaned port, freeing its IP addresses (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `port_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/routers/{router_id}`
+
+Delete a router: detach its interfaces, clear its gateway, then delete it (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `router_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/networks/{network_id}`
+
+Delete a network with its subnets; Neutron removes its DHCP and metadata ports. 409 names
+
+the ports still using it (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `network_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/server_groups/{group_id}`
+
+Delete a server group (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `group_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/images/{image_id}`
+
+Delete a Glance image or snapshot; 409 if it's protected (irreversible). Deleting a
+
+volume-backed VM's snapshot image leaves its Cinder snapshots.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `image_id` | path | string | yes | — |  |
 
 **Response:** 200 — Successful Response  
 

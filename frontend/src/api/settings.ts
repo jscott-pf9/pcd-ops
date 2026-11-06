@@ -23,6 +23,11 @@ export interface AppSettings {
   hypervisor_ssh_user?: string;
   hypervisor_ssh_key_path?: string;
   hypervisor_ssh_password?: string;
+  // Reclamation: idle VM rule (95th percentile over the window)
+  reclamation_idle_days?: number;
+  reclamation_idle_cpu_pct?: number;
+  reclamation_idle_net_kbps?: number;
+  reclamation_idle_iops?: number;
   // Data retention
   job_run_retention_days?: number;
   report_retention_days?: number;

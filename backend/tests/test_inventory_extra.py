@@ -290,3 +290,11 @@ def test_details_are_live_and_cleaned(admin, monkeypatch):
     finally:
         app.dependency_overrides.pop(user_connection, None)
     assert inventory.clean({"a": [{"b": None, "c": 1}], "d": {}}) == {"a": [{"c": 1}]}
+
+
+def test_tenants_for_names_include_service_never_admin(admin):
+    db.cache_set("inventory:tenants", [{"id": i, "name": n} for i, n in
+                                       (("a", "admin"), ("s", "service"), ("t", "tenant-x"))])
+    assert [t["name"] for t in admin.get("/api/inventory/tenants").json()] == ["tenant-x"]
+    names = [t["name"] for t in admin.get("/api/inventory/tenants?all=true").json()]
+    assert names == ["service", "tenant-x"]

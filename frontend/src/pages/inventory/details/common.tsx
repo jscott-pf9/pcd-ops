@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch, errorDetail } from "../../../api/client";
-import { useTenants } from "../../../api/tenants";
+import { useTenantNames } from "../../../api/tenants";
 import { DetailPage, ItemLink, Section } from "../../../components/DetailPage";
 import { flatten } from "../format";
 import { detailPath, KINDS, type Kind } from "../kinds";
@@ -11,7 +11,7 @@ export interface DetailProps { item: any; ctx: Ctx }
 
 /** Tenant names, as the tables show them. */
 export function useCtx(): Ctx {
-  const tenants = useTenants();
+  const tenants = useTenantNames();
   return useMemo(() => ({
     tenant: (id?: string | null) => (id ? tenants.get(id) ?? id.slice(0, 8) : "—"),
   }), [tenants]);
