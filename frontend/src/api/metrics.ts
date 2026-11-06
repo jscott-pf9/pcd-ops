@@ -42,6 +42,10 @@ export const getHostHistory = (id: string, range: Range) =>
 export const getVmHistory = (id: string, range: Range) =>
   apiFetch<History>(`/metrics/vms/${encodeURIComponent(id)}?range=${range}`);
 
+/** Capacity history of one Cinder backend (PCD Ops' metrics store only). */
+export const getStorageHistory = (backend: string, range: Range) =>
+  apiFetch<History>(`/metrics/storage/${encodeURIComponent(backend)}?range=${range}`);
+
 export interface LocalTarget {
   job: "node" | "libvirt"; hypervisor: string; hypervisor_id: string; url: string;
   health: "up" | "down" | "unknown"; last_error: string | null; last_scrape: string | null;

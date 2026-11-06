@@ -11,9 +11,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { useTenants } from "../api/tenants";
 import DataFreshness from "../components/DataFreshness";
+import { detailPath } from "./inventory/kinds";
 import { formatPct, formatRate, pctColor } from "../components/format";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -409,6 +411,7 @@ function DetailPanel({ node, tenants, onClose }: { node: any; tenants: Map<strin
 
   const typeLabel = node.type.charAt(0).toUpperCase() + node.type.slice(1);
   const title = d.name || d.hostname || d.id;
+  const kind = ({ hypervisor: "hypervisors", vm: "servers", volume: "volumes", network: "networks" } as const)[node.type as string];
 
   return (
     <div style={{
@@ -431,6 +434,11 @@ function DetailPanel({ node, tenants, onClose }: { node: any; tenants: Map<strin
             <span style={{ color: "var(--gray-900)", fontWeight: 500, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis" }}>{v}</span>
           </div>
         ))}
+        {kind && d.id && (
+          <Link to={detailPath(kind, d.id)} style={{ display: "inline-block", marginTop: 6, fontWeight: 600 }}>
+            Open details →
+          </Link>
+        )}
       </div>
     </div>
   );

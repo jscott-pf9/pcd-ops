@@ -342,7 +342,9 @@ Returns whether GitHub feedback is configured so the frontend can show/hide the 
 
 ### **GET** `/api/inventory/servers`
 
-Return all compute instances with status, flavor, hypervisor, and project info.
+Return all compute instances with status, flavor, hypervisor, security groups, server
+
+group, project, and latest CPU/memory/network/disk (`metrics`, null without data).
 
 **Response:** 200 — Successful Response  
 
@@ -442,7 +444,38 @@ Return graph nodes + edges for the topology view.
 
 ### **GET** `/api/inventory/clusters`
 
-Return PCD cluster names and metadata.
+Return host aggregates (`kind` "cluster" for PCD clusters, which are pf9-managed
+
+aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/storage_backends`
+
+Return Cinder backends: pools grouped by backend (a shared store, reported by every host,
+
+counted once), capacity, free, used, provisioned against oversubscribed capacity, volumes
+and the volume types that select each.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/storage_types`
+
+Return volume types: backend, extra specs, QoS, default, encryption, access, volumes.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/server_groups`
+
+Return server groups: policy, rules, members with their hosts, and whether the
+
+placement satisfies the policy (`status`: ok, violated, not_satisfied, empty).
 
 **Response:** 200 — Successful Response  
 
@@ -681,6 +714,23 @@ CPU, memory, network, disk and CPU-wait history for one VM.
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `server_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/storage/{backend}`
+
+Capacity, used and provisioned history for one Cinder backend. Only PCD Ops' own store
+
+keeps it (written each inventory run), so this is 503 without it.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `backend` | path | string | yes | — |  |
 | `range` | query | string | no | `"24h"` |  |
 
 **Response:** 200 — Successful Response  

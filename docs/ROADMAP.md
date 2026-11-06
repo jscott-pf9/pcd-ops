@@ -114,9 +114,17 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 - 🧪 Settings → Metrics: scrape on/off, every 30 or 60 s, keep every series, retention 30 days / 90 days (default) / 6 months / 1 year / 2 years with a disk estimate per choice; the store's state, disk use and per-host scrape health. Console: Advanced Options → Metrics Store.
 
 **Views**
-- 🧪 Inventory → Hypervisors: CPU, memory and disk bars, network in/out, stale badge. The host drawer has CPU, memory, disk space, disk and network throughput over 24h to 2 years.
-- 🧪 VM drawer: CPU, memory, CPU wait (steal), disk IOPS and latency, network in/out.
-- 🧪 Topology: CPU and RAM bars on each hypervisor.
+- 🧪 Inventory → Hypervisors: CPU, memory and disk bars, network in/out, stale badge. Servers: CPU and memory bars.
+- 🧪 Every Inventory row opens a full detail page (`/inventory/<kind>/<id>`, replacing the side drawer) with links to related items: a VM's host, volumes, server group, security groups and floating IPs; a host's VMs and aggregates; a backend's pools, types and volumes. Hovering a row shows a card of its facts (no requests). Tab, filter and tenant are in the URL, so Back returns to them.
+- 🧪 Host page: CPU, memory, disk space, disk I/O and network over 24h to 2 years. VM page: CPU with CPU wait (steal), memory, disk IOPS and latency, network. Hovering one chart moves the cursor and tooltip on all of them to the same time.
+- 🧪 Topology: CPU and RAM bars on each hypervisor, and "Open details" to its page.
+- 🧪 Hypervisor hardware: CPU model and topology from `lscpu` and installed RAM from `dmidecode` over SSH; otherwise from Nova at microversion 2.87, the last one that returns `cpu_info` and `memory_mb`.
+
+**Storage, server groups, aggregates** (Inventory tabs, each with CSV and in Export All)
+- 🧪 Storage Backends: Cinder pools grouped by backend (`services/storage.py`). A backend whose pools all report the same total and free space is one shared store (an NFS export on every host) and counts once. Capacity, used, free, provisioned volume size against capacity × oversubscription, volumes, types. Capacity history: each inventory run writes `pcd_ops_storage_*` into the local store, graphed on the backend's page.
+- 🧪 Storage Types: backend, default, public, QoS, encryption, project access, volumes.
+- 🧪 Server Groups: policy, rules, members and their hosts, and whether placement satisfies the policy (`services/server_groups.py`: violated for affinity / anti-affinity, not satisfied for the soft variants).
+- 🧪 Clusters & Aggregates (was Clusters): every host aggregate, PCD clusters marked; hosts by name, VMs, vCPU and RAM allocation.
 - 🧪 Right-Sizing uses the local store once it has a week of data and then looks back 30 days instead of 7; Anomaly uses it once it has a day.
 
 **Sources** (`services/metrics_catalog.py`): each host and VM metric is defined for the local store (raw exporter series) and for PCD's Grafana (`pcd:*`). Local data is used when it exists; Grafana otherwise, and always for the `openstack_*` series only PCD has (Capacity). VMs join on `domain` = the Nova server UUID in both. Through Grafana, hosts join on Nova's compute service host, the PCD host UUID.

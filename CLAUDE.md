@@ -97,7 +97,8 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir)
 - `services/openstack.py` — Wraps `openstacksdk`; all features import from here, never instantiate `openstack.connect()` elsewhere. `get_connection()` returns the user's connection inside `acting_as()`, else the background one
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
-- `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store, host/VM metric definitions for both sources, the exporter probe
+- `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
+- `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once), and whether a server group's placement meets its policy
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
 - `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
 - `services/ai/claude.py` — Anthropic Claude implementation
@@ -120,14 +121,14 @@ Each feature has a backend router and a frontend page:
 |---|---|---|
 | Resource Reclamation | `api/reclamation.py` | `pages/Reclamation.tsx` |
 | Capacity Planning | `api/capacity.py` | `pages/Capacity.tsx` |
-| Inventory | `api/inventory.py` | `pages/Inventory.tsx` |
+| Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
 | Right-Sizing | `api/rightsizing.py` | `pages/RightSizing.tsx` |
 | Anomaly Detection | `api/anomaly.py` | `pages/Anomaly.tsx` |
 | Log Analysis | `api/logs.py` | `pages/Logs.tsx` |
 | Login | `api/auth.py` | `pages/Login.tsx` |
 | Setup / background access | `api/access.py` | `pages/Setup.tsx`, `components/PcdAccess.tsx` |
-| Host and VM metrics | `api/metrics.py` (+ `metrics` merged into `/inventory/hypervisors`) | Inventory drawers (`components/MetricsHistory.tsx`), `pages/settings/SettingsMetrics.tsx` |
+| Host, VM and storage metrics | `api/metrics.py` (+ `metrics` merged into `/inventory/hypervisors` and `/inventory/servers`) | Inventory detail pages (`components/MetricsCharts.tsx`, synced `TimeChart`s), `pages/settings/SettingsMetrics.tsx` |
 | Settings | `api/settings.py` | `pages/settings/Settings.tsx` (one page, tabs in `?tab=`), `pages/settings/*.tsx` |
 | System (version/update) | `api/system.py` | `pages/settings/SettingsUpdates.tsx` |
 
