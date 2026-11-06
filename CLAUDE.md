@@ -99,6 +99,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
 - `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
 - `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once) and the volume → VM disk series that joins libvirt disk stats to volumes and backends; whether a server group's placement meets its policy
+- `services/overcommit.py` — CPU and memory overcommit (pure functions): Placement's allocation per host (resource provider UUID = Nova hypervisor id) against the 95th percentile of host load and VM CPU wait; a status and reason per host, summed per cluster
 - `services/reclamation.py` — Reclamation & Warnings rules (pure functions over records): stopped, idle and orphaned VMs, unused images, orphaned ports, unused routers and networks, empty tenants. The collector, the `resource-reclamation` job and Right-Sizing's idle class all use them. PCD's `admin` project is never shown as a tenant
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
 - `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
@@ -121,7 +122,7 @@ Each feature has a backend router and a frontend page:
 | Domain | Backend | Frontend |
 |---|---|---|
 | Reclamation & Warnings | `api/reclamation.py` (rules in `services/reclamation.py`) | `pages/reclamation/` (`model.ts` categories, `columns.tsx`, `Reclamation.tsx`) |
-| Capacity Planning | `api/capacity.py` | `pages/Capacity.tsx` |
+| Capacity Planning | `api/capacity.py` (overcommit rules in `services/overcommit.py`) | `pages/Capacity.tsx`, `pages/overcommit/` (Overcommit), `pages/CapacityPlans.tsx` |
 | Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All; live properties from `GET /inventory/{kind}/{id}/details` with the user's token) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
 | Right-Sizing | `api/rightsizing.py` | `pages/RightSizing.tsx` |

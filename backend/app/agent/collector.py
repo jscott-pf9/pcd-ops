@@ -16,7 +16,15 @@ from collections import Counter
 from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
-from app.services import db, local_metrics, metrics_catalog, reclamation, server_groups, storage
+from app.services import (
+    db,
+    local_metrics,
+    metrics_catalog,
+    overcommit,
+    reclamation,
+    server_groups,
+    storage,
+)
 from app.services.openstack import get_connection
 from app.services.prometheus import MetricsNotConfigured, prometheus_client
 
@@ -773,6 +781,119 @@ async def collect_host_metrics() -> None:
     db.cache_set("metrics:hosts", {"source": src, "hosts": hosts})
     db.cache_set("metrics:vms", {"source": src, "vms": vms})
     logger.info("Host metrics from %s: %d hosts, %d VMs", src, len(hosts), len(vms))
+
+
+# ── Overcommit ─────────────────────────────────────────────────────────────────
+
+OVERCOMMIT_DAYS = 7
+OVERCOMMIT_LOAD_REFRESH_S = 3600   # percentiles over days of data: at most hourly
+
+
+def _placement(conn, hyp_ids: list[str]) -> dict[str, dict]:
+    """Placement's VCPU/MEMORY_MB inventories and usages per compute node (its resource
+    provider UUID is the Nova hypervisor id). A host Placement doesn't know is left out."""
+    def get(path: str) -> dict | None:
+        r = conn.placement.get(path)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+    out = {}
+    for hid in hyp_ids:
+        inv = get(f"/resource_providers/{hid}/inventories")
+        use = inv and get(f"/resource_providers/{hid}/usages")
+        if inv and use:
+            out[hid] = {"inventories": inv["inventories"], "usages": use["usages"]}
+        else:
+            logger.debug("No Placement resource provider for hypervisor %s", hid)
+    return out
+
+
+async def _overcommit_load(src: str | None, hyps: list[dict]) -> tuple[dict, dict, dict]:
+    """95th percentile of host CPU %, memory %, swap-in and each VM's CPU wait over up to
+    OVERCOMMIT_DAYS: ({hypervisor id: {...}}, {server id: wait %}, {source, hours, note}).
+    Recomputed at most hourly."""
+    cached, at = db.cache_get("capacity:overcommit_load")
+    if (cached and at and cached["info"].get("source") == src
+            and (datetime.utcnow() - datetime.fromisoformat(at)).total_seconds()
+            < OVERCOMMIT_LOAD_REFRESH_S):
+        return cached["hosts"], cached["waits"], cached["info"]
+    info: dict = {"source": src, "hours": 0, "note": None}
+    hosts: dict[str, dict] = {}
+    waits: dict[str, float] = {}
+    if src is None:
+        info["note"] = ("No load data: PCD Ops' metrics store has no data and no Grafana token "
+                        "is set, so hosts are judged on allocation only.")
+    else:
+        days = OVERCOMMIT_DAYS
+        if src == "local":
+            days = min(days, metrics_catalog._collected_days())
+        hours = max(1, int(days * 24))
+        info["hours"] = hours
+        if hours < OVERCOMMIT_DAYS * 24:
+            span = "hour" if hours == 1 else f"{hours} hours"
+            info["note"] = (f"Load is the 95th percentile over the {span} of metrics so far; "
+                            f"it will cover {OVERCOMMIT_DAYS} days.")
+        # Coarse steps over a long window; fine ones while the store is new, or none fall in it
+        step = "1h" if hours >= 48 else "5m" if hours >= 6 else "1m"
+        nova_id = {(h["id"] if src == "local" else h.get("service_host")): h["id"] for h in hyps}
+        prom = metrics_catalog.client(src)
+        queries = {("host", m): metrics_catalog.promql("host", m, src)
+                   for m in ("cpu_pct", "mem_pct", "swap_in_pps")}
+        queries[("vm", "cpu_wait_pct")] = metrics_catalog.promql("vm", "cpu_wait_pct", src)
+        queries = {k: q for k, q in queries.items() if q}
+        results = await asyncio.gather(
+            *(prom.query(f"quantile_over_time(0.95, ({q})[{hours}h:{step}])")
+              for q in queries.values()), return_exceptions=True)
+        for (group, m), res in zip(queries, results):
+            if isinstance(res, Exception):
+                info["note"] = f"Couldn't query load ({m}): {res}"
+                continue
+            for row in res:
+                try:
+                    v = float(row["value"][1])
+                except (TypeError, ValueError):
+                    continue
+                if not _math.isfinite(v):
+                    continue
+                if group == "vm":
+                    if row["metric"].get("domain"):
+                        waits[row["metric"]["domain"]] = round(v, 3)
+                elif (hid := nova_id.get(row["metric"].get(metrics_catalog.KEY[("host", src)]))):
+                    hosts.setdefault(hid, {})[m] = round(v, 2)
+    db.cache_set("capacity:overcommit_load", {"hosts": hosts, "waits": waits, "info": info})
+    return hosts, waits, info
+
+
+async def collect_overcommit() -> None:
+    """CPU and memory overcommit per host and cluster: Placement's allocation against real
+    load (services/overcommit.py). Runs after inventory, whose hosts and VMs it reads."""
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    clusters, _ = db.cache_get("inventory:clusters")
+    servers, _ = db.cache_get("inventory:servers")
+    if not hyps:
+        return
+    conn = get_connection()
+    src = await metrics_catalog.source()
+    placement, (load, waits, info) = await asyncio.gather(
+        asyncio.to_thread(_placement, conn, [h["id"] for h in hyps]),
+        _overcommit_load(src, hyps),
+    )
+    hyp_of_name = {h["hostname"]: h["id"] for h in hyps}
+    vms = [{"id": s["id"], "name": s["name"], "vcpus": s.get("flavor_vcpus"),
+            "host": hyp_of_name.get(s.get("hypervisor_hostname"))}
+           for s in servers or [] if s.get("status") == "ACTIVE"]
+    hosts = overcommit.host_rows(hyps, placement, load, overcommit.vm_wait_by_host(vms, waits))
+    db.cache_set("capacity:overcommit", {
+        "hosts": hosts,
+        "clusters": overcommit.cluster_rows(clusters or [], hosts),
+        "totals": overcommit.totals(hosts),
+        "load": info,
+        "thresholds": overcommit.THRESHOLDS,
+    })
+    t = overcommit.totals(hosts)
+    logger.info("Overcommit: %d hosts (CPU %s; memory %s)", len(hosts), t["cpu_counts"], t["mem_counts"])
 
 
 async def collect_capacity() -> None:

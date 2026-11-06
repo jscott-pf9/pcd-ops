@@ -157,17 +157,13 @@ Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own
 - 🧪 Inventory: images used only by volumes made from them no longer show as unused; tenant names show for `service` resources too; floating IPs find their VM in every availability zone (VM ports are `compute:<AZ>`).
 - 🧪 Lab check (2026-11-06): 3 stopped VMs, 2 empty server groups, 1 leaked image store volume, 23 unused images and snapshots, 3 unbound ports left by earlier App Catalog deploys (the LINSTOR NFS VIP correctly excluded), 1 network with no VMs, no empty tenants, no orphaned VMs. Hiding a VM from Nova's list made it show as unknown to PCD after the second collection.
 
-**CPU overcommit analysis**, per host and per aggregate:
-- ⬜ For each host, put side by side:
-  - vCPUs allocated and physical cores (`openstack_placement_resource_usage` / `_total`, VCPU);
-  - the configured `openstack_placement_allocation_ratio`;
-  - the effective ratio and the headroom left.
-- ⬜ Set against real load (`pcd:hyp_cpu_usage`) and contention (`pcd:vm_cpu_throttling_percentage`).
-- ⬜ Flag hosts that are over-allocated *and* contended, and hosts where the ratio could safely go up.
-
-**Memory overcommit analysis**
-- ⬜ RAM allocated (Placement MEMORY_MB, `pcd:vm_mem_allocated`) vs physical (`pcd:hyp_mem_total`) vs the allocation ratio and reserved memory.
-- ⬜ Compared with real usage (`pcd:hyp_mem_usage`, `pcd:vm_mem_usage`). Flags swap and pressure risk where allocation is above 1:1 and usage is high.
+**CPU and memory overcommit** (0.7.2; rules in `services/overcommit.py`, page Capacity Planning → **Overcommit**)
+- 🧪 Per host and per cluster, from Placement (each compute node's resource provider, whose UUID is the Nova hypervisor id): host CPUs or memory, reserved, the allocation ratio, what that allows, what is allocated, and the effective ratio (allocated ÷ host CPUs or memory). Read every 15 minutes.
+- 🧪 Against real load: the 95th percentile over 7 days of host CPU %, memory used %, swap-in (pages/s, PCD Ops' store only) and each VM's CPU wait (steal), averaged over the host's VMs by vCPUs, with the worst VM named. Worked out at most hourly, from PCD Ops' store or PCD's Grafana; until 7 days are collected it uses what there is and says so. Without either, hosts are judged on allocation alone.
+- 🧪 **CPU:** *contended* (more vCPUs than host CPUs in use, and VMs wait ≥ 5 % for a CPU or the host is ≥ 85 % busy); *busy* (the same without overcommit, so the ratio isn't the cause); *nearly full* (≥ 80 % of what the ratio allows); *room to raise* (nearly full but under 50 % busy, with a suggested ratio sized for 70 % load, in 0.5 steps, at most double; an estimate).
+- 🧪 **Memory:** *pressure* (swapping in ≥ 10 pages/s, or more allocated than the host has and ≥ 90 % used); *high usage* (≥ 90 % used without overcommit); *nearly full*.
+- 🧪 Clusters take their worst host's status and show how many hosts have each. CPU and memory views and a status filter in the URL. `GET /capacity/overcommit`.
+- 🧪 Lab check (2026-11-06): 3 hosts at 2:1 CPU and 1:1 memory; pf9hyp01 84 % of its CPU ratio allocated at 8 % load (room to raise) and 84 % of its memory (nearly full); the others OK. A synthetic overloaded host showed as contended and under memory pressure.
 
 **Idle VM detection** (0.7.1)
 - 🧪 Running VMs whose 95th-percentile CPU, network and disk IOPS over a window are all under thresholds (defaults: 14 days, 5 %, 10 KB/s, 1 IOPS; changed on the Reclamation page, saved in Settings). VMs younger than the window are left out. Worked out at most hourly with one `quantile_over_time` subquery per metric.

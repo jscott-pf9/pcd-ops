@@ -220,6 +220,17 @@ Return capacity trend data over a rolling window with per-resource time series a
 
 ---
 
+### **GET** `/api/capacity/overcommit`
+
+CPU and memory overcommit per host and cluster: Placement's allocation (physical, reserved,
+
+allocation ratio, allocated) against the 95th percentile of real load, with a status and its
+reason for each host. Thresholds are in `thresholds`.
+
+**Response:** 200 — Successful Response  
+
+---
+
 ### **POST** `/api/capacity/what-if`
 
 Simulate the impact of adding resources; returns current vs projected utilization and whether it fits.

@@ -82,6 +82,11 @@ HOST: dict[str, dict[str, str | None]] = {
         "local": f"sum by (hypervisor_id) (rate(node_network_transmit_bytes_total{{{NIC},SEL}}{R}))",
         "pcd": "sum by (host) (pcd:hyp_net_tx_throughput{SEL})",
     },
+    # Pages read back from swap per second: memory pressure, not just swap that sits there.
+    "swap_in_pps": {
+        "local": f"sum by (hypervisor_id) (rate(node_vmstat_pswpin{{SEL}}{R}))",
+        "pcd": None,
+    },
 }
 
 VM: dict[str, dict[str, str | None]] = {

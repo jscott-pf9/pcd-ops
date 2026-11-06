@@ -32,6 +32,17 @@ async def capacity_trends():
     return data
 
 
+@router.get("/overcommit")
+async def capacity_overcommit():
+    """CPU and memory overcommit per host and cluster: Placement's allocation (physical, reserved,
+    allocation ratio, allocated) against the 95th percentile of real load, with a status and its
+    reason for each host. Thresholds are in `thresholds`."""
+    data, _ = cache_get("capacity:overcommit")
+    if data is None:
+        raise HTTPException(503, detail={"code": "no_data", "key": "capacity:overcommit"})
+    return data
+
+
 # ── What-If simulation (ad-hoc, not saved) ────────────────────────────────────
 
 class WhatIfRequest(BaseModel):

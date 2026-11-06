@@ -1,7 +1,7 @@
 """
 Agent runner — orchestrates collection across all domains and logs each run.
 
-Fast  (inventory, reclamation, capacity, snapshots, logs): every 15 min.
+Fast  (inventory, reclamation, capacity, overcommit, snapshots, logs): every 15 min.
 Slow  (anomaly, capacity trends — 1 AI call each):         every 1 hour.
 Daily (right-sizing — 1 AI call per VM):                   per its schedule in Settings
                                                             (checked hourly).
@@ -83,7 +83,8 @@ async def run_fast() -> None:
             ("logs",        collector.collect_logs()),
         ])
         # After inventory, which it maps hosts through.
-        errors += await _gather_named([("host_metrics", collector.collect_host_metrics())])
+        errors += await _gather_named([("host_metrics", collector.collect_host_metrics()),
+                                       ("overcommit", collector.collect_overcommit())])
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))
             logger.error("Fast collection run failed (run_id=%d): %s", run_id, errors)

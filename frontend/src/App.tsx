@@ -24,6 +24,7 @@ import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } 
 import Anomaly from "./pages/Anomaly";
 import Capacity from "./pages/Capacity";
 import CapacityPlans from "./pages/CapacityPlans";
+import Overcommit from "./pages/overcommit/Overcommit";
 import Inventory from "./pages/Inventory";
 import InventoryDetail from "./pages/inventory/Detail";
 import Logs from "./pages/Logs";
@@ -68,7 +69,8 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/reclamation", label: "Reclamation",     icon: RefreshCw },
       { path: "/capacity",    label: "Capacity Planning", icon: BarChart2,
-        children: [{ path: "/capacity/plans", label: "Forecast Plans" }] },
+        children: [{ path: "/capacity/overcommit", label: "Overcommit" },
+                   { path: "/capacity/plans", label: "Forecast Plans" }] },
       { path: "/rightsizing", label: "Right-Sizing",    icon: Sliders   },
       { path: "/snapshots",   label: "Snapshots",       icon: Camera    },
       { path: "/jobs",        label: "Automation",      icon: Briefcase },
@@ -290,6 +292,7 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
           <Route path="/topology"          element={<Topology />}        />
           <Route path="/reclamation"       element={<Reclamation />}     />
           <Route path="/capacity"          element={<Capacity />}        />
+          <Route path="/capacity/overcommit" element={<Overcommit />}  />
           <Route path="/capacity/plans"    element={<CapacityPlans />}   />
           <Route path="/rightsizing"       element={<RightSizing />}     />
           <Route path="/snapshots"         element={<Snapshots />}       />
