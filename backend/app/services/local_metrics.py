@@ -51,7 +51,7 @@ KEEP = {
     "libvirt": (
         "libvirt_up|libvirt_domain_info_.*"
         "|libvirt_domain_block_stats_(read|write)_(bytes|requests|time_seconds)_total"
-        "|libvirt_domain_block_stats_(capacity|physicalsize)_bytes"
+        "|libvirt_domain_block_stats_(capacity|physicalsize)_bytes|libvirt_domain_block_stats_allocation"
         "|libvirt_domain_interface_stats_(receive|transmit)_(bytes|packets|drops|errors)_total"
         "|libvirt_domain_memory_stats_.*"
         "|libvirt_domain_vcpu_(time|delay|wait)_seconds_total"

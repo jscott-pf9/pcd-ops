@@ -34,12 +34,22 @@ export function summary(kind: Kind, r: any, ctx: Ctx): Fact[] {
       ["Load now", m ? `CPU ${formatPct(m.cpu_pct)} · memory ${formatPct(m.mem_pct)}` : "—"],
       ["Server group", r.server_group?.name ?? "—"],
     ];
+    case "flavors": return [
+      ["vCPUs", String(r.vcpus ?? "—")],
+      ["RAM", mbToGb(r.ram_mb) != null ? `${mbToGb(r.ram_mb)} GB` : "—"],
+      ["Disk", r.disk_gb ? fmtSize(r.disk_gb) : "0 (boot from volume)"],
+      ["Ephemeral / swap", `${r.ephemeral_gb ?? 0} GB / ${r.swap_mb ?? 0} MB`],
+      ["Public", yes(r.public)],
+      ["Extra specs", String(Object.keys(r.extra_specs ?? {}).length)],
+      ["VMs", String(r.vms ?? 0)],
+    ];
     case "volumes": return [
       ["Status", r.status],
       ["Size", fmtSize(r.size_gb)],
       ["Type", r.volume_type ?? "—"],
       ["Backend", r.backend ?? "—"],
-      ["Attached", r.attached_to?.length ? `${r.attached_to.length} VM` : "No"],
+      ["Attached", r.attachments?.length ? r.attachments.map((a: any) => a.device).filter(Boolean).join(", ") || `${r.attachments.length} VM` : "No"],
+      ["Bootable", yes(r.bootable)],
       ["Tenant", ctx.tenant(r.project_id)],
     ];
     case "storage_backends": return [
@@ -88,6 +98,7 @@ export function summary(kind: Kind, r: any, ctx: Ctx): Fact[] {
       ["Tenant", ctx.tenant(r.project_id)],
     ];
     case "images": return [
+      ["Type", r.kind === "snapshot" ? `Snapshot (${r.snapshot_type})` : "Image"],
       ["Status", r.status],
       ["Visibility", r.visibility],
       ["Format", r.disk_format ?? "—"],

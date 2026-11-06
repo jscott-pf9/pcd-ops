@@ -57,6 +57,16 @@ export const EXPORTS: Record<Kind, Sheet[]> = {
       fmtDate(s.created_at), fmtDate(s.updated_at), s.image_id ?? "", s.id,
     ]),
   }],
+  flavors: [{
+    name: "Flavors", file: "flavors.csv",
+    headers: ["Name", "vCPUs", "RAM GB", "Disk GB", "Ephemeral GB", "Swap MB", "Public", "Disabled",
+      "RX/TX Factor", "VMs", "Extra Specs", "Description", "ID"],
+    rows: items => items.map(f => [
+      f.name, f.vcpus, mbToGb(f.ram_mb) ?? "", f.disk_gb, f.ephemeral_gb ?? "", f.swap_mb ?? "",
+      yn(f.public), yn(f.disabled), f.rxtx_factor ?? "", f.vms ?? 0,
+      Object.entries(f.extra_specs ?? {}).map(([k, v]) => `${k}=${v}`).join("; "), f.description ?? "", f.id,
+    ]),
+  }],
   server_groups: [{
     name: "Server Groups", file: "server_groups.csv",
     headers: ["Name", "Policy", "Max Per Host", "Placement", "Detail", "Members", "Member Names",
@@ -69,10 +79,12 @@ export const EXPORTS: Record<Kind, Sheet[]> = {
   }],
   volumes: [{
     name: "Volumes", file: "volumes.csv",
-    headers: ["Name", "Status", "Size GB", "Type", "Backend", "Pool", "Attached To", "Tenant", "Created", "ID"],
+    headers: ["Name", "Status", "Size GB", "Type", "Backend", "Pool", "Bootable", "Attached To", "Devices",
+      "Tenant", "Created", "ID"],
     rows: (items, ctx) => items.map(v => [
-      v.name, v.status, v.size_gb, v.volume_type ?? "", v.backend ?? "", v.host ?? "",
-      join(v.attached_to), ctx.tenant(v.project_id), fmtDate(v.created_at), v.id,
+      v.name, v.status, v.size_gb, v.volume_type ?? "", v.backend ?? "", v.host ?? "", yn(v.bootable),
+      join(v.attached_to), join((v.attachments ?? []).map((a: any) => a.device)),
+      ctx.tenant(v.project_id), fmtDate(v.created_at), v.id,
     ]),
   }],
   storage_backends: [{
@@ -124,10 +136,13 @@ export const EXPORTS: Record<Kind, Sheet[]> = {
     ]),
   }],
   images: [{
-    name: "Images", file: "images.csv",
-    headers: ["Name", "Status", "Visibility", "Format", "Size GB", "VMs Using", "Protected", "Owner", "Created", "ID"],
+    name: "Images & Snapshots", file: "images.csv",
+    headers: ["Name", "Type", "Snapshot Of", "Base Image", "Status", "Visibility", "Format", "Size GB",
+      "Min Disk GB", "Min RAM MB", "VMs Using", "Protected", "Owner", "Created", "ID"],
     rows: (items, ctx) => items.map(img => [
-      img.name, img.status, img.visibility, img.disk_format, img.size_gb, join(img.used_by_vms),
+      img.name, img.kind === "snapshot" ? `snapshot (${img.snapshot_type})` : "image",
+      img.instance_uuid ?? "", img.base_image_ref ?? "", img.status, img.visibility, img.disk_format,
+      img.size_gb, img.min_disk_gb ?? "", img.min_ram_mb ?? "", join(img.used_by_vms),
       yn(img.is_protected), ctx.tenant(img.owner), fmtDate(img.created_at), img.id,
     ]),
   }],
@@ -140,11 +155,16 @@ export const EXPORTS: Record<Kind, Sheet[]> = {
     ]),
   }, {
     name: "SG Rules", file: "security_group_rules.csv",
-    headers: ["Group Name", "Group ID", "Direction", "Protocol", "Port Min", "Port Max", "CIDR", "Ethertype", "Risky"],
-    rows: items => items.flatMap(sg => (sg.rules ?? []).map((r: any) => [
-      sg.name, sg.id, r.direction, r.protocol ?? "any", r.port_range_min ?? "", r.port_range_max ?? "",
-      r.remote_ip_prefix ?? "", r.ethertype ?? "", r.risky ? "Yes" : "No",
-    ])),
+    headers: ["Group Name", "Group ID", "Direction", "Protocol", "Port Min", "Port Max", "CIDR",
+      "Remote Group", "Ethertype", "Description", "Risky"],
+    rows: items => {
+      const names = new Map(items.map(sg => [sg.id, sg.name]));
+      return items.flatMap(sg => (sg.rules ?? []).map((r: any) => [
+        sg.name, sg.id, r.direction, r.protocol ?? "any", r.port_range_min ?? "", r.port_range_max ?? "",
+        r.remote_ip_prefix ?? "", r.remote_group_id ? names.get(r.remote_group_id) ?? r.remote_group_id : "",
+        r.ethertype ?? "", r.description ?? "", r.risky ? "Yes" : "No",
+      ]));
+    },
   }],
 };
 

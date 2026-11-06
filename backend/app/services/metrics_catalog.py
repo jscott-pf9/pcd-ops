@@ -16,6 +16,7 @@ instant queries leave it empty.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 import httpx
@@ -140,7 +141,56 @@ STORAGE: dict[str, dict[str, str | None]] = {
     "provisioned_bytes": {"local": "max(last_over_time(pcd_ops_storage_provisioned_bytes{SEL}))", "pcd": None},
 }
 
-GROUPS = {"host": HOST, "vm": VM, "storage": STORAGE}
+# A cluster (host aggregate): the host metrics over all its hosts. SEL matches several hosts
+# (hypervisor_id=~"…" locally, host=~"…" in Grafana); CPU is averaged over every core.
+CLUSTER: dict[str, dict[str, str | None]] = {
+    k: {src: t and t.replace(" by (hypervisor_id)", "").replace(" by (host)", "") for src, t in v.items()}
+    for k, v in HOST.items()
+}
+# Allocation, which PCD Ops writes into its own store each inventory run; SEL is aggregate="<id>".
+CLUSTER_ALLOC: dict[str, dict[str, str | None]] = {
+    "vcpu_alloc_pct": {"local": "100 * max(last_over_time(pcd_ops_cluster_vcpus_used{SEL})) / max(last_over_time(pcd_ops_cluster_vcpus_total{SEL}))", "pcd": None},
+    "mem_alloc_pct": {"local": "100 * max(last_over_time(pcd_ops_cluster_memory_used_bytes{SEL})) / max(last_over_time(pcd_ops_cluster_memory_total_bytes{SEL}))", "pcd": None},
+    "vms": {"local": "max(last_over_time(pcd_ops_cluster_vms{SEL}))", "pcd": None},
+}
+
+# One volume: libvirt's stats for the VM disk it is attached as (SEL: domain + target_device).
+# PCD's Grafana only has per-VM disk series, so local only.
+_BLK = "libvirt_domain_block_stats_"
+VOLUME: dict[str, dict[str, str | None]] = {
+    "read_bps": {"local": f"sum(rate({_BLK}read_bytes_total{{SEL}}{R}))", "pcd": None},
+    "write_bps": {"local": f"sum(rate({_BLK}write_bytes_total{{SEL}}{R}))", "pcd": None},
+    "read_iops": {"local": f"sum(rate({_BLK}read_requests_total{{SEL}}{R}))", "pcd": None},
+    "write_iops": {"local": f"sum(rate({_BLK}write_requests_total{{SEL}}{R}))", "pcd": None},
+    "latency_ms": {
+        "local": f"1000 * (sum(rate({_BLK}read_time_seconds_total{{SEL}}{R})) + sum(rate({_BLK}write_time_seconds_total{{SEL}}{R}))) / (sum(rate({_BLK}read_requests_total{{SEL}}{R})) + sum(rate({_BLK}write_requests_total{{SEL}}{R})))",
+        "pcd": None,
+    },
+    # What the host sees written (file-backed volumes, e.g. NFS); network disks (RBD) report 0
+    "allocated_bytes": {"local": f"max({_BLK}allocation{{SEL}})", "pcd": None},
+    "capacity_bytes": {"local": f"max({_BLK}capacity_bytes{{SEL}})", "pcd": None},
+}
+
+
+def _on_backend(metric: str) -> str:
+    """A libvirt disk counter's rate, summed over the disks that are volumes on one backend:
+    joined through pcd_ops_volume_disk, which PCD Ops writes each inventory run."""
+    return (f"sum(rate({_BLK}{metric}{R}) * on (domain, target_device) group_left "
+            "max by (domain, target_device) (last_over_time(pcd_ops_volume_disk{SEL}[30m])))")
+
+
+STORAGE.update({
+    "read_bps": {"local": _on_backend("read_bytes_total"), "pcd": None},
+    "write_bps": {"local": _on_backend("write_bytes_total"), "pcd": None},
+    "iops": {"local": f"{_on_backend('read_requests_total')} + {_on_backend('write_requests_total')}", "pcd": None},
+    "latency_ms": {
+        "local": f"1000 * ({_on_backend('read_time_seconds_total')} + {_on_backend('write_time_seconds_total')}) / ({_on_backend('read_requests_total')} + {_on_backend('write_requests_total')})",
+        "pcd": None,
+    },
+})
+
+GROUPS = {"host": HOST, "vm": VM, "storage": STORAGE, "cluster": CLUSTER,
+          "cluster_alloc": CLUSTER_ALLOC, "volume": VOLUME}
 # The label each source keys a group by.
 KEY = {("host", "local"): "hypervisor_id", ("host", "pcd"): "host",
        ("vm", "local"): "domain", ("vm", "pcd"): "domain", ("storage", "local"): "backend"}
@@ -207,6 +257,19 @@ def _collected_days() -> float:
 
 def retention_days(source: str) -> int:
     return local_metrics.retention_days() if source == "local" else PCD_RETENTION_DAYS
+
+
+def cluster_selector(source: str, hypervisors: list[dict]) -> str | None:
+    """Label matcher for several hypervisors in a source; None if it can name none of them."""
+    if source == "local":
+        ids = [h["id"] for h in hypervisors]
+        label = "hypervisor_id"
+    else:
+        ids = [h["service_host"] for h in hypervisors if h.get("service_host")]
+        label = "host"
+    # Nova IDs and PCD host UUIDs: nothing a regex or a PromQL string would read specially
+    ids = [i for i in map(str, ids) if re.fullmatch(r"[\w.-]+", i)]
+    return f'{label}=~"{"|".join(ids)}"' if ids else None
 
 
 def host_selector(source: str, hypervisor: dict) -> str | None:

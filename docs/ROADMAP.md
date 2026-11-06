@@ -125,6 +125,12 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 - 🧪 Storage Types: backend, default, public, QoS, encryption, project access, volumes.
 - 🧪 Server Groups: policy, rules, members and their hosts, and whether placement satisfies the policy (`services/server_groups.py`: violated for affinity / anti-affinity, not satisfied for the soft variants).
 - 🧪 Clusters & Aggregates (was Clusters): every host aggregate, PCD clusters marked; hosts by name, VMs, vCPU and RAM allocation.
+- 🧪 Cluster page: CPU, memory, disk, disk I/O and network over all its hosts, plus vCPU and RAM allocation and VM count over time (each inventory run writes `pcd_ops_cluster_*`).
+- 🧪 Volume page: throughput, IOPS, latency and allocated space from libvirt's stats for the VM disk it is attached as (`device` from Cinder = libvirt `target_device`). Backend page: the same I/O summed over its attached volumes, joined through `pcd_ops_volume_disk`, which each inventory run writes. How full a filesystem inside a volume is needs a guest agent; not available.
+- 🧪 Flavors tab and page: vCPUs, RAM, disks, extra specs, VMs using it.
+- 🧪 Images & Snapshots: Glance snapshots (Nova `image_type=snapshot`, or a `block_device_mapping` for volume-backed VMs) are marked and filterable; a volume-backed snapshot's page lists its Cinder snapshots.
+- 🧪 VM, image, flavor, volume type and volume pages show every property PCD reports (metadata, image properties, extra specs), fetched live with the signed-in user's token; image store locations are never shown. VM pages list interfaces (network, IPs, MAC).
+- 🧪 Security group page: ingress and egress rules separately, with remote groups linked.
 - 🧪 Right-Sizing uses the local store once it has a week of data and then looks back 30 days instead of 7; Anomaly uses it once it has a day.
 
 **Sources** (`services/metrics_catalog.py`): each host and VM metric is defined for the local store (raw exporter series) and for PCD's Grafana (`pcd:*`). Local data is used when it exists; Grafana otherwise, and always for the `openstack_*` series only PCD has (Capacity). VMs join on `domain` = the Nova server UUID in both. Through Grafana, hosts join on Nova's compute service host, the PCD host UUID.

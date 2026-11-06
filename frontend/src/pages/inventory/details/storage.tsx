@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../../../api/client";
 import { Facts, RelatedTable, Section, Usage } from "../../../components/DetailPage";
 import { formatPct } from "../../../components/format";
 import MetricsCharts from "../../../components/MetricsCharts";
 import { fmtDateTime, fmtSize } from "../format";
 import { detailPath, useInventory } from "../kinds";
 import { muted, Pill, StatCard, StatusBadge } from "../shared";
-import { type DetailProps, KindPage, Links, To } from "./common";
+import { AllProperties, type DetailProps, KindPage, Links, To } from "./common";
 
 const size = (v: number) => fmtSize(v);
 const specs = (o?: Record<string, unknown> | null): [string, ReactNode][] =>
@@ -25,9 +27,10 @@ export function VolumeDetail({ item: v, ctx }: DetailProps) {
   const servers = useInventory("servers");
   const types = useInventory("storage_types");
   const type = types.data?.find(t => t.name === v.volume_type || t.id === v.volume_type);
+  const attachments = v.attachments ?? (v.attached_to ?? []).map((id: string) => ({ server_id: id }));
   return (
     <KindPage kind="volumes" item={v}
-      badges={<StatusBadge status={v.status} />}
+      badges={<>{<StatusBadge status={v.status} />}{v.bootable && <span className="badge badge-info">bootable</span>}</>}
       subtitle={<>{fmtSize(v.size_gb)} · {ctx.tenant(v.project_id)}</>}>
       <Section title="Volume">
         <Facts rows={[
@@ -35,14 +38,31 @@ export function VolumeDetail({ item: v, ctx }: DetailProps) {
           ["Type", <To kind="storage_types" id={type?.id}>{v.volume_type ?? "—"}</To>],
           ["Backend", <To kind="storage_backends" id={v.backend}>{v.backend ?? "—"}</To>],
           ["Pool", v.host ? <span className="text-mono" style={{ fontSize: 11 }}>{v.host}</span> : "—"],
+          ["Bootable", <Pill on={!!v.bootable} />],
           ["Tenant", ctx.tenant(v.project_id)],
           ["Created", fmtDateTime(v.created_at)],
         ]} />
       </Section>
-      <Section title="Attached to">
-        <Links items={(v.attached_to ?? []).map((id: string) => ({
-          kind: "servers" as const, id, label: servers.data?.find(s => s.id === id)?.name ?? id }))} />
+      <Section title={`Attached to (${attachments.length})`}>
+        <RelatedTable rows={attachments} rowKey={(a: any) => a.server_id ?? a.device} empty="Not attached"
+          to={(a: any) => (a.server_id ? detailPath("servers", a.server_id) : null)}
+          columns={[
+            { label: "VM", render: (a: any) => (a.server_id
+                ? servers.data?.find(s => s.id === a.server_id)?.name ?? a.server_id
+                : <span className="text-muted">{a.device === "glance_store" ? "Glance image store" : "No VM"}</span>) },
+            { label: "Device", render: (a: any) => <span className="text-mono">{a.device ?? "—"}</span> },
+            { label: "Host", render: (a: any) => servers.data?.find(s => s.id === a.server_id)?.hypervisor_hostname ?? "—" },
+          ]} />
       </Section>
+      <Section title="I/O" full>
+        <MetricsCharts kind="volume" id={v.id} />
+        <p className="text-muted" style={{ fontSize: 11, margin: "8px 0 0" }}>
+          From the hypervisor's view of the VM disk this volume is attached as. How full the filesystem
+          inside is needs a guest agent; "Allocated" is what the host sees written (file-backed volumes
+          such as NFS; network disks such as Ceph RBD report 0).
+        </p>
+      </Section>
+      <AllProperties kind="volumes" id={v.id} />
     </KindPage>
   );
 }
@@ -89,7 +109,7 @@ export function StorageBackendDetail({ item: b }: DetailProps) {
           ["Reported", fmtDateTime(b.reported_at)],
         ]} />
       </Section>
-      <Section title="Capacity history" full>
+      <Section title="Capacity and I/O" full>
         <MetricsCharts kind="storage" id={b.name} />
       </Section>
       <Section title={`Pools (${b.pools?.length ?? 0})`} full aside={b.shared ? "One shared store, reported by each host" : undefined}>
@@ -146,6 +166,7 @@ export function StorageTypeDetail({ item: t, ctx }: DetailProps) {
         <RelatedTable rows={vols} rowKey={v => v.id} to={v => detailPath("volumes", v.id)} empty="No volumes"
           columns={[...volumeColumns.slice(0, 3), { label: "Backend", render: (v: any) => v.backend ?? "—" }, volumeColumns[4]]} />
       </Section>
+      <AllProperties kind="storage_types" id={t.id} />
     </KindPage>
   );
 }
@@ -154,15 +175,32 @@ export function StorageTypeDetail({ item: t, ctx }: DetailProps) {
 
 export function ImageDetail({ item: img, ctx }: DetailProps) {
   const servers = useInventory("servers");
+  const images = useInventory("images");
   const users = (servers.data ?? []).filter(s => s.image_id === img.id);
+  const snapshot = img.kind === "snapshot";
+  const base = img.base_image_ref && images.data?.find(i => i.id === img.base_image_ref);
+  const source = img.instance_uuid && servers.data?.find(s => s.id === img.instance_uuid);
+  const snapshots = (images.data ?? []).filter(i => i.kind === "snapshot" && i.base_image_ref === img.id);
   return (
     <KindPage kind="images" item={img}
-      badges={<><StatusBadge status={img.status?.toUpperCase()} /><StatusBadge status={img.visibility?.toUpperCase()} /></>}
+      badges={<>
+        {snapshot ? <span className="badge badge-provisioning">snapshot · {img.snapshot_type}</span>
+                  : <span className="badge badge-neutral">image</span>}
+        <StatusBadge status={img.status?.toUpperCase()} /><StatusBadge status={img.visibility?.toUpperCase()} />
+      </>}
       subtitle={<>{img.disk_format} · {img.size_gb > 0 ? fmtSize(img.size_gb) : "size unknown"}</>}>
-      <Section title="Image">
+      <Section title={snapshot ? "Snapshot" : "Image"}>
         <Facts rows={[
-          ["Format", img.disk_format ?? "—"],
+          snapshot && ["Snapshot of", source ? <To kind="servers" id={source.id}>{source.name}</To>
+            : img.instance_uuid ? <span className="text-mono" style={{ fontSize: 11 }}>{img.instance_uuid} (deleted)</span>
+            : img.snapshot_type === "volume-backed" ? "A volume-backed VM (data in Cinder snapshots)" : "—"],
+          snapshot && img.base_image_ref && ["Base image", base ? <To kind="images" id={base.id}>{base.name}</To>
+            : <span className="text-mono" style={{ fontSize: 11 }}>{img.base_image_ref}</span>],
+          ["Disk format", img.disk_format ?? "—"],
+          ["Container format", img.container_format ?? "—"],
           ["Size", img.size_gb > 0 ? fmtSize(img.size_gb) : "—"],
+          ["Minimum disk", img.min_disk_gb ? `${img.min_disk_gb} GB` : "—"],
+          ["Minimum RAM", img.min_ram_mb ? `${img.min_ram_mb} MB` : "—"],
           ["Visibility", img.visibility],
           ["Protected", <Pill on={img.is_protected} />],
           ["Owner", ctx.tenant(img.owner)],
@@ -176,6 +214,46 @@ export function ImageDetail({ item: img, ctx }: DetailProps) {
                         { label: "Host", render: s => s.hypervisor_hostname ?? "—" }]} />
           : <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>{(img.used_by_vms ?? []).join(", ") || "No VMs"}</p>}
       </Section>
+      {!snapshot && snapshots.length > 0 && (
+        <Section title={`Snapshots based on it (${snapshots.length})`} full>
+          <RelatedTable rows={snapshots} rowKey={i => i.id} to={i => detailPath("images", i.id)}
+            columns={[{ label: "Snapshot", render: i => i.name }, { label: "Type", render: i => i.snapshot_type },
+                      { label: "Size", render: i => fmtSize(i.size_gb), align: "right" },
+                      { label: "Created", render: i => fmtDateTime(i.created_at) }]} />
+        </Section>
+      )}
+      {img.snapshot_type === "volume-backed" && <SnapshotDisks id={img.id} />}
+      <AllProperties kind="images" id={img.id} title="All properties and metadata" />
     </KindPage>
+  );
+}
+
+/** A volume-backed VM's snapshot is an empty image whose block_device_mapping lists one Cinder
+ *  snapshot per disk; shown from the page's live details. */
+function SnapshotDisks({ id }: { id: string }) {
+  const { data } = useQuery({
+    queryKey: ["inventory", "images", id, "details"],
+    queryFn: () => apiFetch<{ properties: any }>(`/inventory/images/${encodeURIComponent(id)}/details`),
+    retry: false, staleTime: 60_000,
+  });
+  let disks: any[] = [];
+  try {
+    const raw = data?.properties?.properties?.block_device_mapping;
+    disks = (typeof raw === "string" ? JSON.parse(raw) : raw ?? []).filter((d: any) => d.snapshot_id);
+  } catch {
+    // not JSON: All properties shows it as it is
+  }
+  if (!disks.length) return null;
+  return (
+    <Section title={`Disks (${disks.length} Cinder snapshots)`} full>
+      <RelatedTable rows={disks.sort((a, b) => (a.boot_index ?? 99) - (b.boot_index ?? 99))} rowKey={d => d.snapshot_id}
+        columns={[
+          { label: "Device", render: d => <span className="text-mono">{d.device_name ?? "—"}</span> },
+          { label: "Boot", render: d => (d.boot_index === 0 ? "root" : "—") },
+          { label: "Size", render: d => (d.volume_size ? fmtSize(d.volume_size) : "—"), align: "right" },
+          { label: "Cinder snapshot", render: d => <span className="text-mono" style={{ fontSize: 11 }}>{d.snapshot_id}</span> },
+          { label: "Delete with VM", render: d => <Pill on={!!d.delete_on_termination} /> },
+        ]} />
+    </Section>
   );
 }

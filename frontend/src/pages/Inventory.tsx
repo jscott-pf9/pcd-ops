@@ -9,7 +9,7 @@ import { useCtx } from "./inventory/details/common";
 import { EXPORTS } from "./inventory/exports";
 import { fetchInventory, isKind, KINDS, type Kind, TAB_ORDER, useInventory } from "./inventory/kinds";
 import { StatCard, type TableProps } from "./inventory/shared";
-import { ClustersTable, HypervisorsTable, ServerGroupsTable, ServersTable } from "./inventory/tables/compute";
+import { ClustersTable, FlavorsTable, HypervisorsTable, ServerGroupsTable, ServersTable } from "./inventory/tables/compute";
 import { FloatingIpsTable, NetworksTable, SecurityGroupsTable } from "./inventory/tables/network";
 import { ImagesTable, StorageBackendsTable, StorageTypesTable, VolumesTable } from "./inventory/tables/storage";
 
@@ -27,6 +27,7 @@ const TABLES: Record<Kind, ComponentType<TableProps>> = {
   clusters: ClustersTable,
   hypervisors: HypervisorsTable,
   servers: ServersTable,
+  flavors: FlavorsTable,
   server_groups: ServerGroupsTable,
   volumes: VolumesTable,
   storage_backends: StorageBackendsTable,
@@ -106,7 +107,7 @@ export default function Inventory() {
         <div className="tabs" style={{ marginBottom: 0, flex: 1, flexWrap: "wrap" }}>
           {TAB_ORDER.map(k => (
             <button key={k} className={`tab${tab === k ? " active" : ""}`}
-              onClick={() => set({ tab: k, q: "", tenant: "" })}>
+              onClick={() => set({ tab: k, q: "", tenant: "", type: "" })}>
               {KINDS[k].label}
             </button>
           ))}

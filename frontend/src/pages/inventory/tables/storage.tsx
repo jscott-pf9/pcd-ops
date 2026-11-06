@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router-dom";
 import { fmtDate, fmtSize } from "../format";
 import {
   filterRows, HeaderRow, muted, PctBar, Pill, StatusBadge, type TableProps, TableWrap, useRows, useSort,
@@ -21,7 +22,8 @@ export function VolumesTable({ data, isLoading, search, tenantFilter, ctx }: Tab
           <td>{v.volume_type || muted()}</td>
           <td>{v.backend || muted()}</td>
           <td className="text-mono" style={{ fontSize: 11 }}>
-            {v.attached_to?.length ? v.attached_to.map((id: string) => id.slice(0, 8) + "…").join(", ") : muted("unattached")}
+            {v.attached_to?.length ? v.attached_to.filter(Boolean).map((id: string) => id.slice(0, 8) + "…").join(", ")
+              : v.attachments?.some((a: any) => a.device === "glance_store") ? muted("Glance image store") : muted("unattached")}
           </td>
           <td>{ctx.tenant(v.project_id)}</td>
           <td>{fmtDate(v.created_at)}</td>
@@ -103,18 +105,41 @@ export function StorageTypesTable({ data, isLoading, search, tenantFilter, ctx }
 
 // ── Images ──────────────────────────────────────────────────────────────────────
 
+const IMAGE_TYPES = [["", "All"], ["image", "Images"], ["snapshot", "Snapshots"]] as const;
+
 export function ImagesTable({ data, isLoading, search, tenantFilter, ctx }: TableProps) {
+  // Glance holds both uploaded images and VM snapshots; the filter is in the URL (?type=)
+  const [params, setParams] = useSearchParams();
+  const type = params.get("type") ?? "";
+  const counts = { image: 0, snapshot: 0 } as Record<string, number>;
+  (data ?? []).forEach(i => { counts[i.kind] = (counts[i.kind] ?? 0) + 1; });
   const rows = filterRows(data, search, tenantFilter, ["name", "status", "visibility", "disk_format", "owner"], "owner")
+    .filter(img => !type || img.kind === type)
     .map(img => ({ ...img, vm_count: img.used_by_vms?.length ?? 0 }));
   const { sorted, sort, toggle } = useSort<any>(rows);
   const { rowProps, card } = useRows("images", ctx);
   return (
+    <>
+      <div style={{ display: "flex", gap: 4, margin: "4px 0 10px" }}>
+        {IMAGE_TYPES.map(([k, label]) => (
+          <button key={k} type="button" className={`btn btn-sm ${type === k ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setParams(p => { if (k) p.set("type", k); else p.delete("type"); return p; }, { replace: true })}>
+            {label}{k && <span style={{ opacity: 0.7, marginLeft: 4 }}>{counts[k] ?? 0}</span>}
+          </button>
+        ))}
+      </div>
     <TableWrap kind="images" ctx={ctx} isLoading={isLoading} total={data?.length} rows={sorted} card={card}>
-      <HeaderRow sort={sort} toggle={toggle} cols={[["Name", "name"], ["Status", "status"], ["Visibility", "visibility"],
-        ["Format", "disk_format"], ["Size", "size_gb"], ["VMs Using", "vm_count"], ["Created", "created_at"]]} />
+      <HeaderRow sort={sort} toggle={toggle} cols={[["Name", "name"], ["Type", "kind"], ["Status", "status"],
+        ["Visibility", "visibility"], ["Format", "disk_format"], ["Size", "size_gb"], ["VMs Using", "vm_count"],
+        ["Created", "created_at"]]} />
       {sorted.map(img => (
         <tr key={img.id} {...rowProps(img)}>
           <td style={{ fontWeight: 500 }}>{img.name}</td>
+          <td>{img.kind === "snapshot"
+            ? <span className="badge badge-provisioning" title={img.snapshot_type === "volume-backed"
+                ? "Snapshot of a volume-backed VM: the data is in Cinder volume snapshots"
+                : "Snapshot of a VM's disk"}>snapshot · {img.snapshot_type}</span>
+            : <span className="badge badge-neutral">image</span>}</td>
           <td><StatusBadge status={img.status?.toUpperCase()} /></td>
           <td><StatusBadge status={img.visibility?.toUpperCase()} /></td>
           <td className="text-mono" style={{ fontSize: 11 }}>{img.disk_format}</td>
@@ -128,5 +153,6 @@ export function ImagesTable({ data, isLoading, search, tenantFilter, ctx }: Tabl
         </tr>
       ))}
     </TableWrap>
+    </>
   );
 }

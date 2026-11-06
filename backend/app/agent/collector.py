@@ -70,6 +70,19 @@ def _cinder_storage(conn) -> dict:
             "extra": extra}
 
 
+def _image_kind(props: dict) -> dict:
+    """Snapshots in Glance: Nova instance snapshots carry image_type=snapshot; snapshots of
+    volume-backed VMs carry a block_device_mapping (the data is in Cinder snapshots)."""
+    if props.get("block_device_mapping"):
+        kind, snap = "snapshot", "volume-backed"
+    elif props.get("image_type") == "snapshot":
+        kind, snap = "snapshot", "instance"
+    else:
+        kind, snap = "image", None
+    return {"kind": kind, "snapshot_type": snap, "base_image_ref": props.get("base_image_ref"),
+            "instance_uuid": props.get("instance_uuid")}
+
+
 def _volume_types(cinder: dict, volumes: list[dict]) -> list[dict]:
     out = []
     for t in cinder["types"]:
@@ -274,7 +287,12 @@ async def collect_inventory() -> None:
             "volume_type": v.volume_type,
             "host": v.host,
             "backend": backend_of_pool.get(v.host or ""),
-            "attached_to": [a.get("server_id") for a in (v.attachments or [])],
+            # VMs only: Glance's cinder store attaches image volumes with no server ("glance_store")
+            "attached_to": [a["server_id"] for a in (v.attachments or []) if a.get("server_id")],
+            # The VM disk each attachment is (/dev/vdb → libvirt's target_device "vdb")
+            "attachments": [{"server_id": a.get("server_id"), "device": a.get("device")}
+                            for a in (v.attachments or [])],
+            "bootable": str(v.is_bootable).lower() == "true",
             "project_id": v.project_id,
             "created_at": v.created_at,
         }
@@ -287,7 +305,7 @@ async def collect_inventory() -> None:
     backends = storage.group_pools(pools, vol_records, type_records)
     db.cache_set("inventory:storage_backends", backends)
     # Cinder only reports the current capacity: keep its history in PCD Ops' metrics store.
-    await local_metrics.push(storage.samples(backends))
+    await local_metrics.push(storage.samples(backends) + storage.volume_disks(vol_records))
 
     server_by_id = {s.id: s for s in servers}
     group_records = []
@@ -365,6 +383,10 @@ async def collect_inventory() -> None:
             "is_protected": img.is_protected,
             "created_at":   img.created_at,
             "used_by_vms":  image_usage.get(img.id, []),
+            **_image_kind({**(img.properties or {}), "instance_uuid": img.instance_uuid}),
+            "min_disk_gb":  img.min_disk,
+            "min_ram_mb":   img.min_ram,
+            "container_format": img.container_format,
         }
         for img in images
     ])
@@ -386,6 +408,8 @@ async def collect_inventory() -> None:
                 "port_range_min":   r.get("port_range_min"),
                 "port_range_max":   r.get("port_range_max"),
                 "remote_ip_prefix": r.get("remote_ip_prefix"),
+                "remote_group_id":  r.get("remote_group_id"),
+                "description":      r.get("description") or "",
                 "ethertype":        r.get("ethertype", ""),
                 "risky":            _is_risky(r),
             }
@@ -402,8 +426,17 @@ async def collect_inventory() -> None:
         })
     db.cache_set("inventory:security_groups", sg_list)
 
+    flavor_vms: dict[str, int] = {}
+    for s in servers:
+        name = (s.flavor or {}).get("original_name")
+        if name:
+            flavor_vms[name] = flavor_vms.get(name, 0) + 1
     db.cache_set("inventory:flavors", sorted([
-        {"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram, "disk_gb": f.disk or 0}
+        {"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram, "disk_gb": f.disk or 0,
+         "ephemeral_gb": f.ephemeral or 0, "swap_mb": f.swap or 0, "public": f.is_public,
+         "disabled": bool(f.is_disabled), "rxtx_factor": f.rxtx_factor,
+         "description": f.description, "extra_specs": f.extra_specs or {},
+         "vms": flavor_vms.get(f.name, 0)}
         for f in flavors_raw
     ], key=lambda f: (f["vcpus"], f["ram_mb"])))
 
@@ -440,6 +473,15 @@ async def collect_inventory() -> None:
             "updated_at":        agg.updated_at,
         })
     db.cache_set("inventory:clusters", sorted(agg_records, key=lambda a: a["name"]))
+    # Allocation is only reported now; keep its history in the metrics store.
+    await local_metrics.push([
+        (f"pcd_ops_cluster_{k}", {"aggregate": str(a["id"])}, float(a[field] or 0) * scale)
+        for a in agg_records
+        for k, field, scale in (
+            ("vcpus_used", "vcpus_used", 1), ("vcpus_total", "vcpus_total", 1),
+            ("memory_used_bytes", "memory_mb_used", 1024**2),
+            ("memory_total_bytes", "memory_mb_total", 1024**2), ("vms", "vms", 1))
+    ])
 
     active = sum(1 for s in servers if s.status == "ACTIVE")
     # From the records: Nova 2.88+ left these out of the hypervisor objects

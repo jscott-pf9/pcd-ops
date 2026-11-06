@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EXPORTS, toCsv } from "./exports";
-import { cpuName, fmtSize, ramGb, SERVER_GROUP_STATUS } from "./format";
+import { cpuName, flatten, fmtSize, ramGb, SERVER_GROUP_STATUS } from "./format";
 import { detailPath, KINDS, TAB_ORDER } from "./kinds";
 import { summary } from "./summaries";
 
@@ -63,5 +63,22 @@ describe("exports", () => {
         for (const row of sheet.rows([sample[k] ?? {}], ctx)) expect(row.length).toBe(sheet.headers.length);
       }
     }
+  });
+});
+
+describe("flatten", () => {
+  it("turns nested API properties into paths", () => {
+    expect(flatten({ name: "x", flavor: { extra_specs: { "hw:cpu_policy": "dedicated" } },
+                     tags: ["a", "b"], addresses: { net: [{ addr: "10.0.0.1" }] }, none: null })).toEqual([
+      ["name", "x"], ["flavor.extra_specs.hw:cpu_policy", "dedicated"], ["tags", "a, b"],
+      ["addresses.net[0].addr", "10.0.0.1"],
+    ]);
+  });
+});
+
+describe("snapshots", () => {
+  it("are named as such in the hover card", () => {
+    const facts = Object.fromEntries(summary("images", { kind: "snapshot", snapshot_type: "instance" }, ctx));
+    expect(facts.Type).toBe("Snapshot (instance)");
   });
 });

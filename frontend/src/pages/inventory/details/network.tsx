@@ -60,6 +60,8 @@ export function SecurityGroupDetail({ item: sg, ctx }: DetailProps) {
   const users = (servers.data ?? []).filter(s =>
     (s.security_groups ?? []).includes(sg.name) && (!sg.project_id || s.project_id === sg.project_id));
   const rules = sg.rules ?? [];
+  const sgs = useInventory("security_groups");
+  const groupName = (id: string) => (id === sg.id ? `${sg.name} (itself)` : sgs.data?.find(g => g.id === id)?.name ?? id.slice(0, 8));
   return (
     <KindPage kind="security_groups" item={sg}
       badges={sg.risky_rules > 0 ? <span className="badge badge-warn">⚠ {sg.risky_rules} open ingress</span>
@@ -81,17 +83,25 @@ export function SecurityGroupDetail({ item: sg, ctx }: DetailProps) {
           columns={[{ label: "VM", render: s => s.name }, { label: "Status", render: s => <StatusBadge status={s.status} /> },
                     { label: "Host", render: s => s.hypervisor_hostname ?? "—" }]} />
       </Section>
-      <Section title={`Rules (${rules.length})`} full>
-        <RelatedTable rows={rules} rowKey={(r: any) => r.id ?? JSON.stringify(r)} empty="No rules"
-          columns={[
-            { label: "Direction", render: (r: any) => <span style={{ fontWeight: 600, color: r.direction === "ingress" ? "var(--blue-primary)" : "var(--gray-600)" }}>{r.direction}</span> },
-            { label: "Protocol", render: (r: any) => r.protocol ?? "any" },
-            { label: "Ports", render: (r: any) => (r.port_range_min == null ? "all" : r.port_range_max !== r.port_range_min ? `${r.port_range_min}–${r.port_range_max}` : r.port_range_min) },
-            { label: "Remote", render: (r: any) => <span className="text-mono" style={{ fontSize: 11 }}>{r.remote_ip_prefix ?? (r.remote_group_id ? "group" : "any")}</span> },
-            { label: "Ethertype", render: (r: any) => r.ethertype ?? "—" },
-            { label: "", render: (r: any) => (r.risky ? <span className="badge badge-warn">⚠ open</span> : null) },
-          ]} />
-      </Section>
+      {(["ingress", "egress"] as const).map(dir => {
+        const mine = rules.filter((r: any) => r.direction === dir);
+        return (
+          <Section key={dir} title={`${dir === "ingress" ? "Ingress (inbound)" : "Egress (outbound)"} rules (${mine.length})`} full
+            aside={dir === "ingress" && sg.risky_rules > 0 ? `${sg.risky_rules} open to the internet` : undefined}>
+            <RelatedTable rows={mine} rowKey={(r: any) => r.id || JSON.stringify(r)} empty={`No ${dir} rules`}
+              columns={[
+                { label: "Protocol", render: (r: any) => r.protocol ?? "any" },
+                { label: "Ports", render: (r: any) => (r.port_range_min == null ? "all" : r.port_range_max !== r.port_range_min ? `${r.port_range_min}–${r.port_range_max}` : r.port_range_min) },
+                { label: dir === "ingress" ? "From" : "To", render: (r: any) => r.remote_group_id
+                    ? <>group <To kind="security_groups" id={r.remote_group_id}>{groupName(r.remote_group_id)}</To></>
+                    : <span className="text-mono" style={{ fontSize: 11 }}>{r.remote_ip_prefix ?? "any"}</span> },
+                { label: "Ethertype", render: (r: any) => r.ethertype ?? "—" },
+                { label: "Description", render: (r: any) => r.description || <span className="text-muted">—</span> },
+                { label: "", render: (r: any) => (r.risky ? <span className="badge badge-warn">⚠ open</span> : null) },
+              ]} />
+          </Section>
+        );
+      })}
     </KindPage>
   );
 }

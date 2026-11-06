@@ -1,6 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch, errorDetail } from "../../../api/client";
 import { useTenants } from "../../../api/tenants";
-import { DetailPage, ItemLink } from "../../../components/DetailPage";
+import { DetailPage, ItemLink, Section } from "../../../components/DetailPage";
+import { flatten } from "../format";
 import { detailPath, KINDS, type Kind } from "../kinds";
 import type { Ctx } from "../summaries";
 
@@ -37,4 +40,43 @@ export function To({ kind, id, children }: { kind: Kind; id?: string | number | 
 export function Links({ items }: { items: { kind: Kind; id?: string | null; label: string }[] }) {
   if (!items.length) return <span className="text-muted">—</span>;
   return <>{items.map((x, i) => <React.Fragment key={`${x.label}-${i}`}>{i > 0 && ", "}<To kind={x.kind} id={x.id}>{x.label}</To></React.Fragment>)}</>;
+}
+
+/** Everything PCD reports for the item, fetched live with the signed-in user's token when the
+ *  page opens: metadata, image properties, extra specs and the rest. */
+export function AllProperties({ kind, id, title = "All properties" }: { kind: Kind; id: string; title?: string }) {
+  const [filter, setFilter] = useState("");
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["inventory", kind, id, "details"],
+    queryFn: () => apiFetch<{ properties: Record<string, unknown> }>(`/inventory/${kind}/${encodeURIComponent(id)}/details`),
+    retry: false, staleTime: 60_000,
+  });
+  const rows = flatten(data?.properties ?? {});
+  const q = filter.toLowerCase();
+  const shown = rows.filter(([k, v]) => !q || k.toLowerCase().includes(q) || v.toLowerCase().includes(q));
+  return (
+    <Section title={title} full aside={
+      <input className="form-input" placeholder="Filter…" value={filter} onChange={e => setFilter(e.target.value)}
+        style={{ width: 180, fontSize: 12, padding: "3px 8px" }} />
+    }>
+      {isLoading && <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>Loading from PCD…</p>}
+      {error && <p className="text-danger" style={{ fontSize: 12, margin: 0 }}>{errorDetail(error)}</p>}
+      {data && (
+        <>
+          <div style={{ columnWidth: 460, columnGap: 28 }}>
+            {shown.map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 12, padding: "4px 0", borderBottom: "1px solid var(--gray-50)",
+                fontSize: 12, breakInside: "avoid" }}>
+                <span className="text-mono" style={{ color: "var(--gray-500)", minWidth: 170, maxWidth: 240, wordBreak: "break-all" }}>{k}</span>
+                <span style={{ color: "var(--gray-900)", wordBreak: "break-word" }}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-muted" style={{ fontSize: 11, margin: "8px 0 0" }}>
+            {shown.length} of {rows.length} properties, as PCD reports them now.
+          </p>
+        </>
+      )}
+    </Section>
+  );
 }

@@ -98,7 +98,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `services/openstack.py` — Wraps `openstacksdk`; all features import from here, never instantiate `openstack.connect()` elsewhere. `get_connection()` returns the user's connection inside `acting_as()`, else the background one
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
 - `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
-- `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once), and whether a server group's placement meets its policy
+- `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once) and the volume → VM disk series that joins libvirt disk stats to volumes and backends; whether a server group's placement meets its policy
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
 - `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
 - `services/ai/claude.py` — Anthropic Claude implementation
@@ -121,7 +121,7 @@ Each feature has a backend router and a frontend page:
 |---|---|---|
 | Resource Reclamation | `api/reclamation.py` | `pages/Reclamation.tsx` |
 | Capacity Planning | `api/capacity.py` | `pages/Capacity.tsx` |
-| Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All) |
+| Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All; live properties from `GET /inventory/{kind}/{id}/details` with the user's token) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
 | Right-Sizing | `api/rightsizing.py` | `pages/RightSizing.tsx` |
 | Anomaly Detection | `api/anomaly.py` | `pages/Anomaly.tsx` |

@@ -249,3 +249,36 @@ export function ServerGroupsTable({ data, isLoading, search, tenantFilter, ctx }
     </>
   );
 }
+
+// ── Flavors ─────────────────────────────────────────────────────────────────────
+
+export function FlavorsTable({ data, isLoading, search, tenantFilter, ctx }: TableProps) {
+  const rows = filterRows(data, search, tenantFilter, ["name", "description"])
+    .map(f => ({ ...f, spec_count: Object.keys(f.extra_specs ?? {}).length }));
+  const { sorted, sort, toggle } = useSort<any>(rows);
+  const { rowProps, card } = useRows("flavors", ctx);
+  return (
+    <TableWrap kind="flavors" ctx={ctx} isLoading={isLoading} total={data?.length} rows={sorted} card={card}>
+      <HeaderRow sort={sort} toggle={toggle} cols={[["Name", "name"], ["vCPUs", "vcpus"], ["RAM", "ram_mb"],
+        ["Disk", "disk_gb"], ["Ephemeral", "ephemeral_gb"], ["Swap", "swap_mb"], ["Public", "public"],
+        ["Extra Specs", "spec_count"], ["VMs", "vms"]]} />
+      {sorted.map(f => (
+        <tr key={f.id} {...rowProps(f)}>
+          <td className="text-mono" style={{ fontWeight: 500 }}>
+            {f.name}{f.disabled && <span className="badge badge-warn" style={{ marginLeft: 6 }}>disabled</span>}
+          </td>
+          <td>{f.vcpus}</td>
+          <td>{mbToGb(f.ram_mb) != null ? `${mbToGb(f.ram_mb)} GB` : `${f.ram_mb} MB`}</td>
+          <td>{f.disk_gb ? `${f.disk_gb} GB` : muted("0")}</td>
+          <td>{f.ephemeral_gb ? `${f.ephemeral_gb} GB` : muted("0")}</td>
+          <td>{f.swap_mb ? `${f.swap_mb} MB` : muted("0")}</td>
+          <td>{f.public ? <span className="text-success" style={{ fontWeight: 600, fontSize: 12 }}>Yes</span> : muted("No")}</td>
+          <td style={{ fontSize: 11 }}>
+            {f.spec_count ? Object.entries(f.extra_specs).slice(0, 2).map(([k, v]) => `${k}=${v}`).join(", ") + (f.spec_count > 2 ? " …" : "") : muted()}
+          </td>
+          <td>{f.vms ?? 0}</td>
+        </tr>
+      ))}
+    </TableWrap>
+  );
+}

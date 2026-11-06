@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../../../api/client";
 import { EXPORTER_STATUS, getExporterProbe } from "../../../api/exporters";
 import { Facts, RelatedTable, Section, Usage } from "../../../components/DetailPage";
 import { formatPct, formatRate } from "../../../components/format";
@@ -7,7 +8,7 @@ import MetricsCharts from "../../../components/MetricsCharts";
 import { cpuName, fmtDate, fmtDateTime, fmtSize, mbToGb, SERVER_GROUP_STATUS } from "../format";
 import { detailPath, useInventory } from "../kinds";
 import { ExporterDot, muted, Pill, PctBar, StatCard, StatusBadge } from "../shared";
-import { type DetailProps, KindPage, Links, To } from "./common";
+import { AllProperties, type DetailProps, KindPage, Links, To } from "./common";
 
 const gb = (v: number) => `${Math.round(v)} GB`;
 const n0 = (v: number) => String(Math.round(v));
@@ -110,6 +111,8 @@ export function ServerDetail({ item: s, ctx }: DetailProps) {
   const sgs = useInventory("security_groups");
   const groups = useInventory("server_groups");
   const images = useInventory("images");
+  const flavors = useInventory("flavors");
+  const flavor = flavors.data?.find(f => f.name === s.flavor_name);
   const host = hyps.data?.find(h => h.hostname === s.hypervisor_hostname);
   const attached = (volumes.data ?? []).filter(v => (v.attached_to ?? []).includes(s.id));
   const myFips = (fips.data ?? []).filter(f => f.server_id === s.id);
@@ -127,7 +130,7 @@ export function ServerDetail({ item: s, ctx }: DetailProps) {
       </>}>
       <Section title="Configuration">
         <Facts rows={[
-          ["Flavor", <span className="text-mono">{s.flavor_name}</span>],
+          ["Flavor", <To kind="flavors" id={flavor?.id}><span className="text-mono">{s.flavor_name}</span></To>],
           ["vCPUs", s.flavor_vcpus ?? "—"],
           ["RAM", mbToGb(s.flavor_ram_mb) != null ? `${mbToGb(s.flavor_ram_mb)} GB` : "—"],
           ["Image", image ? <To kind="images" id={image.id}>{image.name}</To>
@@ -153,6 +156,7 @@ export function ServerDetail({ item: s, ctx }: DetailProps) {
           ["Floating IPs", <Links items={myFips.map(f => ({ kind: "floating_ips" as const, id: f.id, label: f.floating_ip_address }))} />],
           ["Security groups", <Links items={(s.security_groups ?? []).map((n: string) => ({ kind: "security_groups" as const, id: sgId(n), label: n }))} />],
         ]} />
+        <Interfaces id={s.id} />
       </Section>
       <Section title="Metrics" full>
         <MetricsCharts kind="vm" id={s.id} />
@@ -165,8 +169,51 @@ export function ServerDetail({ item: s, ctx }: DetailProps) {
             { label: "Size", render: v => fmtSize(v.size_gb), align: "right" },
             { label: "Type", render: v => v.volume_type ?? "—" },
             { label: "Backend", render: v => v.backend ?? "—" },
+            { label: "Device", render: v => <span className="text-mono">{(v.attachments ?? []).find((a: any) => a.server_id === s.id)?.device ?? "—"}</span> },
           ]} />
       </Section>
+      <AllProperties kind="servers" id={s.id} />
+    </KindPage>
+  );
+}
+
+// ── Flavor ──────────────────────────────────────────────────────────────────────
+
+export function FlavorDetail({ item: f, ctx }: DetailProps) {
+  const servers = useInventory("servers");
+  const vms = (servers.data ?? []).filter(s => s.flavor_name === f.name);
+  const specs = Object.entries(f.extra_specs ?? {});
+  return (
+    <KindPage kind="flavors" item={f}
+      badges={<>{!f.public && <span className="badge badge-neutral">private</span>}
+                {f.disabled && <span className="badge badge-warn">disabled</span>}</>}
+      subtitle={f.description || undefined}
+      stats={<>
+        <StatCard label="vCPUs" value={String(f.vcpus)} accent="var(--blue-primary)" />
+        <StatCard label="RAM" value={mbToGb(f.ram_mb) != null ? `${mbToGb(f.ram_mb)} GB` : `${f.ram_mb} MB`} accent="var(--green)" />
+        <StatCard label="Root disk" value={f.disk_gb ? `${f.disk_gb} GB` : "0"} sub={f.disk_gb ? undefined : "boots from volume"} accent="var(--purple)" />
+        <StatCard label="VMs" value={String(vms.length)} accent="var(--yellow)" />
+      </>}>
+      <Section title="Flavor">
+        <Facts rows={[
+          ["vCPUs", f.vcpus],
+          ["RAM", `${f.ram_mb} MB`],
+          ["Root disk", f.disk_gb ? `${f.disk_gb} GB` : "0 (boot from volume)"],
+          ["Ephemeral disk", `${f.ephemeral_gb ?? 0} GB`],
+          ["Swap", `${f.swap_mb ?? 0} MB`],
+          ["RX/TX factor", f.rxtx_factor ?? "—"],
+          ["Public", <Pill on={f.public} />],
+          ["Disabled", <Pill on={f.disabled} />],
+        ]} />
+      </Section>
+      <Section title={`Extra specs (${specs.length})`}>
+        {specs.length ? <Facts rows={specs.map(([k, v]) => [k, <span className="text-mono" style={{ fontSize: 12 }}>{String(v)}</span>])} />
+          : <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>None</p>}
+      </Section>
+      <Section title={`VMs (${vms.length})`} full>
+        <RelatedTable rows={vms} rowKey={s => s.id} to={s => detailPath("servers", s.id)} columns={vmColumns(ctx)} empty="No VMs use this flavor" />
+      </Section>
+      <AllProperties kind="flavors" id={f.id} />
     </KindPage>
   );
 }
@@ -257,6 +304,9 @@ export function ClusterDetail({ item: c, ctx }: DetailProps) {
           ...meta.map(([k, v]) => [k, <span className="text-mono" style={{ fontSize: 12 }}>{String(v)}</span>] as [string, React.ReactNode]),
         ]} />
       </Section>
+      <Section title="Utilization" full>
+        <MetricsCharts kind="cluster" id={String(c.id)} />
+      </Section>
       <Section title={`Hosts (${hosts.length})`} full>
         <RelatedTable rows={hosts} rowKey={(h: any) => h.service_host} empty="No hosts"
           to={(h: any) => (h.hypervisor_id ? detailPath("hypervisors", h.hypervisor_id) : null)}
@@ -275,5 +325,33 @@ export function ClusterDetail({ item: c, ctx }: DetailProps) {
         <RelatedTable rows={vms} rowKey={s => s.id} to={s => detailPath("servers", s.id)} columns={vmColumns(ctx)} empty="No VMs" />
       </Section>
     </KindPage>
+  );
+}
+
+/** The VM's ports from PCD (MAC, network, addresses), loaded with the page's live details. */
+function Interfaces({ id }: { id: string }) {
+  const networks = useInventory("networks");
+  const { data } = useQuery({
+    queryKey: ["inventory", "servers", id, "details"],
+    queryFn: () => apiFetch<{ interfaces?: any[] }>(`/inventory/servers/${encodeURIComponent(id)}/details`),
+    retry: false, staleTime: 60_000,
+  });
+  const ifs = data?.interfaces ?? [];
+  if (!ifs.length) return null;
+  const netName = (nid: string) => networks.data?.find(n => n.id === nid)?.name ?? nid?.slice(0, 8);
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-500)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 4 }}>
+        Interfaces
+      </div>
+      {ifs.map(i => (
+        <div key={i.port_id} style={{ fontSize: 12, padding: "4px 0", borderBottom: "1px solid var(--gray-50)" }}>
+          <To kind="networks" id={i.net_id}>{netName(i.net_id)}</To>
+          <span className="text-mono" style={{ marginLeft: 8, fontSize: 11 }}>{(i.fixed_ips ?? []).map((f: any) => f.ip_address).join(", ")}</span>
+          <span className="text-mono text-muted" style={{ marginLeft: 8, fontSize: 11 }}>{i.mac_addr}</span>
+          {i.port_state && i.port_state !== "ACTIVE" && <span className="badge badge-warn" style={{ marginLeft: 6 }}>{i.port_state}</span>}
+        </div>
+      ))}
+    </div>
   );
 }

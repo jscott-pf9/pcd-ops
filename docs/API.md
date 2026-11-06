@@ -489,6 +489,31 @@ Return all SSH key pairs registered in Nova.
 
 ---
 
+### **GET** `/api/inventory/flavors`
+
+Return Nova flavors: vCPUs, RAM, disk, ephemeral, swap, public, extra specs, VM count.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/{kind}/{item_id}/details`
+
+Everything PCD reports for one VM, image, flavor, volume type or volume, fetched now
+
+with the signed-in user's token (metadata, image properties, extra specs, ...).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `kind` | path | string | yes | — |  |
+| `item_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ## Jobs
 
 ### **GET** `/api/jobs/`
@@ -731,6 +756,40 @@ keeps it (written each inventory run), so this is 503 without it.
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `backend` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/clusters/{aggregate_id}`
+
+CPU, memory, disk and network over a cluster's (host aggregate's) hosts, and its vCPU,
+
+RAM and VM allocation over time (PCD Ops' metrics store only).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `aggregate_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/volumes/{volume_id}`
+
+Throughput, IOPS, latency and allocation for one volume: libvirt's stats for the VM disk
+
+it is attached as (PCD Ops' metrics store only; 404 when it isn't attached).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `volume_id` | path | string | yes | — |  |
 | `range` | query | string | no | `"24h"` |  |
 
 **Response:** 200 — Successful Response  

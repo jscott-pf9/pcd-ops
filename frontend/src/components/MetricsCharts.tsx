@@ -2,31 +2,34 @@ import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { errorDetail } from "../api/client";
 import {
-  type History, type Range, getHostHistory, getMetricsStatus, getStorageHistory, getVmHistory,
-  rangesWithin, SOURCE_LABEL,
+  type History, type Range, getClusterHistory, getHostHistory, getMetricsStatus, getStorageHistory,
+  getVmHistory, getVolumeHistory, rangesWithin, SOURCE_LABEL,
 } from "../api/metrics";
 import { mergeSeries } from "./chartData";
 import { formatBytes, formatPct, formatRate } from "./format";
 import TimeChart, { type SeriesDef } from "./TimeChart";
 
 type ChartDef = { title: string; series: SeriesDef[]; format: (v: number) => string; max?: number };
-export type MetricsKind = "host" | "vm" | "storage";
+export type MetricsKind = "host" | "vm" | "storage" | "cluster" | "volume";
 
 const BLUE = "var(--blue-primary)", GREEN = "var(--green)", PURPLE = "var(--purple)",
   YELLOW = "var(--yellow)", GRAY = "var(--gray-400)";
 const ms = (v: number) => `${v.toFixed(v < 10 ? 2 : 0)} ms`;
 const iops = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(v < 10 ? 1 : 0));
+const count = (v: number) => String(Math.round(v));
+
+const HOST_CHARTS: ChartDef[] = [
+  { title: "CPU",        series: [{ key: "cpu_pct",  label: "CPU",    color: BLUE }],  format: formatPct, max: 100 },
+  { title: "Memory",     series: [{ key: "mem_pct",  label: "Memory", color: GREEN }], format: formatPct, max: 100 },
+  { title: "Disk space", series: [{ key: "disk_pct", label: "Used",   color: PURPLE }], format: formatPct, max: 100 },
+  { title: "Disk I/O",   series: [{ key: "disk_read_bps", label: "Read", color: PURPLE },
+                                  { key: "disk_write_bps", label: "Write", color: YELLOW }], format: formatRate },
+  { title: "Network",    series: [{ key: "net_rx_bps", label: "In", color: BLUE },
+                                  { key: "net_tx_bps", label: "Out", color: GREEN }], format: formatRate },
+];
 
 const CHARTS: Record<MetricsKind, ChartDef[]> = {
-  host: [
-    { title: "CPU",        series: [{ key: "cpu_pct",  label: "CPU",    color: BLUE }],  format: formatPct, max: 100 },
-    { title: "Memory",     series: [{ key: "mem_pct",  label: "Memory", color: GREEN }], format: formatPct, max: 100 },
-    { title: "Disk space", series: [{ key: "disk_pct", label: "Used",   color: PURPLE }], format: formatPct, max: 100 },
-    { title: "Disk I/O",   series: [{ key: "disk_read_bps", label: "Read", color: PURPLE },
-                                    { key: "disk_write_bps", label: "Write", color: YELLOW }], format: formatRate },
-    { title: "Network",    series: [{ key: "net_rx_bps", label: "In", color: BLUE },
-                                    { key: "net_tx_bps", label: "Out", color: GREEN }], format: formatRate },
-  ],
+  host: HOST_CHARTS,
   vm: [
     { title: "CPU",          series: [{ key: "cpu_pct", label: "CPU", color: BLUE },
                                       { key: "cpu_wait_pct", label: "Wait (steal)", color: YELLOW }], format: formatPct, max: 100 },
@@ -41,11 +44,31 @@ const CHARTS: Record<MetricsKind, ChartDef[]> = {
                                   { key: "used_bytes", label: "Used", color: BLUE },
                                   { key: "provisioned_bytes", label: "Provisioned", color: PURPLE }],
       format: formatBytes },
+    { title: "Throughput (attached volumes)", series: [{ key: "read_bps", label: "Read", color: PURPLE },
+                                                       { key: "write_bps", label: "Write", color: YELLOW }], format: formatRate },
+    { title: "IOPS", series: [{ key: "iops", label: "IOPS", color: BLUE }], format: iops },
+    { title: "Latency", series: [{ key: "latency_ms", label: "Latency", color: YELLOW }], format: ms },
+  ],
+  cluster: [
+    ...HOST_CHARTS,
+    { title: "Allocation", series: [{ key: "vcpu_alloc_pct", label: "vCPUs", color: BLUE },
+                                    { key: "mem_alloc_pct", label: "RAM", color: GREEN }], format: formatPct, max: 100 },
+    { title: "VMs", series: [{ key: "vms", label: "VMs", color: PURPLE }], format: count },
+  ],
+  volume: [
+    { title: "Throughput", series: [{ key: "read_bps", label: "Read", color: PURPLE },
+                                    { key: "write_bps", label: "Write", color: YELLOW }], format: formatRate },
+    { title: "IOPS", series: [{ key: "read_iops", label: "Read", color: PURPLE },
+                              { key: "write_iops", label: "Write", color: YELLOW }], format: iops },
+    { title: "Latency", series: [{ key: "latency_ms", label: "Latency", color: YELLOW }], format: ms },
+    { title: "Space", series: [{ key: "capacity_bytes", label: "Size", color: GRAY },
+                               { key: "allocated_bytes", label: "Allocated", color: BLUE }], format: formatBytes },
   ],
 };
 
 const FETCH: Record<MetricsKind, (id: string, r: Range) => Promise<History>> = {
-  host: getHostHistory, vm: getVmHistory, storage: getStorageHistory,
+  host: getHostHistory, vm: getVmHistory, storage: getStorageHistory, cluster: getClusterHistory,
+  volume: getVolumeHistory,
 };
 
 /** History charts for one hypervisor, VM or storage backend, with a range picker. Hovering
@@ -59,7 +82,9 @@ export default function MetricsCharts({ kind, id }: { kind: MetricsKind; id: str
     queryFn: () => FETCH[kind](id, range),
     retry: false,
   });
-  const retention = kind === "storage" ? status?.local.retention_days : status?.retention_days;
+  // Storage and volume history only come from PCD Ops' own store
+  const localOnly = kind === "storage" || kind === "volume";
+  const retention = localOnly ? status?.local.retention_days : status?.retention_days;
   const charts = CHARTS[kind]
     .map(c => ({ ...c, series: c.series.filter(s => !data || (data.series[s.key]?.length ?? 0) > 0) }))
     .filter(c => c.series.length > 0);
@@ -85,7 +110,7 @@ export default function MetricsCharts({ kind, id }: { kind: MetricsKind; id: str
       )}
       {data && (
         <div style={{ display: "grid", gap: 12,
-          gridTemplateColumns: kind === "storage" ? "1fr" : "repeat(auto-fit, minmax(380px, 1fr))" }}>
+          gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))" }}>
           {charts.map(c => {
             const rows = mergeSeries(Object.fromEntries(c.series.map(s => [s.key, data.series[s.key]])));
             const latest = (key: string) => { const s = data.series[key]; return s?.length ? s[s.length - 1].v : undefined; };
@@ -103,7 +128,7 @@ export default function MetricsCharts({ kind, id }: { kind: MetricsKind; id: str
                   </span>
                 </div>
                 <TimeChart data={rows} series={c.series} format={c.format} days={data.days}
-                  syncId={syncId} max={c.max} height={kind === "storage" ? 220 : 170} />
+                  syncId={syncId} max={c.max} />
               </div>
             );
           })}

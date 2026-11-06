@@ -42,9 +42,17 @@ export const getHostHistory = (id: string, range: Range) =>
 export const getVmHistory = (id: string, range: Range) =>
   apiFetch<History>(`/metrics/vms/${encodeURIComponent(id)}?range=${range}`);
 
-/** Capacity history of one Cinder backend (PCD Ops' metrics store only). */
+/** Capacity and I/O history of one Cinder backend (PCD Ops' metrics store only). */
 export const getStorageHistory = (backend: string, range: Range) =>
   apiFetch<History>(`/metrics/storage/${encodeURIComponent(backend)}?range=${range}`);
+
+/** A cluster's hosts together, and its allocation over time. */
+export const getClusterHistory = (id: string, range: Range) =>
+  apiFetch<History>(`/metrics/clusters/${encodeURIComponent(id)}?range=${range}`);
+
+/** One volume's I/O, from the VM disk it is attached as (PCD Ops' metrics store only). */
+export const getVolumeHistory = (id: string, range: Range) =>
+  apiFetch<History>(`/metrics/volumes/${encodeURIComponent(id)}?range=${range}`);
 
 export interface LocalTarget {
   job: "node" | "libvirt"; hypervisor: string; hypervisor_id: string; url: string;

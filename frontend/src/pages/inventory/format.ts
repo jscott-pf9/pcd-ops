@@ -38,3 +38,17 @@ export const SERVER_GROUP_STATUS: Record<string, { label: string; badge: string 
   not_satisfied: { label: "Not satisfied", badge: "badge-warn" },
   empty:         { label: "No members",    badge: "badge-neutral" },
 };
+
+/** Nested API properties as [path, value] rows: {a: {b: 1}, c: [x, y]} → [["a.b", "1"], ["c", "x, y"]]. */
+export function flatten(value: unknown, prefix = ""): [string, string][] {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    if (value.every(v => v === null || typeof v !== "object")) return [[prefix, value.join(", ")]];
+    return value.flatMap((v, i) => flatten(v, `${prefix}[${i}]`));
+  }
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .flatMap(([k, v]) => flatten(v, prefix ? `${prefix}.${k}` : k));
+  }
+  return [[prefix, String(value)]];
+}

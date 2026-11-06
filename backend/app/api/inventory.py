@@ -1,7 +1,11 @@
-from fastapi import APIRouter, HTTPException
+import asyncio
+
+import openstack
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.services import exporters
 from app.services.db import cache_get, cache_set
+from app.services.openstack import user_connection
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
@@ -178,3 +182,57 @@ async def list_keypairs():
     """Return all SSH key pairs registered in Nova."""
     data, _ = cache_get("inventory:keypairs")
     return data or []
+
+
+@router.get("/flavors")
+async def list_flavors():
+    """Return Nova flavors: vCPUs, RAM, disk, ephemeral, swap, public, extra specs, VM count."""
+    return _require("inventory:flavors")
+
+
+# Never shown: where image data lives (store URLs can carry credentials) and API bookkeeping
+_HIDDEN = {"location", "links", "locations", "direct_url", "file", "schema"}
+
+
+def clean(value):
+    """Drop empty values and hidden keys, recursively."""
+    if isinstance(value, dict):
+        out = {k: clean(v) for k, v in value.items() if k not in _HIDDEN}
+        return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [clean(v) for v in value]
+    return value
+
+
+def _details(conn: openstack.connection.Connection, kind: str, item_id: str) -> dict:
+    body = lambda r: r.to_dict(computed=False)  # noqa: E731
+    if kind == "servers":
+        server = conn.compute.get_server(item_id)
+        return {"properties": body(server),
+                "interfaces": [body(i) for i in conn.compute.server_interfaces(item_id)]}
+    if kind == "images":
+        return {"properties": body(conn.image.get_image(item_id))}
+    if kind == "flavors":
+        return {"properties": body(conn.compute.get_flavor(item_id, get_extra_specs=True))}
+    if kind == "storage_types":
+        props = body(conn.block_storage.get_type(item_id))
+        r = conn.block_storage.get(f"/types/{item_id}/encryption")
+        if r.ok and r.json():
+            props["encryption"] = r.json()
+        return {"properties": props}
+    if kind == "volumes":
+        return {"properties": body(conn.block_storage.get_volume(item_id))}
+    raise HTTPException(404, detail=f"No details for {kind}")
+
+
+@router.get("/{kind}/{item_id}/details")
+async def item_details(kind: str, item_id: str,
+                       conn: openstack.connection.Connection = Depends(user_connection)):
+    """Everything PCD reports for one VM, image, flavor, volume type or volume, fetched now
+    with the signed-in user's token (metadata, image properties, extra specs, ...)."""
+    try:
+        return clean(await asyncio.to_thread(_details, conn, kind, item_id))
+    except openstack.exceptions.ResourceNotFound:
+        raise HTTPException(404, detail="Not found in PCD") from None
+    except openstack.exceptions.SDKException as e:
+        raise HTTPException(502, detail=f"PCD didn't answer: {e}") from None

@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 import { Link, useParams } from "react-router-dom";
 import { errorDetail } from "../../api/client";
 import { type DetailProps, useCtx } from "./details/common";
-import { ClusterDetail, HypervisorDetail, ServerDetail, ServerGroupDetail } from "./details/compute";
+import { ClusterDetail, FlavorDetail, HypervisorDetail, ServerDetail, ServerGroupDetail } from "./details/compute";
 import { FloatingIpDetail, NetworkDetail, SecurityGroupDetail } from "./details/network";
 import { ImageDetail, StorageBackendDetail, StorageTypeDetail, VolumeDetail } from "./details/storage";
 import { isKind, KINDS, type Kind, useInventory } from "./kinds";
@@ -11,6 +11,7 @@ const PAGES: Record<Kind, ComponentType<DetailProps>> = {
   clusters: ClusterDetail,
   hypervisors: HypervisorDetail,
   servers: ServerDetail,
+  flavors: FlavorDetail,
   server_groups: ServerGroupDetail,
   volumes: VolumeDetail,
   storage_backends: StorageBackendDetail,

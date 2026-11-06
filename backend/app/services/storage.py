@@ -133,3 +133,17 @@ def samples(backends: list[dict]) -> list[tuple[str, dict, float]]:
                 out.append((metric, labels, value * GB))
         out.append(("pcd_ops_storage_volumes", labels, float(b["volumes"])))
     return out
+
+
+def volume_disks(volumes: list[dict]) -> list[tuple[str, dict, float]]:
+    """pcd_ops_volume_disk{volume_id, backend, domain, target_device} = 1 for each attachment:
+    what joins libvirt's per-disk stats to a volume and its backend."""
+    out = []
+    for v in volumes:
+        for a in v.get("attachments") or []:
+            dev = (a.get("device") or "").rsplit("/", 1)[-1]
+            if a.get("server_id") and dev:
+                out.append(("pcd_ops_volume_disk", {
+                    "volume_id": v["id"], "backend": v.get("backend") or "",
+                    "domain": a["server_id"], "target_device": dev}, 1.0))
+    return out
