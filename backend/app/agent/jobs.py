@@ -239,6 +239,14 @@ async def _run_snapshot_create(config: dict) -> dict:
     prefix = "[DRY RUN] " if dry_run else ""
     summary = (f"{prefix}{'Would create' if dry_run else 'Created'} {len(created)} snapshot(s) "
                f"across {len(servers)} VM(s)")
+    # Say why VMs were left out: one booted from an image has only a local disk, no volume
+    no_volumes = sum(1 for s in skipped if s["reason"] == "no attached volumes")
+    failed = len(skipped) - no_volumes
+    if no_volumes:
+        summary += (f"; {no_volumes} VM(s) have no Cinder volumes to snapshot (booted from an "
+                    "image onto a local disk)")
+    if failed:
+        summary += f"; {failed} snapshot(s) failed"
     return {"summary": summary, "dry_run": dry_run, "created_count": len(created),
             "skipped_count": len(skipped), "snapshots": created, "skipped": skipped}
 

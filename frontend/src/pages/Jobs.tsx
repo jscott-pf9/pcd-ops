@@ -590,6 +590,45 @@ function RunDetail({ run, jobType }: { run: JobRun; jobType: string }) {
     );
   }
 
+  // ── Snapshot create ──
+  if (jobType === "snapshot-create") {
+    const snaps: any[] = parsed.snapshots ?? [];
+    const skipped: any[] = parsed.skipped ?? [];
+    return (
+      <div>
+        <div style={{ fontSize: 12, color: "var(--gray-700)", marginBottom: 4 }}>{parsed.summary}{dryBadge}</div>
+        {snaps.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginBottom: 6 }}>
+            <tbody>
+              {snaps.map((s, i) => (
+                <tr key={i} style={{ borderTop: "1px solid var(--gray-100)" }}>
+                  <td style={{ padding: "2px 8px 2px 0", color: "var(--gray-700)" }}>{s.name}</td>
+                  <td style={{ color: "var(--gray-500)", textAlign: "right" }}>{s.size_gb} GB</td>
+                  <td style={{ color: "var(--gray-400)", textAlign: "right", paddingLeft: 8 }}>{s.tenant_name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {skipped.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-500)", marginBottom: 3 }}>Skipped</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <tbody>
+                {skipped.map((s, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid var(--gray-100)" }}>
+                    <td style={{ padding: "2px 8px 2px 0", color: "var(--gray-700)" }}>{s.name}</td>
+                    <td style={{ color: "var(--gray-500)" }}>{s.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </div>
+    );
+  }
+
   // ── Resource reclamation ──
   if (jobType === "resource-reclamation") {
     const vms: any[]  = parsed.vms_actioned ?? [];
