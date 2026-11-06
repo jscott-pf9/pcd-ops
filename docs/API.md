@@ -53,6 +53,7 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 - [Anomaly](#anomaly)
 - [Auth](#auth)
 - [Capacity](#capacity)
+- [Drift](#drift)
 - [Events](#events)
 - [Feedback](#feedback)
 - [Inventory](#inventory)
@@ -350,6 +351,39 @@ Delete a capacity plan.
 | `plan_id` | path | integer | yes | — |  |
 
 **Response:** 204 No Content  
+
+---
+
+## Drift
+
+### **GET** `/api/drift/changes`
+
+The config change log, newest first: flavors, security groups, aggregates, hosts and
+
+quotas added, removed or modified between collections, each with its changed fields
+({field, op: added|removed|changed, before, after}) and severity. Filter by `kind`, the
+last `days`, and `q` (item name or field).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `kind` | query | string | no | — |  |
+| `days` | query | string | no | — |  |
+| `q` | query | string | no | — |  |
+| `limit` | query | integer | no | `500` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/drift/status`
+
+When the change log started, the last collection, items tracked per kind, notes on what
+
+couldn't be read, and changes per kind in the last 24 hours and 7 days.
+
+**Response:** 200 — Successful Response  
 
 ---
 
@@ -913,6 +947,7 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `reclamation_price_ip` | number | no | — | Reclamation Price Ip |
 | `job_run_retention_days` | integer | no | — | Job Run Retention Days |
 | `report_retention_days` | integer | no | — | Report Retention Days |
+| `drift_retention_days` | integer | no | — | Drift Retention Days |
 | `hypervisor_ssh_user` | string | no | — | Hypervisor Ssh User |
 | `hypervisor_ssh_key_path` | string | no | — | Hypervisor Ssh Key Path |
 | `hypervisor_ssh_password` | string | no | — | Hypervisor Ssh Password |

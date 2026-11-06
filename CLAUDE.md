@@ -102,6 +102,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `services/capacity.py`, `services/rightsizing.py` — what the cloud can allocate (Placement for vCPUs and RAM, Cinder backends' written GB for storage; not quota sums) and what-if with a tenant's quotas; the suggested flavor (smaller or bigger) and whether a host in the VM's cluster has room for it
 - `services/overcommit.py` — CPU and memory overcommit (pure functions): Placement's allocation per host (resource provider UUID = Nova hypervisor id) against the 95th percentile of host load and VM CPU wait; a status and reason per host, summed per cluster
 - `services/reclamation.py` — Reclamation & Warnings rules (pure functions over records): stopped, idle and orphaned VMs, unused images, orphaned ports, unused routers and networks, empty tenants. The collector, the `resource-reclamation` job and Right-Sizing's idle class all use them. PCD's `admin` project is never shown as a tenant
+- `services/drift.py` — config change log: snapshots of flavors, security groups, aggregates, hosts and tenant quotas, diffed each collection (`drift_changes` table)
 - `services/alerts.py`, `services/notifications.py` — what raises an alert (anomalies, config changes, jobs: on/off and minimum severity in Settings), the cooldown, and delivery to email, the generic webhook and Slack; every alert is recorded (`alerts` table, `GET /api/alerts`)
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
 - `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
@@ -133,6 +134,7 @@ Each feature has a backend router and a frontend page:
 | Login | `api/auth.py` | `pages/Login.tsx` |
 | Setup / background access | `api/access.py` | `pages/Setup.tsx`, `components/PcdAccess.tsx` |
 | Host, VM and storage metrics | `api/metrics.py` (+ `metrics` merged into `/inventory/hypervisors` and `/inventory/servers`) | Inventory detail pages (`components/MetricsCharts.tsx`, synced `TimeChart`s), `pages/settings/SettingsMetrics.tsx` |
+| Config Changes | `api/drift.py` (`services/drift.py`) | `pages/drift/` (`ChangeLog.tsx`, `model.ts`) |
 | Alerts | `api/alerts.py` (`services/alerts.py`) | `pages/settings/SettingsAlerts.tsx` |
 | Settings | `api/settings.py` | `pages/settings/Settings.tsx` (one page, tabs in `?tab=`), `pages/settings/*.tsx` |
 | System (version/update) | `api/system.py` | `pages/settings/SettingsUpdates.tsx` |

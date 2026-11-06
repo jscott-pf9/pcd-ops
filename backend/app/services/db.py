@@ -107,6 +107,18 @@ def init_db() -> None:
                 suppressed INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS alerts_key ON alerts (key, at);
+            CREATE TABLE IF NOT EXISTS drift_changes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                at         TEXT NOT NULL,
+                kind       TEXT NOT NULL,
+                item_id    TEXT NOT NULL,
+                name       TEXT,
+                project_id TEXT,
+                change     TEXT NOT NULL,
+                severity   TEXT NOT NULL,
+                fields     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS drift_changes_at ON drift_changes (at);
             CREATE TABLE IF NOT EXISTS reclamation_seen (
                 kind       TEXT NOT NULL,
                 id         TEXT NOT NULL,
@@ -481,3 +493,48 @@ def purge_alerts(older_than_days: int) -> int:
     cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
     with _connect() as conn:
         return conn.execute("DELETE FROM alerts WHERE at < ?", (cutoff,)).rowcount
+
+
+# ── Config change log (services/drift.py) ────────────────────────────────────────
+
+def drift_add(changes: list[dict], at: str | None = None) -> None:
+    at = at or datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.executemany(
+            "INSERT INTO drift_changes (at, kind, item_id, name, project_id, change, severity,"
+            " fields) VALUES (?,?,?,?,?,?,?,?)",
+            [(at, c["kind"], c["item_id"], c["name"], c.get("project_id"), c["change"],
+              c["severity"], json.dumps(c["fields"], default=str)) for c in changes])
+
+
+def drift_list(kind: str | None = None, since: str | None = None, q: str | None = None,
+               limit: int = 500) -> list[dict]:
+    """Changes, newest first. `q` matches the item's name or a changed field's name or value."""
+    sql, args = "SELECT * FROM drift_changes WHERE 1=1", []
+    if kind:
+        sql += " AND kind = ?"
+        args.append(kind)
+    if since:
+        sql += " AND at >= ?"
+        args.append(since)
+    if q:
+        sql += " AND (name LIKE ? OR fields LIKE ?)"
+        args += [f"%{q}%", f"%{q}%"]
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [{**dict(r), "fields": json.loads(r["fields"] or "[]")} for r in rows]
+
+
+def drift_counts(since: str | None = None) -> dict[str, int]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT kind, COUNT(*) n FROM drift_changes WHERE at >= ? GROUP BY kind",
+                            (since or "",)).fetchall()
+    return {r["kind"]: r["n"] for r in rows}
+
+
+def purge_drift(older_than_days: int) -> int:
+    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
+    with _connect() as conn:
+        return conn.execute("DELETE FROM drift_changes WHERE at < ?", (cutoff,)).rowcount

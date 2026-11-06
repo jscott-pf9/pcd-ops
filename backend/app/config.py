@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     # Data retention (days; 0 = keep forever)
     job_run_retention_days:  int = 30
     report_retention_days:   int = 30
+    drift_retention_days:    int = 180   # the config change log
 
     # Hypervisor SSH (for log collection)
     hypervisor_ssh_user:     str = "root"

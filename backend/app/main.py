@@ -13,6 +13,7 @@ from app.api import (
     anomaly,
     auth,
     capacity,
+    drift,
     events,
     feedback,
     inventory,
@@ -93,6 +94,7 @@ for router in (
     reports.router,
     events.router,
     alerts.router,
+    drift.router,
 ):
     app.include_router(router, prefix="/api")
 

@@ -20,6 +20,7 @@ from app.services import (
     alerts,
     capacity,
     db,
+    drift,
     local_metrics,
     metrics_catalog,
     overcommit,
@@ -904,6 +905,100 @@ async def collect_capacity() -> None:
     logger.info("Capacity: %.0f/%s vCPUs, %.0f/%s GB RAM, %.0f/%s GB storage",
                 s["vcpus"]["used"], s["vcpus"]["total"], s["ram_gb"]["used"],
                 s["ram_gb"]["total"], s["storage_gb"]["used"], s["storage_gb"]["total"])
+
+
+# ── Config change log ──────────────────────────────────────────────────────────
+
+QUOTA_CONCURRENCY = 8
+
+
+def _quota_sets(conn, project_id: str) -> tuple[dict | None, dict | None, dict | None]:
+    """A project's Nova, Cinder and Neutron quota limits; None for any that couldn't be read."""
+    def get(proxy, path, key):
+        try:
+            r = proxy.get(path)
+            r.raise_for_status()
+            return r.json()[key]
+        except Exception as e:
+            logger.debug("Quota %s for %s: %s", path, project_id, e)
+            return None
+    return (get(conn.compute, f"/os-quota-sets/{project_id}", "quota_set"),
+            get(conn.block_storage, f"/os-quota-sets/{project_id}", "quota_set"),
+            get(conn.network, f"/quotas/{project_id}", "quota"))
+
+
+async def collect_drift() -> None:
+    """Snapshot flavors, security groups, aggregates, hosts and quotas, and record what changed
+    since the last collection (services/drift.py). Runs after inventory and overcommit, whose
+    results it reads; the first run only takes the snapshot."""
+    conn = get_connection()
+    notes: dict[str, str] = {}
+    cur: dict[str, dict] = {}
+
+    def cached(key: str, kind: str):
+        data, _ = db.cache_get(key)
+        if data is None:
+            notes[kind] = f"No {kind.replace('_', ' ')} collected yet"
+        return data
+
+    if (f := cached("inventory:flavors", "flavors")) is not None:
+        cur["flavors"] = drift.flavors(f)
+    if (g := cached("inventory:security_groups", "security_groups")) is not None:
+        cur["security_groups"] = drift.security_groups(g)
+    if (a := cached("inventory:clusters", "aggregates")) is not None:
+        cur["aggregates"] = drift.aggregates(a)
+    if (h := cached("inventory:hypervisors", "hosts")) is not None:
+        oc, _ = db.cache_get("capacity:overcommit")
+        cur["hosts"] = drift.hosts(h, (oc or {}).get("hosts") or [])
+
+    partial: dict[str, set[str]] = {}
+    projects = [p for p in (cached("inventory:tenants", "quotas") or [])
+                if p["name"] not in reclamation.HIDDEN_PROJECTS]
+    if projects:
+        sem = asyncio.Semaphore(QUOTA_CONCURRENCY)
+
+        async def one(pid):
+            async with sem:
+                return await asyncio.to_thread(_quota_sets, conn, pid)
+        sets = await asyncio.gather(*(one(p["id"]) for p in projects))
+        nova, cinder, neutron = ({p["id"]: s[i] for p, s in zip(projects, sets) if s[i] is not None}
+                                 for i in range(3))
+        cur["quotas"] = drift.quotas(projects, nova, cinder, neutron)
+        missing = {p["id"] for p in projects} - set(cur["quotas"])
+        if missing:
+            partial["quotas"] = missing
+            notes["quotas"] = f"Couldn't read the quotas of {len(missing)} project(s)"
+            if len(missing) == len(projects):
+                del cur["quotas"]
+
+    prev, _ = db.cache_get("drift:snapshot")
+    status, _ = db.cache_get("drift:status")
+    now = datetime.utcnow().isoformat()
+    snapshot = drift.merge(prev, cur, partial)
+    changes = drift.diff(prev, cur) if prev else []
+    db.cache_set("drift:snapshot", snapshot)
+    if changes:
+        db.drift_add(changes, now)
+    db.cache_set("drift:status", {
+        "started_at": (status or {}).get("started_at") or now,
+        "last_run": now, "notes": notes,
+        "items": {k: len(v) for k, v in snapshot.items()},
+        "last_changes": len(changes),
+    })
+    logger.info("Config change log: %d change(s)%s", len(changes),
+                "" if prev else " (first snapshot)")
+
+    by_kind: dict[str, list[dict]] = {}
+    for c in changes:
+        by_kind.setdefault(c["kind"], []).append(c)
+    for kind, cs in by_kind.items():
+        worst = max((c["severity"] for c in cs), key=alerts.rank)
+        await alerts.raise_alert(alerts.Alert(
+            "drift", f"drift:{kind}", worst,
+            f"{len(cs)} config change{'s' if len(cs) != 1 else ''}: {drift.PLURAL[kind]}",
+            "\n".join(f"• {drift.describe(c)}" for c in cs[:10])
+            + (f"\n…and {len(cs) - 10} more" if len(cs) > 10 else ""),
+            link=f"/changes?kind={kind}"))
 
 
 # ── Capacity Trends & Forecast ────────────────────────────────────────────────

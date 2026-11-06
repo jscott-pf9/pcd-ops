@@ -1,7 +1,8 @@
 """
 Agent runner — orchestrates collection across all domains and logs each run.
 
-Fast  (inventory, reclamation, capacity, overcommit, snapshots, logs): every 15 min.
+Fast  (inventory, reclamation, capacity, overcommit, config changes, snapshots, logs):
+      every 15 min.
 Slow  (anomaly, capacity trends — 1 AI call each):         every 1 hour.
 Daily (right-sizing — 1 AI call per VM):                   per its schedule in Settings
                                                             (checked hourly).
@@ -84,8 +85,9 @@ async def run_fast() -> None:
         # After inventory, which they map hosts through.
         errors += await _gather_named([("host_metrics", collector.collect_host_metrics()),
                                        ("overcommit", collector.collect_overcommit())])
-        # After overcommit, whose Placement totals it reads.
-        errors += await _gather_named([("capacity", collector.collect_capacity())])
+        # After overcommit, whose results they read.
+        errors += await _gather_named([("capacity", collector.collect_capacity()),
+                                       ("drift", collector.collect_drift())])
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))
             logger.error("Fast collection run failed (run_id=%d): %s", run_id, errors)
@@ -234,6 +236,11 @@ async def _run_retention_cleanup() -> None:
         n = db.purge_alerts(runs_days)
         if n:
             logger.info("Retention cleanup: removed %d alerts older than %dd.", n, runs_days)
+    if settings.drift_retention_days > 0:
+        n = db.purge_drift(settings.drift_retention_days)
+        if n:
+            logger.info("Retention cleanup: removed %d config changes older than %dd.", n,
+                        settings.drift_retention_days)
     if reports_days > 0:
         n = db.purge_reports(reports_days)
         if n:
