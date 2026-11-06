@@ -166,7 +166,7 @@ function Overview({ data, shown, onOpen }: {
               return (
                 <tr key={c.key} style={{ cursor: "pointer" }} onClick={() => onOpen(c.group)}>
                   <td style={{ fontWeight: 500 }}>
-                    {c.label} {c.warning && <span className="badge badge-warn" style={{ marginLeft: 4 }}>warning</span>}
+                    {c.label} {c.warning && n > 0 && <span className="badge badge-warn" style={{ marginLeft: 4 }}>warning</span>}
                   </td>
                   <td className="text-muted">{GROUPS.find(g => g.id === c.group)!.label}</td>
                   <td style={{ textAlign: "right", fontWeight: n ? 600 : 400 }}>{n || <span className="text-muted">0</span>}</td>
@@ -226,7 +226,7 @@ function CategorySection({ cat, items, total, note, ctx, extra }: {
       <div className="card-header" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span className="card-title">
           {meta.label} ({items.length < total ? `${items.length} of ${total}` : total})
-          {meta.warning && <span className="badge badge-warn" style={{ marginLeft: 6 }}>warning</span>}
+          {meta.warning && items.length > 0 && <span className="badge badge-warn" style={{ marginLeft: 6 }}>warning</span>}
         </span>
         {!meta.warning && freesText(frees(cat, items)) !== "—" && (
           <span className="text-muted" style={{ fontSize: 12 }}>frees {freesText(frees(cat, items))}</span>
