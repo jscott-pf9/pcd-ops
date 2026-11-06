@@ -143,7 +143,7 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own store (`services/metrics_catalog.py`), so idle detection and trends can use long windows. Ships as 0.7.1, 0.7.2, …: reclamation and warnings first, then overcommit (0.7.2), then capacity and right-sizing (0.7.3). Each later step is planned when it's picked up.
 
 **Reclamation & warnings** (0.7.1; rules in `services/reclamation.py`, page in `pages/reclamation/`)
-- 🧪 One page, tabs Overview · Compute · Storage · Network · Tenants; tab, tenant, minimum age and filter in the URL. The overview totals what could be freed (vCPU, RAM, volume and image storage, IP addresses) and lists warnings. Each category has CSV export, and single and bulk delete where it's safe.
+- 🧪 One page, tabs Overview · Compute · Storage · Network · Tenants; tab, tenant, minimum age and filter in the URL. The overview totals what could be freed (vCPU, RAM, volume and image storage, IP addresses) and lists warnings. **Export All** on the overview downloads one workbook: a summary sheet and a sheet per category, with the filters applied. Single and bulk delete where it's safe.
 - 🧪 **Compute:** stopped VMs; idle VMs (below); empty server groups (delete). **Orphaned VMs** (warning, report only):
   - unknown to PCD: a host runs a libvirt domain Nova has no server for;
   - missing from host: Nova places a VM on a host that doesn't run it, or runs it elsewhere (only hosts whose libvirt exporter answered; VMs mid-task skipped);
@@ -240,7 +240,7 @@ Here:
 ## Phase 10 — Reports and exports 🔄
 
 - ✅ Inventory exports CSV and XLSX (`pages/Inventory.tsx`).
-- 🔄 That export becomes a shared button (`components/ExportButton.tsx`): ✅ Reclamation (0.7.1). ⬜ Snapshots, Right-Sizing, Capacity (including overcommit), Anomaly, Events and OS Updates.
+- 🔄 That export becomes shared (`components/workbook.ts`, one workbook with a sheet per table): ✅ Inventory Export All, ✅ Reclamation (0.7.1). ⬜ Snapshots, Right-Sizing, Capacity (including overcommit), Anomaly, Events and OS Updates.
 - ⬜ **Scheduled exports:** a new job type `export`. Pick tables, CSV or XLSX, and a schedule; the file is built on the server, emailed and/or kept for download, with retention.
 - ⬜ A Reports page of its own. Capacity reports live inside Jobs today.
 

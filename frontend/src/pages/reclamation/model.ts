@@ -28,21 +28,23 @@ export interface CategoryMeta {
   cantDelete?: (item: any) => string | null;
   /** The noun for the confirm dialog. */
   noun: string;
+  /** Its sheet in the Export All workbook (Excel allows 31 characters). */
+  sheet: string;
 }
 
 export const CATEGORIES: CategoryMeta[] = [
-  { key: "stopped_servers", label: "Stopped VMs", group: "compute", deletePath: "servers", noun: "VM" },
-  { key: "idle_servers", label: "Idle VMs", group: "compute", noun: "VM" },
-  { key: "orphaned_vms", label: "Orphaned VMs", group: "compute", warning: true, noun: "VM" },
-  { key: "empty_server_groups", label: "Empty server groups", group: "compute", deletePath: "server_groups", noun: "server group" },
-  { key: "unattached_volumes", label: "Unattached volumes", group: "storage", deletePath: "volumes", noun: "volume" },
-  { key: "unused_images", label: "Unused images & snapshots", group: "storage", deletePath: "images", noun: "image",
+  { key: "stopped_servers", label: "Stopped VMs", sheet: "Stopped VMs", group: "compute", deletePath: "servers", noun: "VM" },
+  { key: "idle_servers", label: "Idle VMs", sheet: "Idle VMs", group: "compute", noun: "VM" },
+  { key: "orphaned_vms", label: "Orphaned VMs", sheet: "Orphaned VMs", group: "compute", warning: true, noun: "VM" },
+  { key: "empty_server_groups", label: "Empty server groups", sheet: "Empty server groups", group: "compute", deletePath: "server_groups", noun: "server group" },
+  { key: "unattached_volumes", label: "Unattached volumes", sheet: "Unattached volumes", group: "storage", deletePath: "volumes", noun: "volume" },
+  { key: "unused_images", label: "Unused images & snapshots", sheet: "Unused images & snapshots", group: "storage", deletePath: "images", noun: "image",
     cantDelete: i => (i.is_protected ? "Protected: unprotect it in PCD first" : null) },
-  { key: "unused_floating_ips", label: "Unused floating IPs", group: "network", deletePath: "floating_ips", noun: "floating IP" },
-  { key: "orphaned_ports", label: "Orphaned ports & router interfaces", group: "network", deletePath: "ports", noun: "port" },
-  { key: "unused_routers", label: "Unused routers", group: "network", deletePath: "routers", noun: "router" },
-  { key: "unused_networks", label: "Networks with no VMs", group: "network", deletePath: "networks", noun: "network" },
-  { key: "empty_tenants", label: "Empty tenants", group: "tenants", noun: "tenant" },
+  { key: "unused_floating_ips", label: "Unused floating IPs", sheet: "Unused floating IPs", group: "network", deletePath: "floating_ips", noun: "floating IP" },
+  { key: "orphaned_ports", label: "Orphaned ports & router interfaces", sheet: "Orphaned ports", group: "network", deletePath: "ports", noun: "port" },
+  { key: "unused_routers", label: "Unused routers", sheet: "Unused routers", group: "network", deletePath: "routers", noun: "router" },
+  { key: "unused_networks", label: "Networks with no VMs", sheet: "Networks with no VMs", group: "network", deletePath: "networks", noun: "network" },
+  { key: "empty_tenants", label: "Empty tenants", sheet: "Empty tenants", group: "tenants", noun: "tenant" },
 ];
 
 export const CATEGORY: Record<CategoryKey, CategoryMeta> =

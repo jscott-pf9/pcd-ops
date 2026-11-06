@@ -1,15 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Trash2 } from "lucide-react";
+import { AlertTriangle, Download, Trash2 } from "lucide-react";
 import { apiFetch, errorDetail } from "../../api/client";
 import { useTenantNames } from "../../api/tenants";
 import DataFreshness from "../../components/DataFreshness";
-import ExportButton from "../../components/ExportButton";
+import { downloadWorkbook } from "../../components/workbook";
 import { useInventory } from "../inventory/kinds";
 import { StatCard, useSort } from "../inventory/shared";
 import { useSettings } from "../settings/useSettings";
-import { COLUMNS, csvFor, type Ctx } from "./columns";
+import { COLUMNS, sheetFor, type Ctx } from "./columns";
 import {
   addFrees, CATEGORIES, CATEGORY, type CategoryKey, type Filters, filterItems, frees, freesText,
   type Group, GROUPS, isGroup, NO_FREES, noteFor,
@@ -95,7 +95,7 @@ export default function Reclamation() {
           </div>
 
           {tab === "overview"
-            ? <Overview data={data} shown={shown} onOpen={g => set({ tab: g })} />
+            ? <Overview data={data} shown={shown} ctx={ctx} onOpen={g => set({ tab: g })} />
             : <>
                 {tab === "tenants" && (
                   <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 10 }}>
@@ -118,8 +118,8 @@ export default function Reclamation() {
 
 // ── Overview ─────────────────────────────────────────────────────────────────────
 
-function Overview({ data, shown, onOpen }: {
-  data: Data; shown: Record<CategoryKey, any[]>; onOpen: (g: Group) => void;
+function Overview({ data, shown, ctx, onOpen }: {
+  data: Data; shown: Record<CategoryKey, any[]>; ctx: Ctx; onOpen: (g: Group) => void;
 }) {
   const total = CATEGORIES.filter(c => !c.warning)
     .reduce((acc, c) => addFrees(acc, frees(c.key, shown[c.key])), NO_FREES);
@@ -156,6 +156,13 @@ function Overview({ data, shown, onOpen }: {
         </div>
       )}
 
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+        <button className="btn btn-secondary btn-sm" onClick={() => exportAll(data, shown, ctx)}
+          title="One workbook: a summary sheet and a sheet per category, with the filters above applied"
+          style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Download size={12} /> Export All
+        </button>
+      </div>
       <div className="card table-wrap">
         <table>
           <thead><tr><th>Category</th><th>Area</th><th style={{ textAlign: "right" }}>Count</th><th>Would free</th><th /></tr></thead>
@@ -180,6 +187,21 @@ function Overview({ data, shown, onOpen }: {
       </div>
     </>
   );
+}
+
+/** reclamation.xlsx: a Summary sheet, then one sheet per category (as filtered). */
+function exportAll(data: Data, shown: Record<CategoryKey, any[]>, ctx: Ctx) {
+  const summary = CATEGORIES.map(c => {
+    const f = frees(c.key, shown[c.key]);
+    return [c.label, GROUPS.find(g => g.id === c.group)!.label, shown[c.key].length,
+            f.vcpus, Math.round(f.ram_gb), Math.round(f.volume_gb), Math.round(f.image_gb * 10) / 10, f.ips,
+            noteFor(c.key, data.notes) ?? ""];
+  });
+  downloadWorkbook("reclamation.xlsx", [
+    { name: "Summary", rows: summary,
+      headers: ["Category", "Area", "Count", "vCPUs", "RAM GB", "Volume GB", "Image GB", "IPs", "Note"] },
+    ...CATEGORIES.map(c => ({ name: c.sheet, ...sheetFor(c.key, shown[c.key], ctx) })),
+  ]);
 }
 
 const ORPHAN_LABEL: Record<string, string> = { unknown: "unknown to PCD", missing: "missing from their host", owner_deleted: "owner deleted" };
@@ -237,10 +259,6 @@ function CategorySection({ cat, items, total, note, ctx, extra }: {
             style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <Trash2 size={12} /> Delete {chosen.length} selected
           </button>
-        )}
-        {items.length > 0 && (
-          <ExportButton filename={`${cat}.csv`} headers={csvFor(cat, items, ctx).headers}
-            rows={() => csvFor(cat, sorted, ctx).rows} />
         )}
       </div>
       {(extra || note) && (

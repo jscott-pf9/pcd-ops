@@ -14,6 +14,12 @@ describe("reclamation model", () => {
       .toEqual(["idle_servers", "orphaned_vms", "empty_tenants"]);
   });
 
+  it("gives every category its own workbook sheet name", () => {
+    const names = CATEGORIES.map(c => c.sheet);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.every(n => n.length <= 31 && !/[\\/?*[\]:]/.test(n))).toBe(true);
+  });
+
   it("ages treat zone-less backend times as UTC", () => {
     expect(ageDays("2026-11-01T12:00:00", NOW)).toBe(5);
     expect(ageDays("2026-11-01T12:00:00Z", NOW)).toBe(5);

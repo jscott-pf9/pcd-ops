@@ -180,11 +180,6 @@ function download(filename: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-/** Save rows as a CSV file. */
-export function downloadCsv(filename: string, headers: string[], rows: Cell[][]) {
-  download(filename, toCsv(headers, rows));
-}
-
 /** The tab's CSV files, for the rows it shows. */
 export function exportKind(kind: Kind, items: any[], ctx: Ctx) {
   for (const s of EXPORTS[kind]) download(s.file, toCsv(s.headers, s.rows(items, ctx)));
