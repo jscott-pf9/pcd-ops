@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     grafana_url: str = ""
     grafana_token: str = ""
 
+    # PCD Ops' own metrics store: VictoriaMetrics on the appliance scraping node-exporter and
+    # libvirt-exporter on every hypervisor (services/local_metrics.py). Grafana above is then
+    # used only for the openstack_* series and as a fallback.
+    metrics_local_enabled:   bool = True
+    metrics_scrape_interval: str = "60s"     # "30s" or "60s"
+    metrics_retention_days:  int = 90        # 30, 90, 180, 365 or 730
+    metrics_keep_all_series: bool = False    # keep every exporter series, not just the allowlist
+
     # AI — variable names match .env (AI_BACKEND, AI_URL, AI_MODEL, AI_API_KEY).
     # ai_backend "ollama" is Private AI: Ollama or any OpenAI-compatible server
     # (services/ai/private.py).

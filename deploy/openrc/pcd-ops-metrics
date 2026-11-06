@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+
+description="PCD Ops metrics store (VictoriaMetrics, 127.0.0.1:8428)"
+
+command="/opt/pcd-ops/deploy/openrc/run-metrics.sh"
+command_user="pcd-ops"
+command_background=true
+pidfile="/run/pcd-ops-metrics.pid"
+output_log="/var/log/pcd-ops/metrics.log"
+error_log="/var/log/pcd-ops/metrics.log"
+retry="SIGTERM/30/SIGKILL/5"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  checkpath --directory --owner pcd-ops:pcd-ops --mode 0755 /var/log/pcd-ops
+  checkpath --directory --owner pcd-ops:pcd-ops --mode 0700 /var/lib/pcd-ops
+}

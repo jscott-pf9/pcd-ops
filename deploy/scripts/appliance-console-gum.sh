@@ -157,10 +157,11 @@ pick_advanced_menu() {
     --cursor ">  " \
     --cursor.foreground "$C_YELLOW" \
     --selected.foreground "$C_WHITE" \
-    --height 9 \
+    --height 10 \
     "  Force App Update  (git pull + rebuild)" \
     "  Patch OS  (apk update + upgrade)" \
     "  View App Logs" \
+    "  Metrics Store  (status, restart)" \
     "  Network Info" \
     "  Reset Setup  (forget background access)" \
     "  Emergency Shell" \
@@ -246,6 +247,29 @@ do_patch_os() {
   pause
 }
 
+do_metrics_store() {
+  clear
+  printf "\n"
+  box_top
+  box_row_c "Metrics Store" "${BBLU}${BOLD}"
+  box_row_c "VictoriaMetrics on 127.0.0.1:8428, scraping the hypervisors" "${DIM}"
+  box_bot
+  printf "\n"
+  rc-service pcd-ops-metrics status 2>&1 | sed 's/^/  /'
+  printf "\n  Data: %s   Disk free: %s\n" \
+    "$(du -sh /var/lib/pcd-ops/metrics 2>/dev/null | cut -f1)" \
+    "$(df -h /var/lib/pcd-ops | awk 'NR==2 {print $4 " of " $2}')"
+  printf "\n  ${DIM}Last log lines (/var/log/pcd-ops/metrics.log):${RST}\n"
+  tail -n 8 /var/log/pcd-ops/metrics.log 2>/dev/null | cut -c1-150 | sed 's/^/  /'
+  printf "\n"
+  if gum confirm --affirmative "Restart" --negative "Back" --default=false \
+    "Restart the metrics store?"; then
+    gum spin --spinner dot --title "  Restarting pcd-ops-metrics…" -- rc-service pcd-ops-metrics restart
+    printf "\n  ${GRN}${BOLD}✓  Metrics store restarted.${RST}\n"
+    sleep 1
+  fi
+}
+
 do_view_logs() {
   clear
   printf "\n"
@@ -311,6 +335,7 @@ advanced_loop() {
       *"Force App Update"*)  do_force_update ;;
       *"Patch OS"*)          do_patch_os ;;
       *"View App Logs"*)     do_view_logs ;;
+      *"Metrics Store"*)     do_metrics_store ;;
       *"Network Info"*)      do_network_info ;;
       *"Reset Setup"*)       do_reset_setup ;;
       *"Emergency Shell"*)   do_emergency_shell ;;

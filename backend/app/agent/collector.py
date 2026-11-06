@@ -14,9 +14,9 @@ import logging
 from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
-from app.services import db
+from app.services import db, local_metrics, metrics_catalog, server_groups, storage
 from app.services.openstack import get_connection
-from app.services.prometheus import prometheus_client
+from app.services.prometheus import MetricsNotConfigured, prometheus_client
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +33,86 @@ def _extract_ips(addresses: dict) -> list[str]:
 
 # ── Inventory ──────────────────────────────────────────────────────────────────
 
+def _cinder_get(conn, path: str, default):
+    """A Cinder API call whose failure (missing extension, policy) leaves just that field out."""
+    try:
+        r = conn.block_storage.get(path)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.debug("Cinder %s unavailable: %s", path, e)
+        return default
+
+
+def _cinder_storage(conn) -> dict:
+    """Pools, volume types and their QoS, default, encryption and project access (blocking)."""
+    pools = _cinder_get(conn, "/scheduler-stats/get_pools?detail=True", {}).get("pools", [])
+    types = _cinder_get(conn, "/types?is_public=None", {}).get("volume_types", [])
+    default = _cinder_get(conn, "/types/default", {}).get("volume_type", {}).get("id")
+    qos = _cinder_get(conn, "/qos-specs", {}).get("qos_specs", [])
+    qos_of_type = {}
+    for q in qos:
+        for a in _cinder_get(conn, f"/qos-specs/{q['id']}/associations", {}).get(
+                "qos_associations", []):
+            if a.get("association_type") == "volume_type":
+                qos_of_type[a["id"]] = {"id": q["id"], "name": q.get("name"),
+                                        "consumer": q.get("consumer"), "specs": q.get("specs")}
+    extra = {}
+    for t in types:
+        enc = _cinder_get(conn, f"/types/{t['id']}/encryption", {})
+        access = None
+        if not t.get("os-volume-type-access:is_public", t.get("is_public", True)):
+            access = [a["project_id"] for a in _cinder_get(
+                conn, f"/types/{t['id']}/os-volume-type-access", {}).get("volume_type_access", [])]
+        extra[t["id"]] = {"encrypted": bool(enc.get("provider") or enc.get("encryption_id")),
+                          "access_projects": access}
+    return {"pools": pools, "types": types, "default": default, "qos": qos_of_type,
+            "extra": extra}
+
+
+def _image_kind(props: dict) -> dict:
+    """Snapshots in Glance: Nova instance snapshots carry image_type=snapshot; snapshots of
+    volume-backed VMs carry a block_device_mapping (the data is in Cinder snapshots)."""
+    if props.get("block_device_mapping"):
+        kind, snap = "snapshot", "volume-backed"
+    elif props.get("image_type") == "snapshot":
+        kind, snap = "snapshot", "instance"
+    else:
+        kind, snap = "image", None
+    return {"kind": kind, "snapshot_type": snap, "base_image_ref": props.get("base_image_ref"),
+            "instance_uuid": props.get("instance_uuid")}
+
+
+def _volume_types(cinder: dict, volumes: list[dict]) -> list[dict]:
+    out = []
+    for t in cinder["types"]:
+        specs = t.get("extra_specs") or {}
+        mine = [v for v in volumes if v["volume_type"] in (t["name"], t["id"])]
+        extra = cinder["extra"].get(t["id"], {})
+        out.append({
+            "id": t["id"],
+            "name": t["name"],
+            "description": t.get("description"),
+            "public": t.get("os-volume-type-access:is_public", t.get("is_public", True)),
+            "default": t["id"] == cinder["default"],
+            "backend": specs.get("volume_backend_name"),
+            "extra_specs": specs,
+            "qos": cinder["qos"].get(t["id"]),
+            "encrypted": extra.get("encrypted", False),
+            "access_projects": extra.get("access_projects"),
+            "volumes": len(mine),
+            "volume_gb": sum(v["size_gb"] or 0 for v in mine),
+        })
+    return sorted(out, key=lambda t: t["name"])
+
+
 async def collect_inventory() -> None:
     logger.info("Collecting inventory…")
     conn = get_connection()
 
     (servers, hypervisors, volumes, networks, tenants,
      floating_ips, images, security_groups, ports, flavors_raw, keypairs_raw,
-     aggregates) = await asyncio.gather(
+     aggregates, groups_raw, cinder) = await asyncio.gather(
         asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True))),
         asyncio.to_thread(lambda: list(conn.compute.hypervisors(details=True))),
         asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True))),
@@ -52,8 +125,13 @@ async def collect_inventory() -> None:
         asyncio.to_thread(lambda: list(conn.compute.flavors())),
         asyncio.to_thread(lambda: list(conn.compute.keypairs())),
         asyncio.to_thread(lambda: list(conn.compute.aggregates())),
+        asyncio.to_thread(lambda: list(conn.compute.server_groups(all_projects=True))),
+        asyncio.to_thread(_cinder_storage, conn),
     )
 
+    _group_of = {
+        m: {"id": g.id, "name": g.name} for g in groups_raw for m in (g.member_ids or [])
+    }
     db.cache_set("inventory:servers", [
         {
             "id": s.id,
@@ -66,6 +144,9 @@ async def collect_inventory() -> None:
             "project_id": s.project_id,
             "ips": _extract_ips(s.addresses),
             "hypervisor_hostname": getattr(s, "hypervisor_hostname", None),
+            "security_groups": sorted({g.get("name") for g in (s.security_groups or [])
+                                       if g.get("name")}),
+            "server_group": _group_of.get(s.id),
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }
@@ -88,17 +169,19 @@ async def collect_inventory() -> None:
         _hyp_vcpus[host] += fl.get("vcpus") or 0
         _hyp_mem[host] += fl.get("ram") or 0
 
-    # ── Fetch individual hypervisor details for cpu_info ──────────────────────
-    # cpu_info is only returned by GET /os-hypervisors/{id} (the show endpoint),
-    # not by GET /os-hypervisors/detail (the list endpoint).
-    _hyp_detail_raw = await asyncio.gather(*[
-        asyncio.to_thread(lambda hid=h.id: conn.compute.get_hypervisor(hid))
-        for h in hypervisors
-    ], return_exceptions=True)
-    _hyp_detail: dict[str, any] = {
-        h.id: d for h, d in zip(hypervisors, _hyp_detail_raw)
-        if not isinstance(d, Exception)
-    }
+    # ── Hypervisor details that Nova 2.88 dropped ───────────────────────────────
+    # cpu_info, memory_mb, vcpus and local_gb are gone from the API since microversion
+    # 2.88, which openstacksdk negotiates; 2.87 still returns them, for all hosts at once.
+    def _legacy_detail() -> dict[str, dict]:
+        r = conn.compute.get("/os-hypervisors/detail", microversion="2.87")
+        r.raise_for_status()
+        return {str(d.get("id")): d for d in r.json().get("hypervisors", [])}
+
+    try:
+        _hyp_detail = await asyncio.to_thread(_legacy_detail)
+    except Exception as e:
+        logger.warning("Hypervisor details (microversion 2.87) unavailable: %s", e)
+        _hyp_detail = {}
 
     # ── SSH hardware collection (NICs + physical RAM) ──────────────────────────
     from app.services.ssh import collect_host_hardware
@@ -123,9 +206,7 @@ async def collect_inventory() -> None:
 
     # ── Parse cpu_info JSON ────────────────────────────────────────────────────
     def _parse_cpu_info(h) -> dict:
-        # Prefer the individually-fetched detail which carries cpu_info
-        src = _hyp_detail.get(h.id, h)
-        raw = getattr(src, "cpu_info", None) or getattr(h, "cpu_info", None)
+        raw = _hyp_detail.get(str(h.id), {}).get("cpu_info") or getattr(h, "cpu_info", None)
         if not raw:
             return {}
         if isinstance(raw, dict):
@@ -139,34 +220,43 @@ async def collect_inventory() -> None:
     for h in hypervisors:
         ci    = _parse_cpu_info(h)
         topo  = ci.get("topology") or {}
-        sockets = topo.get("sockets")
-        cores   = topo.get("cores")
-        threads = topo.get("threads")
+        hw    = _hw_by_host.get(h.name, {})
+        old   = _hyp_detail.get(str(h.id), {})
+        # The host's own lscpu when SSH works; Nova's view otherwise
+        sockets = hw.get("cpu_sockets") or topo.get("sockets")
+        cores   = hw.get("cpu_cores") or topo.get("cores")
+        threads = hw.get("cpu_threads") or topo.get("threads")
         logical = (sockets * cores * threads) if (sockets and cores and threads) else None
 
-        hw              = _hw_by_host.get(h.name, {})
         ssh_ok          = (hw.get("connected") if h.name in _ssh_attempted else None)
         nic_count       = hw.get("nic_count")
         ram_mb_ssh      = hw.get("ram_mb")
         os_version      = hw.get("os_version")
         pending_patches = hw.get("pending_patches")
 
+        svc_host = (h.service_details or {}).get("host")
         hyp_records.append({
             "id":               h.id,
             "hostname":         h.name,
             "state":            h.state,
             "status":           h.status,
             "host_ip":          h.host_ip,
+            # Nova's compute service host: in PCD, the host UUID that pcd:* metrics carry
+            "service_host":     svc_host,
+            "aggregates":       sorted(a.name for a in aggregates
+                                       if svc_host in (a.hosts or []) or h.name in (a.hosts or [])),
             # Physical specs
             "cpu_vendor":       ci.get("vendor"),
-            "cpu_model":        ci.get("model"),
+            # Nova has libvirt's CPU model name (e.g. "EPYC-Rome-v5"); lscpu has the real one
+            "cpu_model":        hw.get("cpu_model") or ci.get("model"),
             "cpu_arch":         ci.get("arch"),
             "cpu_sockets":      sockets,
             "cpu_cores":        cores,
             "cpu_threads":      threads,
             "cpu_logical":      logical,
-            # Nova 2.88+ removed memory_mb from API; fall back to SSH /proc/meminfo
-            "memory_mb_total":  h.memory_size or ram_mb_ssh or None,
+            # Usable by Linux (MemTotal); installed DIMMs are more (firmware, iGPU, crash kernel)
+            "memory_mb_total":  h.memory_size or old.get("memory_mb") or ram_mb_ssh or None,
+            "memory_mb_installed": hw.get("ram_mb_installed"),
             "nic_count":        nic_count,
             "ssh_ok":           ssh_ok,
             "os_version":       os_version,
@@ -174,28 +264,71 @@ async def collect_inventory() -> None:
             "hypervisor_type":  getattr(h, "hypervisor_type", None),
             "hypervisor_version": getattr(h, "hypervisor_version", None),
             # Utilisation (Nova 2.88+ may omit; derived from server data as fallback)
-            "vcpus_total":      h.vcpus or logical or None,
+            "vcpus_total":      h.vcpus or old.get("vcpus") or logical or None,
             "vcpus_used":       h.vcpus_used if h.vcpus_used is not None else _hyp_vcpus.get(h.name),
             "memory_mb_used":   h.memory_used if h.memory_used is not None else _hyp_mem.get(h.name),
-            "disk_gb_total":    h.local_disk_size or None,
-            "disk_gb_used":     h.local_disk_used or None,
+            "disk_gb_total":    h.local_disk_size or old.get("local_gb") or None,
+            "disk_gb_used":     h.local_disk_used or old.get("local_gb_used") or None,
             "running_vms":      h.running_vms if h.running_vms is not None else _hyp_vms.get(h.name, 0),
         })
     db.cache_set("inventory:hypervisors", hyp_records)
+    # PCD Ops' own metrics store scrapes every hypervisor; keep its target list current.
+    local_metrics.write_targets(hyp_records)
 
-    db.cache_set("inventory:volumes", [
+    host_names = {h["service_host"]: h["hostname"] for h in hyp_records if h["service_host"]}
+    pools = [storage.pool_record(p, host_names) for p in cinder["pools"]]
+    backend_of_pool = {p["name"]: p["backend"] for p in pools}
+    vol_records = [
         {
             "id": v.id,
             "name": v.name or "(unnamed)",
             "size_gb": v.size,
             "status": v.status,
             "volume_type": v.volume_type,
-            "attached_to": [a.get("server_id") for a in (v.attachments or [])],
+            "host": v.host,
+            "backend": backend_of_pool.get(v.host or ""),
+            # VMs only: Glance's cinder store attaches image volumes with no server ("glance_store")
+            "attached_to": [a["server_id"] for a in (v.attachments or []) if a.get("server_id")],
+            # The VM disk each attachment is (/dev/vdb → libvirt's target_device "vdb")
+            "attachments": [{"server_id": a.get("server_id"), "device": a.get("device")}
+                            for a in (v.attachments or [])],
+            "bootable": str(v.is_bootable).lower() == "true",
             "project_id": v.project_id,
             "created_at": v.created_at,
         }
         for v in volumes
-    ])
+    ]
+    db.cache_set("inventory:volumes", vol_records)
+
+    type_records = _volume_types(cinder, vol_records)
+    db.cache_set("inventory:storage_types", type_records)
+    backends = storage.group_pools(pools, vol_records, type_records)
+    db.cache_set("inventory:storage_backends", backends)
+    # Cinder only reports the current capacity: keep its history in PCD Ops' metrics store.
+    await local_metrics.push(storage.samples(backends) + storage.volume_disks(vol_records))
+
+    server_by_id = {s.id: s for s in servers}
+    group_records = []
+    for g in groups_raw:
+        members = [
+            {"id": m, "name": getattr(server_by_id.get(m), "name", None),
+             "host": getattr(server_by_id.get(m), "hypervisor_hostname", None),
+             "status": getattr(server_by_id.get(m), "status", None)}
+            for m in (g.member_ids or [])
+        ]
+        policy = g.policy or (g.policies or [None])[0]
+        rules = g.rules or {}
+        group_records.append({
+            "id": g.id,
+            "name": g.name,
+            "policy": policy,
+            "rules": rules,
+            "project_id": g.project_id,
+            "members": members,
+            "hosts": sorted({m["host"] for m in members if m["host"]}),
+            **server_groups.check(policy, members, rules),
+        })
+    db.cache_set("inventory:server_groups", sorted(group_records, key=lambda g: g["name"] or ""))
 
     db.cache_set("inventory:networks", [
         {
@@ -250,6 +383,10 @@ async def collect_inventory() -> None:
             "is_protected": img.is_protected,
             "created_at":   img.created_at,
             "used_by_vms":  image_usage.get(img.id, []),
+            **_image_kind({**(img.properties or {}), "instance_uuid": img.instance_uuid}),
+            "min_disk_gb":  img.min_disk,
+            "min_ram_mb":   img.min_ram,
+            "container_format": img.container_format,
         }
         for img in images
     ])
@@ -271,6 +408,8 @@ async def collect_inventory() -> None:
                 "port_range_min":   r.get("port_range_min"),
                 "port_range_max":   r.get("port_range_max"),
                 "remote_ip_prefix": r.get("remote_ip_prefix"),
+                "remote_group_id":  r.get("remote_group_id"),
+                "description":      r.get("description") or "",
                 "ethertype":        r.get("ethertype", ""),
                 "risky":            _is_risky(r),
             }
@@ -287,8 +426,17 @@ async def collect_inventory() -> None:
         })
     db.cache_set("inventory:security_groups", sg_list)
 
+    flavor_vms: dict[str, int] = {}
+    for s in servers:
+        name = (s.flavor or {}).get("original_name")
+        if name:
+            flavor_vms[name] = flavor_vms.get(name, 0) + 1
     db.cache_set("inventory:flavors", sorted([
-        {"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram, "disk_gb": f.disk or 0}
+        {"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram, "disk_gb": f.disk or 0,
+         "ephemeral_gb": f.ephemeral or 0, "swap_mb": f.swap or 0, "public": f.is_public,
+         "disabled": bool(f.is_disabled), "rxtx_factor": f.rxtx_factor,
+         "description": f.description, "extra_specs": f.extra_specs or {},
+         "vms": flavor_vms.get(f.name, 0)}
         for f in flavors_raw
     ], key=lambda f: (f["vcpus"], f["ram_mb"])))
 
@@ -297,24 +445,50 @@ async def collect_inventory() -> None:
         for kp in keypairs_raw
     ], key=lambda k: k["name"]))
 
-    db.cache_set("inventory:clusters", sorted([
-        {
+    # Aggregates name hosts by Nova's compute service host (in PCD, the host UUID)
+    hyp_by_host = {h["service_host"]: h for h in hyp_records if h["service_host"]}
+    hyp_by_host.update({h["hostname"]: h for h in hyp_records})
+    agg_records = []
+    for agg in aggregates:
+        meta = {k: v for k, v in (agg.metadata or {}).items() if k != "availability_zone"}
+        members = [hyp_by_host.get(h) for h in agg.hosts or []]
+        known = [h for h in members if h]
+        agg_records.append({
             "id":                agg.id,
             "name":              agg.name,
+            "kind":              "cluster" if str(meta.get("pf9-managed")).lower() == "true"
+                                 else "aggregate",
             "availability_zone": agg.availability_zone,
-            "hosts":             list(agg.hosts or []),
-            "metadata":          {k: v for k, v in (agg.metadata or {}).items() if k != "availability_zone"},
+            "hosts": [
+                {"service_host": h, "hypervisor_id": m and m["id"], "hostname": m and m["hostname"]}
+                for h, m in zip(agg.hosts or [], members)
+            ],
+            "vms":               sum(h["running_vms"] or 0 for h in known),
+            "vcpus_total":       sum(h["vcpus_total"] or 0 for h in known),
+            "vcpus_used":        sum(h["vcpus_used"] or 0 for h in known),
+            "memory_mb_total":   sum(h["memory_mb_total"] or 0 for h in known),
+            "memory_mb_used":    sum(h["memory_mb_used"] or 0 for h in known),
+            "metadata":          meta,
             "created_at":        agg.created_at,
             "updated_at":        agg.updated_at,
-        }
-        for agg in aggregates
-    ], key=lambda a: a["name"]))
+        })
+    db.cache_set("inventory:clusters", sorted(agg_records, key=lambda a: a["name"]))
+    # Allocation is only reported now; keep its history in the metrics store.
+    await local_metrics.push([
+        (f"pcd_ops_cluster_{k}", {"aggregate": str(a["id"])}, float(a[field] or 0) * scale)
+        for a in agg_records
+        for k, field, scale in (
+            ("vcpus_used", "vcpus_used", 1), ("vcpus_total", "vcpus_total", 1),
+            ("memory_used_bytes", "memory_mb_used", 1024**2),
+            ("memory_total_bytes", "memory_mb_total", 1024**2), ("vms", "vms", 1))
+    ])
 
     active = sum(1 for s in servers if s.status == "ACTIVE")
-    vcpus_used = sum(h.vcpus_used or 0 for h in hypervisors)
-    vcpus_total = sum(h.vcpus or 0 for h in hypervisors)
-    mem_used_gb = sum((h.memory_used or 0) for h in hypervisors) // 1024
-    mem_total_gb = sum((h.memory_size or 0) for h in hypervisors) // 1024
+    # From the records: Nova 2.88+ left these out of the hypervisor objects
+    vcpus_used = sum(h["vcpus_used"] or 0 for h in hyp_records)
+    vcpus_total = sum(h["vcpus_total"] or 0 for h in hyp_records)
+    mem_used_gb = sum(h["memory_mb_used"] or 0 for h in hyp_records) // 1024
+    mem_total_gb = sum(h["memory_mb_total"] or 0 for h in hyp_records) // 1024
     volume_tb = sum((v.size or 0) for v in volumes) / 1024
 
     db.cache_set("inventory:summary", {
@@ -399,6 +573,32 @@ async def collect_reclamation() -> None:
 
 
 # ── Capacity ───────────────────────────────────────────────────────────────────
+
+# ── Host and VM metrics ───────────────────────────────────────────────────────
+
+async def collect_host_metrics() -> None:
+    """Current CPU, memory, disk and network per hypervisor and per VM, from PCD Ops' own
+    metrics store or else PCD's Grafana (services/metrics_catalog.py)."""
+    src = await metrics_catalog.source()
+    if src is None:
+        logger.info("Host metrics skipped: no local metrics store and no Grafana token.")
+        return
+    hyps, _ = db.cache_get("inventory:hypervisors")
+    # The source's key for each hypervisor → Nova id.
+    nova_id = {(h["id"] if src == "local" else h.get("service_host")): h["id"] for h in hyps or []}
+    host_vals, vms, health = await asyncio.gather(
+        metrics_catalog.instant("host", src),
+        metrics_catalog.instant("vm", src),
+        metrics_catalog.host_health(src),
+    )
+    hosts: dict[str, dict] = {}
+    for key in set(host_vals) | set(health):
+        if key in nova_id:
+            hosts[nova_id[key]] = {**host_vals.get(key, {}), **health.get(key, {})}
+    db.cache_set("metrics:hosts", {"source": src, "hosts": hosts})
+    db.cache_set("metrics:vms", {"source": src, "vms": vms})
+    logger.info("Host metrics from %s: %d hosts, %d VMs", src, len(hosts), len(vms))
+
 
 async def collect_capacity() -> None:
     logger.info("Collecting capacity…")
@@ -732,6 +932,9 @@ RS_MEM_LOW  = 20.0   # % below → underutilised RAM
 RS_MEM_HIGH = 80.0   # % above → RAM-pressured
 RS_IO_IDLE  = 0.5    # avg IOPS below which disk is considered idle
 RS_STEP     = "2h"   # ~84 data points over 7 days
+RS_LOCAL_DAYS = 30            # with PCD Ops' own metrics store
+RS_LOCAL_STEP = "6h"          # 120 points over 30 days
+RS_LOCAL_MIN_DAYS = 7         # until the store has this much, use PCD's Grafana if set
 
 
 import math as _math
@@ -770,34 +973,32 @@ def _prom_avg(series_list: list[dict], domain: str) -> float | None:
 
 
 async def collect_rightsizing() -> None:
-    logger.info("Collecting right-sizing (PCD pcd:vm_* metrics)…")
     conn = get_connection()
     ai = get_ai_provider()
 
+    # PCD Ops' own store once it has a week of data, looking back 30 days; else PCD's Grafana,
+    # whose reduced pcd:* series are kept 14 days, looking back 7.
+    src = await metrics_catalog.source(min_days=RS_LOCAL_MIN_DAYS)
+    if src is None:
+        raise MetricsNotConfigured("No VM metrics: PCD Ops' metrics store has no data yet and "
+                                   "no Grafana token is set.")
+    logger.info("Collecting right-sizing from %s metrics…", src)
+    days, step = (RS_LOCAL_DAYS, RS_LOCAL_STEP) if src == "local" else (7, RS_STEP)
     end = datetime.utcnow()
-    start = end - timedelta(days=7)
+    start = end - timedelta(days=days)
+    prom = metrics_catalog.client(src)
 
-    # Batch all Prometheus queries
-    (
-        meta_raw,
-        cpu_series_raw, cpu_total_raw,
-        mem_series_raw, mem_total_raw,
-        io_series_raw,
-    ) = await asyncio.gather(
-        prometheus_client.query("libvirt_domain_info_meta"),
-        prometheus_client.query_range("pcd:vm_cpu_usage / pcd:vm_cpu_total * 100",  start, end, step=RS_STEP),
-        prometheus_client.query("pcd:vm_cpu_total"),
-        prometheus_client.query_range("pcd:vm_mem_usage / pcd:vm_mem_total * 100",  start, end, step=RS_STEP),
-        prometheus_client.query("pcd:vm_mem_total"),
-        prometheus_client.query_range("pcd:vm_read_iops + pcd:vm_write_iops",       start, end, step=RS_STEP),
+    def _range(metric: str):
+        return prom.query_range(metrics_catalog.promql("vm", metric, src), start, end, step=step)
+
+    meta_raw, cpu_series_raw, mem_series_raw, io_series_raw = await asyncio.gather(
+        prom.query("libvirt_domain_info_meta"),
+        _range("cpu_pct"), _range("mem_pct"), _range("disk_iops"),
     )
 
-    # Domain → metadata map (instance_name, project_name, flavor, host_name)
+    # Domain → metadata (instance_name, project_name, flavor; host_name from PCD, or our
+    # hypervisor label locally)
     domain_meta: dict[str, dict] = {m["metric"]["domain"]: m["metric"] for m in meta_raw}
-
-    # Domain → current total (for labels)
-    domain_cpu_total = {s["metric"]["domain"]: float(s["value"][1]) for s in cpu_total_raw if "domain" in s["metric"]}
-    domain_mem_total = {s["metric"]["domain"]: float(s["value"][1]) for s in mem_total_raw if "domain" in s["metric"]}
 
     # Build per-domain series maps for sparklines
     cpu_series_by_domain = {s["metric"]["domain"]: _series_from_range([s]) for s in cpu_series_raw if "domain" in s["metric"]}
@@ -919,7 +1120,7 @@ async def collect_rightsizing() -> None:
             "server_status": server.status,
             "project_id":   server.project_id,
             "tenant_name":  meta.get("project_name"),
-            "hypervisor":   meta.get("host_name"),
+            "hypervisor":   meta.get("host_name") or meta.get("hypervisor"),
             "current_flavor":   {"name": flavor_name, "vcpus": vcpus, "ram_mb": ram_mb},
             "suggested_flavor": suggested_flavor,
             "classification": classification,
@@ -943,11 +1144,12 @@ async def collect_rightsizing() -> None:
 
 # ── Anomaly Detection (AI — slow) ─────────────────────────────────────────────
 
+# Name in the AI's context → metric in services/metrics_catalog.py
 ANOMALY_METRICS = {
-    "cpu_throttle":  "avg by (domain) (pcd:vm_cpu_throttling_percentage)",
-    "mem_usage_pct": "avg by (domain) (pcd:vm_mem_usage / pcd:vm_mem_total * 100)",
-    "read_iops":     "sum by (domain) (pcd:vm_read_iops)",
-    "write_iops":    "sum by (domain) (pcd:vm_write_iops)",
+    "cpu_throttle":  "cpu_wait_pct",
+    "mem_usage_pct": "mem_pct",
+    "read_iops":     "read_iops",
+    "write_iops":    "write_iops",
 }
 
 LOOKBACK_HOURS = 24
@@ -995,10 +1197,14 @@ async def collect_anomaly() -> None:
     end = datetime.utcnow()
     start = end - timedelta(hours=LOOKBACK_HOURS)
 
-    # Collect PCD-native metrics
+    src = await metrics_catalog.source(min_days=LOOKBACK_HOURS / 24)
+    if src is None:
+        raise MetricsNotConfigured("No VM metrics: PCD Ops' metrics store has no data yet and "
+                                   "no Grafana token is set.")
     metric_results = await asyncio.gather(*[
-        prometheus_client.query_range(query, start, end, step="15m")
-        for query in ANOMALY_METRICS.values()
+        metrics_catalog.client(src).query_range(
+            metrics_catalog.promql("vm", metric, src), start, end, step="15m")
+        for metric in ANOMALY_METRICS.values()
     ], return_exceptions=True)
 
     # Build summary stats per domain for AI context

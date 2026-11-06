@@ -62,6 +62,10 @@ Installs without config.env get the connection from first-run setup (saved in `c
 | `GRAFANA_URL` | Grafana base URL. Empty: `https://<host of PCD_AUTH_URL>/grafana` |
 | `GRAFANA_TOKEN` | Grafana service account token (`glsa_...`) |
 | `PROMETHEUS_URL` | Empty (normal): the Prometheus data source is found through Grafana's `/api/frontend/settings`. Set only to force one: `<GRAFANA_URL>/api/datasources/proxy/<id>` |
+| `METRICS_LOCAL_ENABLED` | PCD Ops' own metrics store scrapes the hypervisors (default on) |
+| `METRICS_SCRAPE_INTERVAL` | `60s` (default) or `30s` |
+| `METRICS_RETENTION_DAYS` | 30, 90 (default), 180, 365 or 730 |
+| `METRICS_KEEP_ALL_SERIES` | Keep every exporter series, not just the allowlist (default off) |
 | `AI_BACKEND` | `ollama` (default; shown as **Private AI**) or `claude` |
 | `AI_URL` | Private AI: Ollama base URL or OpenAI-compatible endpoint (with or without `/v1`) |
 | `AI_MODEL` | Model name (e.g. `llama3.1:8b`) |
@@ -78,8 +82,10 @@ Installs without config.env get the connection from first-run setup (saved in `c
   - Call `report_background_failure(exc)` on errors from background work: Keystone rejecting the credential (401, or 404 from `/auth/tokens` when it was deleted) marks it failed → re-authorize banner + `setup_required` in `/api/health`.
 - **Console TUI** "Reset setup" (`deploy/scripts/reset-setup.sh`) forgets the credential and logs everyone out.
 
-### Prometheus / Grafana note
-In PCD, Prometheus is actually VictoriaMetrics (`victoria-metrics-cluster-vmselect:8481`) running inside the cluster — not directly reachable. All metric queries must go through the Grafana datasource proxy. The `PrometheusClient` in `services/prometheus.py` automatically adds the `Authorization: Bearer <GRAFANA_TOKEN>` header, and resolves the data source on each query from the current settings.
+### Metrics: PCD Ops' own store, and PCD's Grafana
+- **Own store (host and VM metrics):** VictoriaMetrics single-node on the appliance (`pcd-ops-metrics`, `127.0.0.1:8428`) scrapes node-exporter (`:9388`) and libvirt-exporter (`:9177`) on every hypervisor. `services/local_metrics.py` writes its scrape config, targets (labelled `hypervisor_id`, `hypervisor`, `host_ip`) and retention in the state dir. `services/exporters.py` probes the exporters (Inventory → Hypervisors → Probe exporters).
+- **PCD's Grafana (SaaS, 14 days, reduced `pcd:*` series):** PCD's Prometheus is VictoriaMetrics inside the PCD cluster, reachable only through the Grafana data source proxy. `PrometheusClient` in `services/prometheus.py` adds `Authorization: Bearer <GRAFANA_TOKEN>` and resolves the data source from the current settings. Used for the `openstack_*` series only PCD has, and as a fallback.
+- **Query host and VM metrics through `services/metrics_catalog.py`**, not with raw PromQL: each metric is defined for both sources, and `source()` picks local when it has data. VMs join on `domain` = Nova server UUID; hosts on `hypervisor_id` locally, or `host` = Nova compute service host (PCD host UUID) in Grafana.
 
 ## Architecture
 
@@ -91,6 +97,8 @@ In PCD, Prometheus is actually VictoriaMetrics (`victoria-metrics-cluster-vmsele
 - `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir)
 - `services/openstack.py` — Wraps `openstacksdk`; all features import from here, never instantiate `openstack.connect()` elsewhere. `get_connection()` returns the user's connection inside `acting_as()`, else the background one
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
+- `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
+- `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once) and the volume → VM disk series that joins libvirt disk stats to volumes and backends; whether a server group's placement meets its policy
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
 - `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
 - `services/ai/claude.py` — Anthropic Claude implementation
@@ -113,13 +121,14 @@ Each feature has a backend router and a frontend page:
 |---|---|---|
 | Resource Reclamation | `api/reclamation.py` | `pages/Reclamation.tsx` |
 | Capacity Planning | `api/capacity.py` | `pages/Capacity.tsx` |
-| Inventory | `api/inventory.py` | `pages/Inventory.tsx` |
+| Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All; live properties from `GET /inventory/{kind}/{id}/details` with the user's token) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
 | Right-Sizing | `api/rightsizing.py` | `pages/RightSizing.tsx` |
 | Anomaly Detection | `api/anomaly.py` | `pages/Anomaly.tsx` |
 | Log Analysis | `api/logs.py` | `pages/Logs.tsx` |
 | Login | `api/auth.py` | `pages/Login.tsx` |
 | Setup / background access | `api/access.py` | `pages/Setup.tsx`, `components/PcdAccess.tsx` |
+| Host, VM and storage metrics | `api/metrics.py` (+ `metrics` merged into `/inventory/hypervisors` and `/inventory/servers`) | Inventory detail pages (`components/MetricsCharts.tsx`, synced `TimeChart`s), `pages/settings/SettingsMetrics.tsx` |
 | Settings | `api/settings.py` | `pages/settings/Settings.tsx` (one page, tabs in `?tab=`), `pages/settings/*.tsx` |
 | System (version/update) | `api/system.py` | `pages/settings/SettingsUpdates.tsx` |
 
@@ -151,8 +160,9 @@ Production runs as a dedicated Alpine Linux appliance VM. The image is a qcow2 b
 **Runtime on VM:**
 - nginx on port 80 — serves `frontend/dist/` and proxies `/api/` to uvicorn
 - OpenRC service `pcd-ops` — uvicorn on `127.0.0.1:8000`
+- OpenRC service `pcd-ops-metrics` — VictoriaMetrics on `127.0.0.1:8428` (`deploy/openrc/run-metrics.sh`), data in `/var/lib/pcd-ops/metrics`
 - `/etc/pcd-app/config.env` then `/opt/pcd-ops/.env`, sourced by `deploy/openrc/run-uvicorn.sh`
-- `/var/lib/pcd-ops/` (0700, pcd-ops) — Fernet key and encrypted application credential
+- `/var/lib/pcd-ops/` (0700, pcd-ops) — Fernet key, encrypted application credential, `settings.json`, the metrics store's config and data
 
 **Self-update:** Settings → Software → "Check for Updates" / "Update & Restart". Backend calls `deploy/scripts/update.sh` (`git pull` + `pip install` + `npm build` + service restart). The script runs detached so it survives the service restart. Because appliances pull `main`, **anything merged to main ships to installed appliances** — keep unreleased work on a branch.
 

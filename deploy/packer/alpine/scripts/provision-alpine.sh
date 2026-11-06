@@ -24,7 +24,8 @@ apk add --no-cache \
   nginx git curl bash sudo \
   python3 py3-pip \
   gcc musl-dev python3-dev libffi-dev openssl-dev \
-  nodejs npm gum
+  nodejs npm gum \
+  cloud-utils-growpart e2fsprogs-extra
 
 echo "=== Installing GRUB for legacy BIOS boot ==="
 # The Alpine UEFI cloud image ships GRUB for UEFI only (grubx64.efi) and has
@@ -70,6 +71,24 @@ cp "$APP_DIR/deploy/openrc/pcd-ops" /etc/init.d/pcd-ops
 chmod 755 /etc/init.d/pcd-ops
 rc-update add pcd-ops default
 
+echo "=== Installing the metrics store (VictoriaMetrics single-node) ==="
+# PCD Ops scrapes node-exporter and libvirt-exporter on every hypervisor into its own store
+# (backend/app/services/local_metrics.py). Pinned release, checked against its published sha256.
+VM_VERSION=v1.154.1
+VM_SHA256=8c40aec9f77be3a85fbe4b491238b80936af50497fef980b9434095d5076e424
+VM_TGZ=victoria-metrics-linux-amd64-$VM_VERSION.tar.gz
+curl -fsSL -o "/tmp/$VM_TGZ" \
+  "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/$VM_VERSION/$VM_TGZ"
+echo "$VM_SHA256  /tmp/$VM_TGZ" | sha256sum -c -
+install -d -m 0755 /opt/victoria-metrics
+tar xzf "/tmp/$VM_TGZ" -C /opt/victoria-metrics victoria-metrics-prod
+chown root:root /opt/victoria-metrics/victoria-metrics-prod
+chmod 0755 /opt/victoria-metrics/victoria-metrics-prod
+rm -f "/tmp/$VM_TGZ"
+cp "$APP_DIR/deploy/openrc/pcd-ops-metrics" /etc/init.d/pcd-ops-metrics
+chmod 755 /etc/init.d/pcd-ops-metrics
+rc-update add pcd-ops-metrics default
+
 echo "=== Installing nginx config ==="
 # Alpine nginx uses http.d/ not sites-available/sites-enabled
 cp "$APP_DIR/deploy/nginx/pcd-ops.conf" /etc/nginx/http.d/pcd-ops.conf
@@ -82,6 +101,7 @@ chmod +x "$APP_DIR/deploy/scripts/appliance-console.sh"
 chmod +x "$APP_DIR/deploy/scripts/appliance-console-gum.sh"
 chmod +x "$APP_DIR/deploy/scripts/reset-setup.sh"
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops restart\n' > /etc/sudoers.d/pcd-ops
+printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops-metrics restart\n' >> /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /usr/sbin/nginx -s reload\n'        >> /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/reboot\n'                     >> /etc/sudoers.d/pcd-ops
 chmod 440 /etc/sudoers.d/pcd-ops
@@ -137,9 +157,10 @@ if [ -e "$APP_DIR/creds" ] || [ -n "$(ls -A /var/lib/pcd-ops)" ]; then
   exit 1
 fi
 # BusyBox grep has no --exclude-dir, so prune with find, and fail on any output rather than
-# on grep's exit status (2 on an unknown option would read as "no match").
+# on grep's exit status (2 on an unknown option would read as "no match"). grep exits 1 when
+# nothing matches, which makes find fail too; `|| true` keeps set -e from stopping a clean build.
 found=$(find "$APP_DIR" \( -name .git -o -name .venv -o -name node_modules \) -prune -o -type f \
-  -exec grep -lE '^[[:space:]]*(export[[:space:]]+)?OS_PASSWORD=[^[:space:]]' {} + 2>/dev/null)
+  -exec grep -lE '^[[:space:]]*(export[[:space:]]+)?OS_PASSWORD=[^[:space:]]' {} + 2>/dev/null || true)
 if [ -n "$found" ]; then
   echo "$found"
   echo "ERROR: the files above contain an OpenStack password" >&2

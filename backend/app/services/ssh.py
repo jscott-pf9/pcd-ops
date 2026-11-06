@@ -5,6 +5,7 @@ Runs synchronously and is called via asyncio.to_thread().
 
 import logging
 import os
+import re
 from typing import NamedTuple
 
 import paramiko
@@ -79,6 +80,39 @@ def _ssh_client(host: str, user: str, key_path: str, password: str) -> paramiko.
     return client
 
 
+_DIMM_SIZE = re.compile(r"^\s*Size:\s*(\d+)\s*([KMGT])i?B\s*$", re.M)
+_UNIT_MB = {"K": 1 / 1024, "M": 1, "G": 1024, "T": 1024 * 1024}
+
+
+def parse_dimm_mb(text: str) -> int | None:
+    """Total installed memory from ``dmidecode -t 17`` ("Size: 32 GB", "No Module Installed")."""
+    total = sum(int(n) * _UNIT_MB[u] for n, u in _DIMM_SIZE.findall(text))
+    return int(total) or None
+
+
+_LSCPU = {
+    "Model name": "cpu_model",
+    "Socket(s)": "cpu_sockets",
+    "Core(s) per socket": "cpu_cores",
+    "Thread(s) per core": "cpu_threads",
+}
+
+
+def parse_lscpu(text: str) -> dict:
+    """CPU model and topology from ``lscpu`` output; missing fields are left out."""
+    out: dict = {}
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        field, value = _LSCPU.get(key.strip()), value.strip()
+        if not field or not value or field in out:
+            continue
+        if field == "cpu_model":
+            out[field] = value
+        elif value.isdigit():
+            out[field] = int(value)
+    return out
+
+
 def collect_host_hardware(host: str, user: str, key_path: str, password: str) -> dict:
     """Collect physical hardware facts over one SSH connection.
 
@@ -86,13 +120,19 @@ def collect_host_hardware(host: str, user: str, key_path: str, password: str) ->
         {
             "connected":      bool,
             "nic_count":      int | None,
-            "ram_mb":         int | None,
+            "ram_mb":         int | None,  # MemTotal: what Linux can use
+            "ram_mb_installed": int | None,  # DIMMs (dmidecode); firmware and iGPU take the rest
+            "cpu_model":      str | None,  # e.g. "AMD Ryzen 7 5700U with Radeon Graphics"
+            "cpu_sockets":    int | None,
+            "cpu_cores":      int | None,  # per socket
+            "cpu_threads":    int | None,  # per core
             "os_version":     str | None,  # e.g. "Ubuntu 22.04.3 LTS"
             "pending_patches": int | None, # packages awaiting upgrade
         }
     """
     result: dict = {
-        "connected": False, "nic_count": None, "ram_mb": None,
+        "connected": False, "nic_count": None, "ram_mb": None, "ram_mb_installed": None,
+        "cpu_model": None, "cpu_sockets": None, "cpu_cores": None, "cpu_threads": None,
         "os_version": None, "pending_patches": None,
     }
     client = None
@@ -115,6 +155,16 @@ def collect_host_hardware(host: str, user: str, key_path: str, password: str) ->
         out = stdout.read().decode("utf-8", errors="replace").strip()
         if out.isdigit():
             result["ram_mb"] = int(out) // 1024
+
+        # Installed RAM: SMBIOS memory devices (needs root, or sudo without a password)
+        _, stdout, _ = client.exec_command(
+            "dmidecode -t 17 2>/dev/null || sudo -n dmidecode -t 17 2>/dev/null", timeout=10
+        )
+        result["ram_mb_installed"] = parse_dimm_mb(stdout.read().decode("utf-8", errors="replace"))
+
+        # CPU model and topology: Nova reports libvirt's CPU model name, not the processor's
+        _, stdout, _ = client.exec_command("LC_ALL=C lscpu 2>/dev/null", timeout=10)
+        result.update(parse_lscpu(stdout.read().decode("utf-8", errors="replace")))
 
         # OS version from /etc/os-release (works on Ubuntu + RHEL/Rocky)
         _, stdout, _ = client.exec_command(

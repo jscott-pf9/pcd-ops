@@ -25,6 +25,7 @@ import Anomaly from "./pages/Anomaly";
 import Capacity from "./pages/Capacity";
 import CapacityPlans from "./pages/CapacityPlans";
 import Inventory from "./pages/Inventory";
+import InventoryDetail from "./pages/inventory/Detail";
 import Logs from "./pages/Logs";
 import Reclamation from "./pages/Reclamation";
 import RightSizing from "./pages/RightSizing";
@@ -85,7 +86,8 @@ const NAV_SECTIONS: NavSection[] = [
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function isPathActive(path: string, pathname: string) {
-  return path === "/" ? pathname === "/" : pathname.startsWith(path);
+  // Inventory is "/", and its detail pages live under /inventory/
+  return path === "/" ? pathname === "/" || pathname.startsWith("/inventory/") : pathname.startsWith(path);
 }
 
 function sectionContainsActive(sec: NavSection, pathname: string) {
@@ -284,6 +286,7 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
       <main className="page">
         <Routes>
           <Route path="/"                  element={<Inventory />}       />
+          <Route path="/inventory/:kind/:id" element={<InventoryDetail />} />
           <Route path="/topology"          element={<Topology />}        />
           <Route path="/reclamation"       element={<Reclamation />}     />
           <Route path="/capacity"          element={<Capacity />}        />

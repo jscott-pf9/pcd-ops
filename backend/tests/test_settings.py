@@ -18,13 +18,6 @@ from app.services.ai import private as private_ai
 from .conftest import CSRF
 
 
-@pytest.fixture
-def admin(logged_in, keystone_api):
-    """Logged in, with setup finished (otherwise the gate answers 409)."""
-    assert logged_in.post("/api/access/authorize", headers=CSRF).status_code == 200
-    return logged_in
-
-
 def test_every_tab_saves_its_fields(admin):
     alerts = {
         "smtp_host": "smtp.example.com",
@@ -75,25 +68,6 @@ def test_grafana_url_defaults_to_the_pcd_host(admin):
     assert prometheus.grafana_url() == "https://pcd.example.com/grafana"
     settings.grafana_url = "https://grafana.example.com/"
     assert prometheus.grafana_url() == "https://grafana.example.com"
-
-
-@pytest.fixture
-def http(monkeypatch):
-    """Route every httpx.AsyncClient through a handler; returns the list of requests seen."""
-    seen, routes = [], {}
-    real = httpx.AsyncClient
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        for prefix, respond in routes.items():
-            if str(request.url).startswith(prefix):
-                return respond(request)
-        return httpx.Response(404, json={})
-
-    monkeypatch.setattr(
-        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
-    )
-    return seen, routes
 
 
 FRONTEND_SETTINGS = {

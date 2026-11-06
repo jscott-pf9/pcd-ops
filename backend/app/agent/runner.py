@@ -82,6 +82,8 @@ async def run_fast() -> None:
             ("snapshots",   collector.collect_snapshots()),
             ("logs",        collector.collect_logs()),
         ])
+        # After inventory, which it maps hosts through.
+        errors += await _gather_named([("host_metrics", collector.collect_host_metrics())])
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))
             logger.error("Fast collection run failed (run_id=%d): %s", run_id, errors)

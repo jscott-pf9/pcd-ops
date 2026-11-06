@@ -44,7 +44,11 @@ export default function SettingsConnection() {
       {access && <BackgroundAccessCard access={access} />}
 
       <form onSubmit={save}>
-        <Fieldset title="Metrics (Grafana)">
+        <Fieldset title="PCD Grafana (SaaS, keeps 14 days)">
+          <p className="text-muted" style={{ fontSize: 12, marginTop: 0 }}>
+            Used for the OpenStack capacity metrics only PCD has, and for host and VM metrics where
+            PCD Ops' own store (Settings → Metrics) has no data yet.
+          </p>
           <Field label="Grafana URL" value={form.grafana_url} onChange={v => set("grafana_url", v)}
             placeholder={form.grafana_url_default || "https://<PCD host>/grafana"}
             help={<>Leave blank to use <code>{form.grafana_url_default || "https://<PCD host>/grafana"}</code>:

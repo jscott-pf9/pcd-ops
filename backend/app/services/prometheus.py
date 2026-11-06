@@ -82,8 +82,10 @@ class PrometheusClient:
         self._token = auth_token
 
     async def _target(self) -> tuple[str, dict]:
-        base = self._base_url or (await resolve())["url"]
-        token = self._token or settings.grafana_token
+        if self._base_url:   # a fixed URL (the local store, or a URL being tested)
+            return self._base_url, ({"Authorization": f"Bearer {self._token}"} if self._token else {})
+        base = (await resolve())["url"]
+        token = settings.grafana_token
         return base, ({"Authorization": f"Bearer {token}"} if token else {})
 
     async def _get(self, path: str, params: dict | None = None):

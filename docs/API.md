@@ -2,7 +2,7 @@
 
 
 
-**Version:** 0.6.0  
+**Version:** 0.6.1  
 **Base URL:** `/api`  
 **Auth:** PCD login (session cookie). See *Authentication* below.
 
@@ -57,6 +57,7 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 - [Inventory](#inventory)
 - [Jobs](#jobs)
 - [Logs](#logs)
+- [Metrics](#metrics)
 - [Misc](#misc)
 - [Reclamation](#reclamation)
 - [Reports](#reports)
@@ -341,7 +342,9 @@ Returns whether GitHub feedback is configured so the frontend can show/hide the 
 
 ### **GET** `/api/inventory/servers`
 
-Return all compute instances with status, flavor, hypervisor, and project info.
+Return all compute instances with status, flavor, hypervisor, security groups, server
+
+group, project, and latest CPU/memory/network/disk (`metrics`, null without data).
 
 **Response:** 200 — Successful Response  
 
@@ -349,7 +352,27 @@ Return all compute instances with status, flavor, hypervisor, and project info.
 
 ### **GET** `/api/inventory/hypervisors`
 
-Return all hypervisors with CPU/RAM/disk capacity and current utilization.
+Return all hypervisors with CPU/RAM/disk capacity, current utilization, and live load
+
+(`metrics`) from PCD Ops' metrics store or PCD's Grafana.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/hypervisors/exporters`
+
+The last exporter probe: per hypervisor, whether node-exporter (:9388) and
+
+libvirt-exporter (:9177) answered, and what they serve.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/inventory/hypervisors/probe-exporters`
+
+Probe the exporters on every hypervisor that is up, from this appliance.
 
 **Response:** 200 — Successful Response  
 
@@ -421,7 +444,38 @@ Return graph nodes + edges for the topology view.
 
 ### **GET** `/api/inventory/clusters`
 
-Return PCD cluster names and metadata.
+Return host aggregates (`kind` "cluster" for PCD clusters, which are pf9-managed
+
+aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/storage_backends`
+
+Return Cinder backends: pools grouped by backend (a shared store, reported by every host,
+
+counted once), capacity, free, used, provisioned against oversubscribed capacity, volumes
+and the volume types that select each.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/storage_types`
+
+Return volume types: backend, extra specs, QoS, default, encryption, access, volumes.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/server_groups`
+
+Return server groups: policy, rules, members with their hosts, and whether the
+
+placement satisfies the policy (`status`: ok, violated, not_satisfied, empty).
 
 **Response:** 200 — Successful Response  
 
@@ -430,6 +484,31 @@ Return PCD cluster names and metadata.
 ### **GET** `/api/inventory/keypairs`
 
 Return all SSH key pairs registered in Nova.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/flavors`
+
+Return Nova flavors: vCPUs, RAM, disk, ephemeral, swap, public, extra specs, VM count.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/inventory/{kind}/{item_id}/details`
+
+Everything PCD reports for one VM, image, flavor, volume type or volume, fetched now
+
+with the signed-in user's token (metadata, image properties, extra specs, ...).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `kind` | path | string | yes | — |  |
+| `item_id` | path | string | yes | — |  |
 
 **Response:** 200 — Successful Response  
 
@@ -622,6 +701,101 @@ Paste-and-analyze: accepts raw log lines, returns AI summary.
 
 ---
 
+## Metrics
+
+### **GET** `/api/metrics/status`
+
+PCD Ops' own metrics store (running, targets, disk, projected size) and which source
+
+the host and VM views use: "local", "pcd" (PCD's Grafana, 14 days) or null.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/hosts/{hypervisor_id}`
+
+CPU, memory, disk and network history for one hypervisor. `range` is clamped to what
+
+the source keeps.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `hypervisor_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/vms/{server_id}`
+
+CPU, memory, network, disk and CPU-wait history for one VM.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `server_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/storage/{backend}`
+
+Capacity, used and provisioned history for one Cinder backend. Only PCD Ops' own store
+
+keeps it (written each inventory run), so this is 503 without it.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `backend` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/clusters/{aggregate_id}`
+
+CPU, memory, disk and network over a cluster's (host aggregate's) hosts, and its vCPU,
+
+RAM and VM allocation over time (PCD Ops' metrics store only).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `aggregate_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/metrics/volumes/{volume_id}`
+
+Throughput, IOPS, latency and allocation for one volume: libvirt's stats for the VM disk
+
+it is attached as (PCD Ops' metrics store only; 404 when it isn't attached).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `volume_id` | path | string | yes | — |  |
+| `range` | query | string | no | `"24h"` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ## Misc
 
 ### **GET** `/api/settings`
@@ -645,6 +819,10 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `prometheus_url` | string | no | — | Prometheus Url |
 | `grafana_url` | string | no | — | Grafana Url |
 | `grafana_token` | string | no | — | Grafana Token |
+| `metrics_local_enabled` | boolean | no | — | Metrics Local Enabled |
+| `metrics_scrape_interval` | string | no | — | Metrics Scrape Interval |
+| `metrics_retention_days` | integer | no | — | Metrics Retention Days |
+| `metrics_keep_all_series` | boolean | no | — | Metrics Keep All Series |
 | `ai_backend` | string | no | — | Ai Backend |
 | `ai_url` | string | no | — | Ai Url |
 | `ai_model` | string | no | — | Ai Model |
