@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import httpx
 from fastapi import APIRouter, HTTPException
 
+from app.config import settings
 from app.services import local_metrics, metrics_catalog
 from app.services.db import cache_get
 from app.services.prometheus import MetricsNotConfigured
@@ -16,6 +17,7 @@ HOST_SERIES = ["cpu_pct", "mem_pct", "disk_pct", "disk_read_bps", "disk_write_bp
                "net_rx_bps", "net_tx_bps"]
 VM_SERIES = ["cpu_pct", "mem_pct", "net_rx_bps", "net_tx_bps", "disk_iops", "disk_latency_ms",
              "cpu_wait_pct"]
+STORAGE_SERIES = ["total_bytes", "used_bytes", "provisioned_bytes"]
 
 
 @router.get("/status")
@@ -71,3 +73,16 @@ async def vm_history(server_id: str, range: str = "24h"):  # noqa: A002
     """CPU, memory, network, disk and CPU-wait history for one VM."""
     src = await _source()
     return await _history("vm", src, f'domain="{server_id}"', VM_SERIES, range)
+
+
+@router.get("/storage/{backend}")
+async def storage_history(backend: str, range: str = "24h"):  # noqa: A002
+    """Capacity, used and provisioned history for one Cinder backend. Only PCD Ops' own store
+    keeps it (written each inventory run), so this is 503 without it."""
+    if not (local_metrics.available() and settings.metrics_local_enabled):
+        raise HTTPException(503, detail={
+            "code": "metrics_not_configured",
+            "error": "Storage history is kept by PCD Ops' metrics store, which isn't running "
+                     "here (Settings → Metrics)."})
+    name = backend.replace("\\", "\\\\").replace('"', '\\"')
+    return await _history("storage", "local", f'backend="{name}"', STORAGE_SERIES, range)

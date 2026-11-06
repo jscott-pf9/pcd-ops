@@ -157,6 +157,35 @@ def apply_settings() -> None:
         logger.error("Couldn't restart the metrics store: %s", _restart_error)
 
 
+def _label(v: str) -> str:
+    return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def exposition(samples: list[tuple[str, dict, float]], ts_ms: int) -> str:
+    """Prometheus text lines: name{label="value",...} value timestamp_ms."""
+    lines = []
+    for name, labels, value in samples:
+        lab = ",".join(f'{k}="{_label(v)}"' for k, v in sorted(labels.items()))
+        lines.append(f"{name}{{{lab}}} {float(value)!r} {ts_ms}")
+    return "\n".join(lines) + "\n"
+
+
+async def push(samples: list[tuple[str, dict, float]]) -> bool:
+    """Write samples PCD Ops computes itself (not scraped) into the store. Does nothing where
+    there's no store, or it's turned off; failures are logged, never raised."""
+    if not samples or not available() or not settings.metrics_local_enabled:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{URL}/api/v1/import/prometheus",
+                                  content=exposition(samples, int(time.time() * 1000)))
+            r.raise_for_status()
+        return True
+    except httpx.HTTPError as e:
+        logger.warning("Couldn't write %d samples to the metrics store: %s", len(samples), e)
+        return False
+
+
 async def _get(path: str, **params) -> dict:
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(f"{URL}{path}", params=params or None)

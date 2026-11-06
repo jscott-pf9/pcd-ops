@@ -128,10 +128,22 @@ VM: dict[str, dict[str, str | None]] = {
     },
 }
 
-GROUPS = {"host": HOST, "vm": VM}
+# Cinder backend capacity, which PCD Ops writes into its own store each inventory run
+# (storage.samples); every 15 minutes, so each step takes the latest sample (MetricsQL's
+# last_over_time without a window looks back one step).
+STORAGE: dict[str, dict[str, str | None]] = {
+    "total_bytes": {"local": "max(last_over_time(pcd_ops_storage_total_bytes{SEL}))", "pcd": None},
+    "used_bytes": {
+        "local": "max(last_over_time(pcd_ops_storage_total_bytes{SEL})) - max(last_over_time(pcd_ops_storage_free_bytes{SEL}))",
+        "pcd": None,
+    },
+    "provisioned_bytes": {"local": "max(last_over_time(pcd_ops_storage_provisioned_bytes{SEL}))", "pcd": None},
+}
+
+GROUPS = {"host": HOST, "vm": VM, "storage": STORAGE}
 # The label each source keys a group by.
 KEY = {("host", "local"): "hypervisor_id", ("host", "pcd"): "host",
-       ("vm", "local"): "domain", ("vm", "pcd"): "domain"}
+       ("vm", "local"): "domain", ("vm", "pcd"): "domain", ("storage", "local"): "backend"}
 PCD_RETENTION_DAYS = 14
 PCD_STALE_S = 600   # two of the host agent's 5-minute writes
 

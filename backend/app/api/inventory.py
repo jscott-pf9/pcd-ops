@@ -17,8 +17,11 @@ def _require(key: str):
 
 @router.get("/servers")
 async def list_servers():
-    """Return all compute instances with status, flavor, hypervisor, and project info."""
-    return _require("inventory:servers")
+    """Return all compute instances with status, flavor, hypervisor, security groups, server
+    group, project, and latest CPU/memory/network/disk (`metrics`, null without data)."""
+    data, _ = cache_get("metrics:vms")
+    vms = (data or {}).get("vms", {})
+    return [{**s, "metrics": vms.get(s["id"])} for s in _require("inventory:servers")]
 
 
 def _with_metrics(hypervisors: list[dict]) -> list[dict]:
@@ -144,8 +147,30 @@ async def topology():
 
 @router.get("/clusters")
 async def list_clusters():
-    """Return PCD cluster names and metadata."""
+    """Return host aggregates (`kind` "cluster" for PCD clusters, which are pf9-managed
+    aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation."""
     return _require("inventory:clusters")
+
+
+@router.get("/storage_backends")
+async def list_storage_backends():
+    """Return Cinder backends: pools grouped by backend (a shared store, reported by every host,
+    counted once), capacity, free, used, provisioned against oversubscribed capacity, volumes
+    and the volume types that select each."""
+    return _require("inventory:storage_backends")
+
+
+@router.get("/storage_types")
+async def list_storage_types():
+    """Return volume types: backend, extra specs, QoS, default, encryption, access, volumes."""
+    return _require("inventory:storage_types")
+
+
+@router.get("/server_groups")
+async def list_server_groups():
+    """Return server groups: policy, rules, members with their hosts, and whether the
+    placement satisfies the policy (`status`: ok, violated, not_satisfied, empty)."""
+    return _require("inventory:server_groups")
 
 
 @router.get("/keypairs")

@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timedelta
 
 from app.dependencies import get_ai_provider
-from app.services import db, local_metrics, metrics_catalog
+from app.services import db, local_metrics, metrics_catalog, server_groups, storage
 from app.services.openstack import get_connection
 from app.services.prometheus import MetricsNotConfigured, prometheus_client
 
@@ -33,13 +33,73 @@ def _extract_ips(addresses: dict) -> list[str]:
 
 # ── Inventory ──────────────────────────────────────────────────────────────────
 
+def _cinder_get(conn, path: str, default):
+    """A Cinder API call whose failure (missing extension, policy) leaves just that field out."""
+    try:
+        r = conn.block_storage.get(path)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.debug("Cinder %s unavailable: %s", path, e)
+        return default
+
+
+def _cinder_storage(conn) -> dict:
+    """Pools, volume types and their QoS, default, encryption and project access (blocking)."""
+    pools = _cinder_get(conn, "/scheduler-stats/get_pools?detail=True", {}).get("pools", [])
+    types = _cinder_get(conn, "/types?is_public=None", {}).get("volume_types", [])
+    default = _cinder_get(conn, "/types/default", {}).get("volume_type", {}).get("id")
+    qos = _cinder_get(conn, "/qos-specs", {}).get("qos_specs", [])
+    qos_of_type = {}
+    for q in qos:
+        for a in _cinder_get(conn, f"/qos-specs/{q['id']}/associations", {}).get(
+                "qos_associations", []):
+            if a.get("association_type") == "volume_type":
+                qos_of_type[a["id"]] = {"id": q["id"], "name": q.get("name"),
+                                        "consumer": q.get("consumer"), "specs": q.get("specs")}
+    extra = {}
+    for t in types:
+        enc = _cinder_get(conn, f"/types/{t['id']}/encryption", {})
+        access = None
+        if not t.get("os-volume-type-access:is_public", t.get("is_public", True)):
+            access = [a["project_id"] for a in _cinder_get(
+                conn, f"/types/{t['id']}/os-volume-type-access", {}).get("volume_type_access", [])]
+        extra[t["id"]] = {"encrypted": bool(enc.get("provider") or enc.get("encryption_id")),
+                          "access_projects": access}
+    return {"pools": pools, "types": types, "default": default, "qos": qos_of_type,
+            "extra": extra}
+
+
+def _volume_types(cinder: dict, volumes: list[dict]) -> list[dict]:
+    out = []
+    for t in cinder["types"]:
+        specs = t.get("extra_specs") or {}
+        mine = [v for v in volumes if v["volume_type"] in (t["name"], t["id"])]
+        extra = cinder["extra"].get(t["id"], {})
+        out.append({
+            "id": t["id"],
+            "name": t["name"],
+            "description": t.get("description"),
+            "public": t.get("os-volume-type-access:is_public", t.get("is_public", True)),
+            "default": t["id"] == cinder["default"],
+            "backend": specs.get("volume_backend_name"),
+            "extra_specs": specs,
+            "qos": cinder["qos"].get(t["id"]),
+            "encrypted": extra.get("encrypted", False),
+            "access_projects": extra.get("access_projects"),
+            "volumes": len(mine),
+            "volume_gb": sum(v["size_gb"] or 0 for v in mine),
+        })
+    return sorted(out, key=lambda t: t["name"])
+
+
 async def collect_inventory() -> None:
     logger.info("Collecting inventory…")
     conn = get_connection()
 
     (servers, hypervisors, volumes, networks, tenants,
      floating_ips, images, security_groups, ports, flavors_raw, keypairs_raw,
-     aggregates) = await asyncio.gather(
+     aggregates, groups_raw, cinder) = await asyncio.gather(
         asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True))),
         asyncio.to_thread(lambda: list(conn.compute.hypervisors(details=True))),
         asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True))),
@@ -52,8 +112,13 @@ async def collect_inventory() -> None:
         asyncio.to_thread(lambda: list(conn.compute.flavors())),
         asyncio.to_thread(lambda: list(conn.compute.keypairs())),
         asyncio.to_thread(lambda: list(conn.compute.aggregates())),
+        asyncio.to_thread(lambda: list(conn.compute.server_groups(all_projects=True))),
+        asyncio.to_thread(_cinder_storage, conn),
     )
 
+    _group_of = {
+        m: {"id": g.id, "name": g.name} for g in groups_raw for m in (g.member_ids or [])
+    }
     db.cache_set("inventory:servers", [
         {
             "id": s.id,
@@ -66,6 +131,9 @@ async def collect_inventory() -> None:
             "project_id": s.project_id,
             "ips": _extract_ips(s.addresses),
             "hypervisor_hostname": getattr(s, "hypervisor_hostname", None),
+            "security_groups": sorted({g.get("name") for g in (s.security_groups or [])
+                                       if g.get("name")}),
+            "server_group": _group_of.get(s.id),
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }
@@ -153,6 +221,7 @@ async def collect_inventory() -> None:
         os_version      = hw.get("os_version")
         pending_patches = hw.get("pending_patches")
 
+        svc_host = (h.service_details or {}).get("host")
         hyp_records.append({
             "id":               h.id,
             "hostname":         h.name,
@@ -160,7 +229,9 @@ async def collect_inventory() -> None:
             "status":           h.status,
             "host_ip":          h.host_ip,
             # Nova's compute service host: in PCD, the host UUID that pcd:* metrics carry
-            "service_host":     (h.service_details or {}).get("host"),
+            "service_host":     svc_host,
+            "aggregates":       sorted(a.name for a in aggregates
+                                       if svc_host in (a.hosts or []) or h.name in (a.hosts or [])),
             # Physical specs
             "cpu_vendor":       ci.get("vendor"),
             # Nova has libvirt's CPU model name (e.g. "EPYC-Rome-v5"); lscpu has the real one
@@ -191,19 +262,55 @@ async def collect_inventory() -> None:
     # PCD Ops' own metrics store scrapes every hypervisor; keep its target list current.
     local_metrics.write_targets(hyp_records)
 
-    db.cache_set("inventory:volumes", [
+    host_names = {h["service_host"]: h["hostname"] for h in hyp_records if h["service_host"]}
+    pools = [storage.pool_record(p, host_names) for p in cinder["pools"]]
+    backend_of_pool = {p["name"]: p["backend"] for p in pools}
+    vol_records = [
         {
             "id": v.id,
             "name": v.name or "(unnamed)",
             "size_gb": v.size,
             "status": v.status,
             "volume_type": v.volume_type,
+            "host": v.host,
+            "backend": backend_of_pool.get(v.host or ""),
             "attached_to": [a.get("server_id") for a in (v.attachments or [])],
             "project_id": v.project_id,
             "created_at": v.created_at,
         }
         for v in volumes
-    ])
+    ]
+    db.cache_set("inventory:volumes", vol_records)
+
+    type_records = _volume_types(cinder, vol_records)
+    db.cache_set("inventory:storage_types", type_records)
+    backends = storage.group_pools(pools, vol_records, type_records)
+    db.cache_set("inventory:storage_backends", backends)
+    # Cinder only reports the current capacity: keep its history in PCD Ops' metrics store.
+    await local_metrics.push(storage.samples(backends))
+
+    server_by_id = {s.id: s for s in servers}
+    group_records = []
+    for g in groups_raw:
+        members = [
+            {"id": m, "name": getattr(server_by_id.get(m), "name", None),
+             "host": getattr(server_by_id.get(m), "hypervisor_hostname", None),
+             "status": getattr(server_by_id.get(m), "status", None)}
+            for m in (g.member_ids or [])
+        ]
+        policy = g.policy or (g.policies or [None])[0]
+        rules = g.rules or {}
+        group_records.append({
+            "id": g.id,
+            "name": g.name,
+            "policy": policy,
+            "rules": rules,
+            "project_id": g.project_id,
+            "members": members,
+            "hosts": sorted({m["host"] for m in members if m["host"]}),
+            **server_groups.check(policy, members, rules),
+        })
+    db.cache_set("inventory:server_groups", sorted(group_records, key=lambda g: g["name"] or ""))
 
     db.cache_set("inventory:networks", [
         {
@@ -305,24 +412,41 @@ async def collect_inventory() -> None:
         for kp in keypairs_raw
     ], key=lambda k: k["name"]))
 
-    db.cache_set("inventory:clusters", sorted([
-        {
+    # Aggregates name hosts by Nova's compute service host (in PCD, the host UUID)
+    hyp_by_host = {h["service_host"]: h for h in hyp_records if h["service_host"]}
+    hyp_by_host.update({h["hostname"]: h for h in hyp_records})
+    agg_records = []
+    for agg in aggregates:
+        meta = {k: v for k, v in (agg.metadata or {}).items() if k != "availability_zone"}
+        members = [hyp_by_host.get(h) for h in agg.hosts or []]
+        known = [h for h in members if h]
+        agg_records.append({
             "id":                agg.id,
             "name":              agg.name,
+            "kind":              "cluster" if str(meta.get("pf9-managed")).lower() == "true"
+                                 else "aggregate",
             "availability_zone": agg.availability_zone,
-            "hosts":             list(agg.hosts or []),
-            "metadata":          {k: v for k, v in (agg.metadata or {}).items() if k != "availability_zone"},
+            "hosts": [
+                {"service_host": h, "hypervisor_id": m and m["id"], "hostname": m and m["hostname"]}
+                for h, m in zip(agg.hosts or [], members)
+            ],
+            "vms":               sum(h["running_vms"] or 0 for h in known),
+            "vcpus_total":       sum(h["vcpus_total"] or 0 for h in known),
+            "vcpus_used":        sum(h["vcpus_used"] or 0 for h in known),
+            "memory_mb_total":   sum(h["memory_mb_total"] or 0 for h in known),
+            "memory_mb_used":    sum(h["memory_mb_used"] or 0 for h in known),
+            "metadata":          meta,
             "created_at":        agg.created_at,
             "updated_at":        agg.updated_at,
-        }
-        for agg in aggregates
-    ], key=lambda a: a["name"]))
+        })
+    db.cache_set("inventory:clusters", sorted(agg_records, key=lambda a: a["name"]))
 
     active = sum(1 for s in servers if s.status == "ACTIVE")
-    vcpus_used = sum(h.vcpus_used or 0 for h in hypervisors)
-    vcpus_total = sum(h.vcpus or 0 for h in hypervisors)
-    mem_used_gb = sum((h.memory_used or 0) for h in hypervisors) // 1024
-    mem_total_gb = sum((h.memory_size or 0) for h in hypervisors) // 1024
+    # From the records: Nova 2.88+ left these out of the hypervisor objects
+    vcpus_used = sum(h["vcpus_used"] or 0 for h in hyp_records)
+    vcpus_total = sum(h["vcpus_total"] or 0 for h in hyp_records)
+    mem_used_gb = sum(h["memory_mb_used"] or 0 for h in hyp_records) // 1024
+    mem_total_gb = sum(h["memory_mb_total"] or 0 for h in hyp_records) // 1024
     volume_tb = sum((v.size or 0) for v in volumes) / 1024
 
     db.cache_set("inventory:summary", {
