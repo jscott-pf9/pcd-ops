@@ -147,10 +147,31 @@ def test_collector_without_metrics(monkeypatch):
 
 def test_api_explanation_current(admin):
     assert admin.get("/api/anomaly/").status_code == 503
-    db.cache_set("anomaly:latest", {"findings": [{"id": "vm:a:cpu_pct"}], "note": None})
+    db.cache_set("anomaly:latest", {"findings": [{"id": "vm:a:cpu_pct"}], "note": None, "checked": {}})
     assert admin.get("/api/anomaly/").json()["explanation"] is None
     db.cache_set("anomaly:explanation", {"text": "Both on hyp1", "finding_ids": ["vm:a:cpu_pct"]})
     body = admin.get("/api/anomaly/").json()
     assert body["explanation"] == "Both on hyp1" and body["explanation_current"] is True
-    db.cache_set("anomaly:latest", {"findings": [{"id": "vm:b:cpu_pct"}], "note": None})
+    db.cache_set("anomaly:latest", {"findings": [{"id": "vm:b:cpu_pct"}], "note": None, "checked": {}})
     assert admin.get("/api/anomaly/").json()["explanation_current"] is False
+
+
+def test_results_from_before_0_8_3_dont_break_the_page_or_detection(admin, monkeypatch):
+    from app.agent import collector
+    from app.services import metrics_catalog
+
+    old = {"lookback_hours": 24, "analysis": "…", "metric_summary": {},
+           "findings": [{"description": "web-1 CPU high", "severity": "high", "instance": "web-1"}]}
+    db.cache_set("anomaly:latest", old)
+    assert admin.get("/api/anomaly/").status_code == 503          # not a 500
+
+    async def src(min_days=0):
+        return "local"
+
+    async def query_range(q, start, end, step):
+        return []
+
+    monkeypatch.setattr(metrics_catalog, "source", src)
+    monkeypatch.setattr(metrics_catalog, "client", lambda s: NS(query_range=query_range))
+    asyncio.run(collector.collect_anomaly())
+    assert admin.get("/api/anomaly/").json()["findings"] == []

@@ -1581,7 +1581,8 @@ async def collect_anomaly() -> None:
                        f"{anomaly.SEASONAL_MIN_DAYS} days on, with the same hour on earlier days.")
 
     prev, _ = db.cache_get("anomaly:latest")
-    before = {f["id"]: f["severity"] for f in (prev or {}).get("findings", [])}
+    # Findings from before 0.8.3 (the AI's, with no id) don't count as earlier findings
+    before = {f["id"]: f["severity"] for f in (prev or {}).get("findings", []) if "id" in f}
     db.cache_set("anomaly:latest", out)
     logger.info("Anomaly detection (%s): %d finding(s) over %d VMs and %d hosts", src,
                 len(findings), out["checked"]["vm"], out["checked"]["host"])

@@ -12,7 +12,8 @@ async def detect_anomalies():
     each with now, usual, z, severity, since and a 48-hour sparkline. `explanation` is the AI's
     reading of them, when AI is on; `explanation_current` says whether it covers these findings."""
     data, _ = cache_get("anomaly:latest")
-    if data is None:
+    # Before 0.8.3 the AI wrote this key in another shape; until detection replaces it, none yet
+    if data is None or "checked" not in data:
         raise HTTPException(503, detail={"code": "no_data", "key": "anomaly:latest"})
     exp, at = cache_get("anomaly:explanation")
     ids = {f["id"] for f in data.get("findings", [])}
