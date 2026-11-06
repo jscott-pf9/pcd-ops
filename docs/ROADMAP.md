@@ -1,6 +1,6 @@
 # PCD Ops — Roadmap
 
-> Last updated: 2026-11-06 · Current release: 0.6.1 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
+> Last updated: 2026-11-06 · Current release: 0.7.0 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
 
 **Legend:** ✅ done · 🧪 built, needs lab/field validation · 🔄 partly done · ⬜ not started
 
@@ -95,7 +95,7 @@ Built and covered by tests; needs a pass against a lab PCD (Grafana lookup, Priv
 - ✅ Removed from PCD Ops: `api/generate.py`, `api/deployments.py`, the three pages and their nav, the deployment rows in the event feed, the seeded roles and templates. No export step: no installed appliance used them.
 - 🧪 pcd-app-builder is a separate repo with its own roadmap; it ships to the extension catalog on its own schedule.
 
-## Phase 6 — Host and VM metrics, kept by PCD Ops 🧪 (0.7.0, branch `feature/phase6-metrics`)
+## Phase 6 — Host and VM metrics, kept by PCD Ops 🧪 (0.7.0)
 
 PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<host-ip>:9177`) ([PCD metrics reference](https://docs.platform9.com/private-cloud-director/monitoring-and-observability/monitoring/pcd-metrics-reference)). A host agent sends a reduced set of `pcd:` series from them to PCD's Grafana every 5 minutes. That Grafana is SaaS and keeps 14 days. The appliance runs on-premises next to the hypervisors, so PCD Ops scrapes the exporters itself and keeps the data as long as Settings says.
 
