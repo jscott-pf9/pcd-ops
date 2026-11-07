@@ -73,8 +73,8 @@ const FETCH: Record<MetricsKind, (id: string, r: Range) => Promise<History>> = {
 
 /** History charts for one hypervisor, VM or storage backend, with a range picker. Hovering
  *  any chart moves the cursor on all of them to the same time. */
-export default function MetricsCharts({ kind, id }: { kind: MetricsKind; id: string }) {
-  const [range, setRange] = useState<Range>("24h");
+export default function MetricsCharts({ kind, id, initialRange = "24h" }: { kind: MetricsKind; id: string; initialRange?: Range }) {
+  const [range, setRange] = useState<Range>(initialRange);
   const syncId = `m${useId().replace(/[^a-z0-9]/gi, "")}`;
   const { data: status } = useQuery({ queryKey: ["metrics", "status"], queryFn: getMetricsStatus, staleTime: 60_000 });
   const { data, error, isLoading } = useQuery<History>({
@@ -110,7 +110,7 @@ export default function MetricsCharts({ kind, id }: { kind: MetricsKind; id: str
       )}
       {data && (
         <div style={{ display: "grid", gap: 12,
-          gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))" }}>
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(380px, 100%), 1fr))" }}>
           {charts.map(c => {
             const rows = mergeSeries(Object.fromEntries(c.series.map(s => [s.key, data.series[s.key]])));
             const latest = (key: string) => { const s = data.series[key]; return s?.length ? s[s.length - 1].v : undefined; };

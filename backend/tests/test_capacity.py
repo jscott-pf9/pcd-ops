@@ -358,3 +358,95 @@ def test_trends_say_why_without_the_local_store(monkeypatch):
     t, _ = db.cache_get("capacity:trends")
     assert "metrics store" in t["note"] and t["ai_analysis"] is None
     assert all(r["series"] == [] for r in t["resources"].values())
+
+
+# ── Right-sizing drill-down ───────────────────────────────────────────────────────
+
+
+def test_classify_and_reasons_agree():
+    assert rs.classify(None, None, False) == ("no-data", "unknown")
+    assert rs.classify(50, 92, False) == ("memory-pressure", "high")
+    assert rs.classify(85, 50, False) == ("cpu-pressure", "medium")
+    assert rs.classify(3, 10, True) == ("idle", "low")
+    assert rs.classify(10, 15, False) == ("overprovisioned", "low")
+    assert rs.classify(40, 15, False) == ("right-sized", "low")
+    why = rs.reasons({"classification": "memory-pressure", "cpu_avg_pct": 50,
+                      "mem_avg_pct": 92, "window_days": 30})
+    assert "92.0 %" in why[0] and "last 30 days" in why[0] and "high risk" in why[1]
+    idle = rs.reasons({"classification": "idle", "idle": {
+        "cpu_pct": 1.2, "net_bps": 2048, "iops": None,
+        "rule": {"days": 14, "cpu_pct": 5, "net_kbps": 10, "iops": 1}}})
+    assert "14 days" in idle[0] and "2.0 KB/s" in idle[1] and "disk no data" in idle[1]
+
+
+def test_basis_projection_and_alternatives():
+    cur = {"name": "4x8", "vcpus": 4, "ram_mb": 8192}
+    down = {"classification": "overprovisioned", "current_flavor": cur, "cpu_avg_pct": 10,
+            "mem_avg_pct": 15,
+            "stats": {"cpu": {"avg": 10, "p95": 60, "peak": 95}, "mem": {"avg": 15, "p95": 18}}}
+    b = rs.basis(down)
+    assert b["direction"] == "down" and b["vcpus"] == 1 and b["ram_mb"] == 1844
+    alts = rs.alternatives(down, FLAVORS)
+    # Smaller than 4x8 in vCPUs or RAM, and at least the basis; the suggestion comes first
+    assert [a["flavor"]["name"] for a in alts][0] == rs.smaller_flavor(
+        cur, 10, 15, FLAVORS)["name"]
+    assert all(a["flavor"]["vcpus"] < 4 or a["flavor"]["ram_mb"] < 8192 for a in alts)
+    p = rs.project(cur, FLAVORS[0], down["stats"])
+    # Same work on fewer vCPUs: 60 % of 4 vCPUs is 240 % of 1
+    assert p["cpu"]["p95"] == round(60 * 4 / FLAVORS[0]["vcpus"], 1)
+    assert p["warnings"] and "busiest hours" in p["warnings"][0]
+    up = {**down, "classification": "cpu-pressure", "cpu_avg_pct": 95, "mem_avg_pct": 40}
+    b = rs.basis(up)
+    assert b["direction"] == "up" and b["vcpus"] == 6 and b["ram_mb"] == 8192
+    assert rs.basis({**down, "classification": "right-sized"}) is None
+
+
+def test_host_room_lists_the_cluster():
+    hosts, clusters = _hosts()
+    cur = {"vcpus": 4, "ram_mb": 8192}
+    rows = rs.host_room(FLAVORS[2], cur, "a", hosts, clusters)
+    # Cluster 1 only; a counts its own 4 vCPUs as free, b has 2
+    assert [(r["hostname"], r["fits"]) for r in rows] == [("a", True), ("b", False)]
+    assert rows[0]["current"] and rows[1]["why"] == "not enough free vCPUs"
+
+
+def test_detail_endpoint(admin):
+    hosts, clusters = _hosts()
+    db.cache_set("capacity:overcommit", {"hosts": hosts})
+    db.cache_set("inventory:clusters", clusters)
+    db.cache_set("inventory:flavors", [{**f, "public": True, "disabled": False} for f in FLAVORS])
+    sug = rs.smaller_flavor({"vcpus": 4, "ram_mb": 8192}, 10, 15, FLAVORS)
+    db.cache_set("rightsizing:recommendations", [{
+        "server_id": "1", "server_name": "web", "hypervisor_id": "a",
+        "classification": "overprovisioned", "cpu_avg_pct": 10, "mem_avg_pct": 15,
+        "current_flavor": {"name": "4x8", "vcpus": 4, "ram_mb": 8192},
+        "suggested_flavor": sug, "stats": {"cpu": {"avg": 10, "p95": 20}}, "window_days": 30,
+    }])
+    assert admin.get("/api/rightsizing/recommendations/nope").status_code == 404
+    d = admin.get("/api/rightsizing/recommendations/1").json()
+    assert d["fit"]["status"] == "fits" and d["basis"]["direction"] == "down"
+    assert d["reasons"] and d["projected"]["cpu"]["avg"] is not None
+    assert d["alternatives"][0]["flavor"]["id"] == sug["id"] and "fit" in d["alternatives"][0]
+    assert {h["hostname"] for h in d["hosts"]} == {"a", "b"}
+    assert d["thresholds"]["cpu_high"] == rs.CPU_HIGH
+
+
+def test_image_backed_vms_keep_their_disk():
+    flavors = [
+        {"id": "u", "name": "pf9.unknown", "vcpus": 1, "ram_mb": 1024, "disk_gb": 0},
+        {"id": "s", "name": "small", "vcpus": 1, "ram_mb": 2048, "disk_gb": 20},
+        {"id": "m", "name": "medium", "vcpus": 2, "ram_mb": 4096, "disk_gb": 40},
+        {"id": "l", "name": "large", "vcpus": 4, "ram_mb": 8192, "disk_gb": 80},
+        {"id": "x", "name": "xlarge", "vcpus": 8, "ram_mb": 16384, "disk_gb": 160},
+    ]
+    vol = {"vcpus": 4, "ram_mb": 8192, "disk_gb": 0, "image_backed": False}
+    assert rs.smaller_flavor(vol, 1, 5, flavors)["name"] == "pf9.unknown"
+    # 40 GB local root disk: nothing smaller than 40 GB, and never a flavor with no disk
+    img = {"vcpus": 4, "ram_mb": 8192, "disk_gb": 40, "image_backed": True}
+    assert rs.smaller_flavor(img, 1, 5, flavors)["name"] == "medium"
+    assert rs.smaller_flavor({**img, "disk_gb": 80}, 1, 5, flavors) is None
+    assert rs.larger_flavor({**img, "vcpus": 1, "ram_mb": 2048, "disk_gb": 160}, 95, 10,
+                            flavors, True, False)["name"] == "xlarge"
+    rec = {"classification": "overprovisioned", "current_flavor": img, "cpu_avg_pct": 1,
+           "mem_avg_pct": 5}
+    assert [a["flavor"]["name"] for a in rs.alternatives(rec, flavors)] == ["medium"]

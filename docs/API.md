@@ -1248,6 +1248,25 @@ why the last one failed.
 
 ---
 
+### **GET** `/api/rightsizing/recommendations/{server_id}`
+
+One VM's recommendation in detail: why it has its class (`reasons`), what the suggested
+
+flavor had to have (`basis`), the VM's CPU and RAM projected onto it (`projected`, with
+`warnings` when its busiest hours would run it hot), other flavors that would do
+(`alternatives`, each with its fit), and every host in its cluster with its free room
+(`hosts`). `thresholds` are the classification rules.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `server_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ## Snapshots
 
 ### **GET** `/api/snapshots/`

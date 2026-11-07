@@ -1,55 +1,14 @@
 import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Briefcase } from "lucide-react";
-import { apiFetch, errorDetail, noDataReason } from "../api/client";
-import { Metric } from "../components/Metric";
-import { pctColor } from "../components/format";
-import DataFreshness from "../components/DataFreshness";
-import { useTenants } from "../api/tenants";
-import { getSettings } from "../api/settings";
-
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-type Classification = "memory-pressure" | "cpu-pressure" | "overprovisioned" | "right-sized" | "idle" | "no-data";
-
-interface Rec {
-  server_id: string;
-  server_name: string;
-  server_status: string;
-  project_id: string;
-  tenant_name: string | null;
-  current_flavor:   { name: string; vcpus: number; ram_mb: number };
-  suggested_flavor: { id: string; name: string; vcpus: number; ram_mb: number } | null;
-  /** Whether a host in its cluster has room for the suggested flavor now. */
-  fit?: { status: "fits" | "same_host" | "no_room" | "unknown"; hosts: string[]; reason: string };
-  classification: Classification;
-  risk: "high" | "medium" | "low" | "unknown";
-  cpu_avg_pct: number | null;
-  mem_avg_pct: number | null;
-  io_avg_iops: number | null;
-  cpu_series: { ts: number; v: number }[];
-  mem_series: { ts: number; v: number }[];
-  io_series:  { ts: number; v: number }[];
-  analysis: string | null;
-}
-
-// ── Classification config ──────────────────────────────────────────────────────
-
-const CC: Record<Classification, { label: string; color: string; bg: string; desc: string }> = {
-  "memory-pressure": { label: "Memory Pressure", color: "var(--red)",        bg: "var(--red-light)",    desc: "RAM near capacity — risk of OOM" },
-  "cpu-pressure":    { label: "CPU Pressure",    color: "#B45309",           bg: "#FEF3C7",             desc: "Hitting CPU ceiling — consider upsizing" },
-  "overprovisioned": { label: "Overprovisioned", color: "var(--yellow)",     bg: "var(--yellow-light)", desc: "Low CPU & RAM — candidate for downsizing" },
-  "right-sized":     { label: "Right-Sized",     color: "var(--green)",      bg: "var(--green-light)",  desc: "CPU & RAM within expected range" },
-  "idle":            { label: "Idle",             color: "var(--gray-500)",   bg: "var(--gray-100)",     desc: "No measurable CPU, RAM, or disk activity" },
-  "no-data":         { label: "No Metrics",       color: "var(--gray-400)",   bg: "var(--gray-50)",      desc: "VM offline or not scraped" },
-};
-
-const FIT: Record<string, { label: string; color: string }> = {
-  fits:      { label: "fits",            color: "var(--green)" },
-  same_host: { label: "same host only",  color: "var(--yellow)" },
-  no_room:   { label: "no room",         color: "var(--red)" },
-  unknown:   { label: "fit unknown",     color: "var(--gray-400)" },
-};
+import { Briefcase, ChevronRight } from "lucide-react";
+import { apiFetch, errorDetail, noDataReason } from "../../api/client";
+import { Metric } from "../../components/Metric";
+import { pctColor } from "../../components/format";
+import DataFreshness from "../../components/DataFreshness";
+import { useTenants } from "../../api/tenants";
+import { getSettings } from "../../api/settings";
+import { CC, type Classification, FIT, isUpsize, pctText, type Rec } from "./model";
 
 /** Classes the resize job can act on: down to a smaller flavor, or up to a bigger one. */
 const RESIZE_CLASSES: [Classification, string][] = [
@@ -64,7 +23,14 @@ type Filter = typeof ALL_FILTERS[number];
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function RightSizing() {
-  const [filter, setFilter] = useState<Filter>("all");
+  // The filter lives in the URL, so coming back from a VM's drill-down keeps it
+  const [params, setParams] = useSearchParams();
+  const filter = (ALL_FILTERS as readonly string[]).includes(params.get("class") ?? "")
+    ? params.get("class") as Filter : "all";
+  const setFilter = (f: Filter | ((cur: Filter) => Filter)) => {
+    const next = typeof f === "function" ? f(filter) : f;
+    setParams(p => { if (next === "all") p.delete("class"); else p.set("class", next); return p; }, { replace: true });
+  };
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showJobModal, setShowJobModal] = useState(false);
   const tenants = useTenants();
@@ -95,9 +61,9 @@ export default function RightSizing() {
     <div>
       {showJobModal && <ResizeJobModal onClose={() => setShowJobModal(false)} tenants={tenants} />}
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
         <h1 style={{ margin: 0 }}>Right-Sizing</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-secondary btn-sm" onClick={() => setShowJobModal(true)}
             style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <Briefcase size={13} /> Create Resize Job
@@ -132,7 +98,7 @@ export default function RightSizing() {
 
       {/* ── Summary row ── */}
       {recs.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "0.6rem", marginBottom: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.6rem", marginBottom: 14 }}>
           {(["memory-pressure","cpu-pressure","overprovisioned","right-sized","idle","no-data"] as Classification[]).map(cls => (
             <SummaryCard key={cls} cls={cls} count={counts[cls] ?? 0} total={recs.length}
               active={filter === cls}
@@ -143,7 +109,7 @@ export default function RightSizing() {
 
       {/* ── Filter tabs ── */}
       {recs.length > 0 && (
-        <div className="tabs" style={{ marginBottom: 12 }}>
+        <div className="tabs" style={{ marginBottom: 12, overflowX: "auto" }}>
           <button className={`tab${filter === "all" ? " active" : ""}`} onClick={() => setFilter("all")}>
             All <span style={{ color: "var(--gray-400)", fontSize: 11, marginLeft: 4 }}>{recs.length}</span>
           </button>
@@ -166,7 +132,7 @@ export default function RightSizing() {
       )}
 
       {/* ── Cards grid ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "0.75rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(360px, 100%), 1fr))", gap: "0.75rem" }}>
         {filtered.map(rec => {
           const cfg = CC[rec.classification];
           const isOpen = expanded.has(rec.server_id);
@@ -179,9 +145,10 @@ export default function RightSizing() {
               <div style={{ padding: "10px 12px 8px", borderBottom: "1px solid var(--gray-100)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: "var(--gray-900)", marginBottom: 3 }}>
+                    <Link to={`/rightsizing/${rec.server_id}`} title="Details: why, projected use, alternatives, hosts"
+                      style={{ display: "block", fontWeight: 600, fontSize: 13, color: "var(--gray-900)", marginBottom: 3 }}>
                       {rec.server_name}
-                    </div>
+                    </Link>
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
                       <span style={{ fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
                         background: cfg.bg, color: cfg.color }}>
@@ -200,8 +167,7 @@ export default function RightSizing() {
                       {rec.current_flavor.vcpus}v · {Math.round(rec.current_flavor.ram_mb / 1024)}GB
                     </div>
                     {rec.suggested_flavor && (() => {
-                      const up = rec.suggested_flavor.vcpus > rec.current_flavor.vcpus
-                        || rec.suggested_flavor.ram_mb > rec.current_flavor.ram_mb;
+                      const up = isUpsize(rec.current_flavor, rec.suggested_flavor);
                       const fit = rec.fit && FIT[rec.fit.status];
                       return (
                         <div style={{ fontSize: 10, marginTop: 2 }}
@@ -233,6 +199,12 @@ export default function RightSizing() {
                   low={20} high={80}
                   color={pctColor(rec.mem_avg_pct, 20, 80)}
                 />
+                {(rec.stats?.cpu?.p95 != null || rec.stats?.mem?.p95 != null) && (
+                  <div style={{ fontSize: 11, color: "var(--gray-500)" }}
+                    title="95th percentile of hourly averages over the window: its busy hours, not its average">
+                    Busiest hours (p95): CPU {pctText(rec.stats?.cpu?.p95)} · RAM {pctText(rec.stats?.mem?.p95)}
+                  </div>
+                )}
                 {rec.io_series.length > 1 && (
                   <Metric
                     label="Disk IOPS"
@@ -243,6 +215,12 @@ export default function RightSizing() {
                   />
                 )}
               </div>
+
+              <Link to={`/rightsizing/${rec.server_id}`}
+                style={{ display: "flex", alignItems: "center", gap: 3, padding: "6px 12px", fontSize: 12,
+                  borderTop: "1px solid var(--gray-100)", color: "var(--blue-primary)", fontWeight: 500 }}>
+                Details <ChevronRight size={13} />
+              </Link>
 
               {/* AI insight */}
               {rec.analysis && (

@@ -1275,10 +1275,6 @@ def _clean_analysis(text: str | None) -> str | None:
     return text.strip() or None
 
 
-RS_CPU_LOW  = 20.0   # % below → underutilised CPU
-RS_CPU_HIGH = 80.0   # % above → CPU-pressured
-RS_MEM_LOW  = 20.0   # % below → underutilised RAM
-RS_MEM_HIGH = 80.0   # % above → RAM-pressured
 RS_STEP     = "2h"   # ~84 data points over 7 days
 RS_LOCAL_DAYS = 30            # with PCD Ops' own metrics store
 RS_LOCAL_STEP = "6h"          # 120 points over 30 days
@@ -1318,6 +1314,43 @@ def _prom_avg(series_list: list[dict], domain: str) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
+async def _rightsizing_stats(prom, src: str, days: int) -> dict[str, dict]:
+    """Per VM over the window, from hourly means: CPU, RAM and IOPS 95th percentile (its busiest
+    hours) and peak hour, and the share of hours CPU and RAM spent at or above the pressure
+    threshold.
+    {domain: {"cpu": {"p95", "peak", "hours_high_pct"}, "mem": {...}, "io": {"p95", "peak"}}}"""
+    exprs = {"cpu": metrics_catalog.promql("vm", "cpu_pct", src),
+             "mem": metrics_catalog.promql("vm", "mem_pct", src),
+             "io": metrics_catalog.promql("vm", "disk_iops", src)}
+    high = {"cpu": rightsizing.CPU_HIGH, "mem": rightsizing.MEM_HIGH}
+    win = f"[{days}d:1h]"
+    queries: dict[tuple[str, str], str] = {}
+    for key, e in exprs.items():
+        if not e:
+            continue
+        e = f"avg_over_time(({e})[1h:5m])"
+        queries[(key, "p95")] = f"quantile_over_time(0.95, ({e}){win})"
+        queries[(key, "peak")] = f"max_over_time(({e}){win})"
+        if key in high:
+            queries[(key, "hours_high_pct")] = f"avg_over_time((({e}) >= bool {high[key]:g}){win}) * 100"
+    results = await asyncio.gather(*(prom.query(q) for q in queries.values()),
+                                   return_exceptions=True)
+    out: dict[str, dict] = {}
+    for (key, stat), res in zip(queries, results):
+        if isinstance(res, Exception):
+            logger.warning("Right-sizing %s %s query failed: %s", key, stat, res)
+            continue
+        for row in res:
+            dom = row["metric"].get("domain")
+            try:
+                v = float(row["value"][1])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if dom and _math.isfinite(v):
+                out.setdefault(dom, {}).setdefault(key, {})[stat] = round(v, 2)
+    return out
+
+
 async def collect_rightsizing() -> None:
     conn = get_connection()
     ai = get_ai_provider()
@@ -1337,9 +1370,10 @@ async def collect_rightsizing() -> None:
     def _range(metric: str):
         return prom.query_range(metrics_catalog.promql("vm", metric, src), start, end, step=step)
 
-    meta_raw, cpu_series_raw, mem_series_raw, io_series_raw = await asyncio.gather(
+    meta_raw, cpu_series_raw, mem_series_raw, io_series_raw, stats_by_domain = await asyncio.gather(
         prom.query("libvirt_domain_info_meta"),
         _range("cpu_pct"), _range("mem_pct"), _range("disk_iops"),
+        _rightsizing_stats(prom, src, days),
     )
 
     # Domain → metadata (instance_name, project_name, flavor; host_name from PCD, or our
@@ -1359,6 +1393,7 @@ async def collect_rightsizing() -> None:
     # Flavors any project can resize to, smallest first so the first that fits is chosen
     all_flavors = sorted(
         [{"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram,
+          "disk_gb": f.disk or 0, "ephemeral_gb": f.ephemeral or 0,
           "extra_specs": getattr(f, "extra_specs", None) or {}}
          for f in flavors_raw if f.is_public is not False and not f.is_disabled],
         key=lambda f: (f["vcpus"], f["ram_mb"]),
@@ -1368,7 +1403,9 @@ async def collect_rightsizing() -> None:
 
     # Idle is Reclamation's rule, so both pages call the same VMs idle.
     recl, _ = db.cache_get("reclamation:candidates")
-    idle_ids = {v["id"] for v in (recl or {}).get("idle_servers", [])}
+    idle_by_id = {v["id"]: v for v in (recl or {}).get("idle_servers", [])}
+    idle_rule = {k: v for k, v in ((recl or {}).get("idle_rule") or {}).items()
+                 if k in ("days", "cpu_pct", "net_kbps", "iops")}
 
     from app.config import settings as _settings
     ai_on = _settings.ai_rightsizing_enabled   # turned off for the rest of the run if AI fails
@@ -1390,30 +1427,12 @@ async def collect_rightsizing() -> None:
         mem_series = mem_series_by_domain.get(uuid, [])
         io_series  = io_series_by_domain.get(uuid, [])
 
-        has_data = cpu_avg is not None or mem_avg is not None
-
-        # Classify
-        if not has_data:
-            classification = "no-data"
-            risk = "unknown"
-        elif mem_avg is not None and mem_avg >= RS_MEM_HIGH:
-            classification = "memory-pressure"
-            risk = "high" if mem_avg >= 90 else "medium"
-        elif cpu_avg is not None and cpu_avg >= RS_CPU_HIGH:
-            classification = "cpu-pressure"
-            risk = "high" if cpu_avg >= 90 else "medium"
-        elif uuid in idle_ids:
-            classification = "idle"
-            risk = "low"
-        elif (
-            (cpu_avg is None or cpu_avg < RS_CPU_LOW) and
-            (mem_avg is None or mem_avg < RS_MEM_LOW)
-        ):
-            classification = "overprovisioned"
-            risk = "low"
-        else:
-            classification = "right-sized"
-            risk = "low"
+        classification, risk = rightsizing.classify(cpu_avg, mem_avg, uuid in idle_by_id)
+        idle = idle_by_id.get(uuid)
+        stats = stats_by_domain.get(uuid, {})
+        for key, avg in (("cpu", cpu_avg), ("mem", mem_avg), ("io", io_avg)):
+            if avg is not None:
+                stats.setdefault(key, {})["avg"] = avg
 
         # AI insight only for VMs that need attention — skip right-sized to save GPU
         _prompts = {
@@ -1453,15 +1472,17 @@ async def collect_rightsizing() -> None:
                 ai_on = False
 
         # The suggested flavor: smaller for spare capacity, bigger under pressure
-        cur = {"vcpus": vcpus, "ram_mb": ram_mb}
+        cur = {"name": flavor_name, "vcpus": vcpus, "ram_mb": ram_mb,
+               "disk_gb": fl.get("disk") or 0, "ephemeral_gb": fl.get("ephemeral") or 0,
+               "image_backed": isinstance(server.image, dict) and bool(server.image.get("id"))}
         suggested_flavor = None
         if classification in ("overprovisioned", "idle"):
             suggested_flavor = rightsizing.smaller_flavor(cur, cpu_avg, mem_avg, all_flavors)
         elif classification in ("cpu-pressure", "memory-pressure"):
             suggested_flavor = rightsizing.larger_flavor(
                 cur, cpu_avg, mem_avg, all_flavors,
-                cpu_short=cpu_avg is not None and cpu_avg >= RS_CPU_HIGH,
-                mem_short=mem_avg is not None and mem_avg >= RS_MEM_HIGH)
+                cpu_short=cpu_avg is not None and cpu_avg >= rightsizing.CPU_HIGH,
+                mem_short=mem_avg is not None and mem_avg >= rightsizing.MEM_HIGH)
 
         recommendations.append({
             "server_id":    uuid,
@@ -1469,9 +1490,10 @@ async def collect_rightsizing() -> None:
             "server_status": server.status,
             "project_id":   server.project_id,
             "tenant_name":  meta.get("project_name"),
-            "hypervisor":   meta.get("host_name") or meta.get("hypervisor"),
+            "hypervisor":   meta.get("host_name") or meta.get("hypervisor")
+                            or getattr(server, "hypervisor_hostname", None),
             "hypervisor_id": hyp_of_name.get(getattr(server, "hypervisor_hostname", None)),
-            "current_flavor":   {"name": flavor_name, "vcpus": vcpus, "ram_mb": ram_mb},
+            "current_flavor":   cur,
             "suggested_flavor": suggested_flavor,
             "classification": classification,
             "risk":           risk,
@@ -1481,6 +1503,12 @@ async def collect_rightsizing() -> None:
             "cpu_series":     cpu_series,
             "mem_series":     mem_series,
             "io_series":      io_series,
+            "stats":          stats,
+            "idle":           idle and {"cpu_pct": idle.get("cpu_pct"),
+                                        "net_bps": idle.get("net_bps"),
+                                        "iops": idle.get("iops"), "rule": idle_rule},
+            "window_days":    days,
+            "source":         src,
             "analysis":       analysis,
         })
 

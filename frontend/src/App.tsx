@@ -31,7 +31,8 @@ import Inventory from "./pages/Inventory";
 import InventoryDetail from "./pages/inventory/Detail";
 import Logs from "./pages/Logs";
 import Reclamation from "./pages/reclamation/Reclamation";
-import RightSizing from "./pages/RightSizing";
+import RightSizing from "./pages/rightsizing/RightSizing";
+import RightSizingDetail from "./pages/rightsizing/RightSizingDetail";
 import Snapshots from "./pages/Snapshots";
 import Jobs from "./pages/Jobs";
 import Topology from "./pages/Topology";
@@ -299,6 +300,7 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
           <Route path="/capacity/overcommit" element={<Overcommit />}  />
           <Route path="/capacity/plans"    element={<CapacityPlans />}   />
           <Route path="/rightsizing"       element={<RightSizing />}     />
+          <Route path="/rightsizing/:id"   element={<RightSizingDetail />} />
           <Route path="/snapshots"         element={<Snapshots />}       />
           <Route path="/jobs"              element={<Jobs />}            />
           <Route path="/anomaly"           element={<Anomaly />}         />
