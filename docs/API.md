@@ -821,9 +821,9 @@ the host and VM views use: "local", "pcd" (PCD's Grafana, 14 days) or null.
 
 ### **GET** `/api/metrics/hosts/{hypervisor_id}`
 
-CPU, memory, disk and network history for one hypervisor. `range` is clamped to what
+CPU, memory (used, with cache, swap, swapping, OOM kills, hugepages), disk and network
 
-the source keeps.
+history for one hypervisor. `range` is clamped to what the source keeps.
 
 **Parameters**
 
@@ -838,7 +838,9 @@ the source keeps.
 
 ### **GET** `/api/metrics/vms/{server_id}`
 
-CPU, memory, network, disk and CPU-wait history for one VM.
+CPU, memory (in use, with disk cache, bytes, major page faults), network, disk and
+
+CPU-wait history for one VM.
 
 **Parameters**
 

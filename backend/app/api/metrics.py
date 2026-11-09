@@ -13,10 +13,12 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 RANGES = {"24h": 1, "7d": 7, "30d": 30, "90d": 90, "1y": 365, "2y": 730}
 POINTS = 150   # per series, whatever the range
-HOST_SERIES = ["cpu_pct", "mem_pct", "disk_pct", "disk_read_bps", "disk_write_bps",
-               "net_rx_bps", "net_tx_bps"]
-VM_SERIES = ["cpu_pct", "mem_pct", "net_rx_bps", "net_tx_bps", "disk_iops", "disk_latency_ms",
-             "cpu_wait_pct"]
+HOST_SERIES = ["cpu_pct", "mem_pct", "mem_incl_cache_pct", "swap_used_pct", "swap_in_pps",
+               "swap_out_pps", "oom_kills", "hugepages_used_pct", "disk_pct", "disk_read_bps",
+               "disk_write_bps", "net_rx_bps", "net_tx_bps"]
+VM_SERIES = ["cpu_pct", "mem_pct", "mem_incl_cache_pct", "mem_total_bytes", "mem_available_bytes",
+             "mem_used_bytes", "mem_cache_bytes", "major_faults_ps", "net_rx_bps", "net_tx_bps",
+             "disk_iops", "disk_latency_ms", "cpu_wait_pct"]
 STORAGE_SERIES = ["total_bytes", "used_bytes", "provisioned_bytes", "read_bps", "write_bps", "iops",
                   "latency_ms"]
 CLUSTER_SERIES = HOST_SERIES
@@ -74,8 +76,8 @@ def _quote(v: str) -> str:
 
 @router.get("/hosts/{hypervisor_id}")
 async def host_history(hypervisor_id: str, range: str = "24h"):  # noqa: A002 (query name)
-    """CPU, memory, disk and network history for one hypervisor. `range` is clamped to what
-    the source keeps."""
+    """CPU, memory (used, with cache, swap, swapping, OOM kills, hugepages), disk and network
+    history for one hypervisor. `range` is clamped to what the source keeps."""
     src = await _source()
     hyps, _ = cache_get("inventory:hypervisors")
     hyp = next((h for h in hyps or [] if h["id"] == hypervisor_id), None)
@@ -89,7 +91,8 @@ async def host_history(hypervisor_id: str, range: str = "24h"):  # noqa: A002 (q
 
 @router.get("/vms/{server_id}")
 async def vm_history(server_id: str, range: str = "24h"):  # noqa: A002
-    """CPU, memory, network, disk and CPU-wait history for one VM."""
+    """CPU, memory (in use, with disk cache, bytes, major page faults), network, disk and
+    CPU-wait history for one VM."""
     src = await _source()
     return await _history("vm", src, f'domain="{server_id}"', VM_SERIES, range)
 

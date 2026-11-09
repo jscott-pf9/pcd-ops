@@ -87,6 +87,29 @@ HOST: dict[str, dict[str, str | None]] = {
         "local": f"sum by (hypervisor_id) (rate(node_vmstat_pswpin{{SEL}}{R}))",
         "pcd": None,
     },
+    "swap_out_pps": {
+        "local": f"sum by (hypervisor_id) (rate(node_vmstat_pswpout{{SEL}}{R}))",
+        "pcd": None,
+    },
+    # Memory not free, page cache included (mem_pct leaves out what the kernel can reclaim)
+    "mem_incl_cache_pct": {
+        "local": "100 * (1 - sum by (hypervisor_id) (node_memory_MemFree_bytes{SEL}) / sum by (hypervisor_id) (node_memory_MemTotal_bytes{SEL}))",
+        "pcd": None,
+    },
+    # Hosts without swap have no series (SwapTotal 0 is filtered out), nor without hugepages
+    "swap_used_pct": {
+        "local": "100 * (1 - sum by (hypervisor_id) (node_memory_SwapFree_bytes{SEL}) / (sum by (hypervisor_id) (node_memory_SwapTotal_bytes{SEL}) > 0))",
+        "pcd": None,
+    },
+    "hugepages_used_pct": {
+        "local": "100 * (1 - sum by (hypervisor_id) (node_memory_HugePages_Free{SEL}) / (sum by (hypervisor_id) (node_memory_HugePages_Total{SEL}) > 0))",
+        "pcd": None,
+    },
+    # Processes the kernel killed for want of memory, per hour
+    "oom_kills": {
+        "local": "sum by (hypervisor_id) (increase(node_vmstat_oom_kill{SEL}[1h]))",
+        "pcd": None,
+    },
 }
 
 VM: dict[str, dict[str, str | None]] = {
@@ -94,9 +117,35 @@ VM: dict[str, dict[str, str | None]] = {
         "local": f"100 * sum by (domain) (rate(libvirt_domain_info_cpu_time_seconds_total{{SEL}}{R})) / sum by (domain) (libvirt_domain_info_virtual_cpus{{SEL}})",
         "pcd": "100 * sum by (domain) (pcd:vm_cpu_usage{SEL}) / sum by (domain) (pcd:vm_cpu_total{SEL})",
     },
+    # What the guest really uses: libvirt's used % leaves out disk cache, which the guest gives
+    # back on demand. PCD's figure counts that cache as used, so it reads higher (a caching VM
+    # looks full); right-sizing doesn't call that memory pressure (services/rightsizing.py).
     "mem_pct": {
         "local": "max by (domain) (libvirt_domain_memory_stats_used_percent{SEL})",
         "pcd": "100 * sum by (domain) (pcd:vm_mem_usage{SEL}) / sum by (domain) (pcd:vm_mem_total{SEL})",
+    },
+    # Memory not free in the guest, its disk cache included
+    "mem_incl_cache_pct": {
+        "local": "100 * (1 - max by (domain) (libvirt_domain_memory_stats_unused_bytes{SEL}) / max by (domain) (libvirt_domain_memory_stats_available_bytes{SEL}))",
+        "pcd": None,
+    },
+    # Memory the guest sees, what it uses, and its disk cache (bytes)
+    "mem_available_bytes": {
+        "local": "max by (domain) (libvirt_domain_memory_stats_available_bytes{SEL})",
+        "pcd": None,
+    },
+    "mem_used_bytes": {
+        "local": "max by (domain) (libvirt_domain_memory_stats_available_bytes{SEL} - libvirt_domain_memory_stats_usable_bytes{SEL})",
+        "pcd": None,
+    },
+    "mem_cache_bytes": {
+        "local": "max by (domain) (libvirt_domain_memory_stats_disk_cache_bytes{SEL})",
+        "pcd": None,
+    },
+    # Pages the guest had to read back from disk (swap or files it dropped from cache)
+    "major_faults_ps": {
+        "local": f"sum by (domain) (rate(libvirt_domain_memory_stats_major_fault_total{{SEL}}{R}))",
+        "pcd": None,
     },
     "mem_total_bytes": {
         "local": "max by (domain) (libvirt_domain_info_maximum_memory_bytes{SEL})",

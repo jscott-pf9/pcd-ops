@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import math as _math
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -1279,6 +1280,8 @@ RS_STEP     = "2h"   # ~84 data points over 7 days
 RS_LOCAL_DAYS = 30            # with PCD Ops' own metrics store
 RS_LOCAL_STEP = "6h"          # 120 points over 30 days
 RS_LOCAL_MIN_DAYS = 7         # until the store has this much, use PCD's Grafana if set
+RS_MEM_LOCAL_MIN_DAYS = 1     # but RAM from the store once it has this much: Grafana's counts
+                              # disk cache as used
 
 
 def _series_from_range(data: list[dict]) -> list[dict]:
@@ -1314,14 +1317,14 @@ def _prom_avg(series_list: list[dict], domain: str) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
-async def _rightsizing_stats(prom, src: str, days: int) -> dict[str, dict]:
+async def _rightsizing_stats(prom, src: str, days: int,
+                             keys: tuple[str, ...] = ("cpu", "mem", "io")) -> dict[str, dict]:
     """Per VM over the window, from hourly means: CPU, RAM and IOPS 95th percentile (its busiest
     hours) and peak hour, and the share of hours CPU and RAM spent at or above the pressure
     threshold.
     {domain: {"cpu": {"p95", "peak", "hours_high_pct"}, "mem": {...}, "io": {"p95", "peak"}}}"""
-    exprs = {"cpu": metrics_catalog.promql("vm", "cpu_pct", src),
-             "mem": metrics_catalog.promql("vm", "mem_pct", src),
-             "io": metrics_catalog.promql("vm", "disk_iops", src)}
+    metric = {"cpu": "cpu_pct", "mem": "mem_pct", "io": "disk_iops"}
+    exprs = {k: metrics_catalog.promql("vm", metric[k], src) for k in keys}
     high = {"cpu": rightsizing.CPU_HIGH, "mem": rightsizing.MEM_HIGH}
     win = f"[{days}d:1h]"
     queries: dict[tuple[str, str], str] = {}
@@ -1375,6 +1378,22 @@ async def collect_rightsizing() -> None:
         _range("cpu_pct"), _range("mem_pct"), _range("disk_iops"),
         _rightsizing_stats(prom, src, days),
     )
+
+    # RAM is what the guest really uses: from PCD Ops' store once it has a day of data, even
+    # while CPU and disk still come from PCD's Grafana, whose RAM counts disk cache as used.
+    # Per VM, Grafana's figure stays only where the store has none, marked as counting cache.
+    local_mem_raw: list = []
+    local_mem_stats: dict[str, dict] = {}
+    mem_days = days
+    if src == "pcd" and await metrics_catalog.source(min_days=RS_MEM_LOCAL_MIN_DAYS) == "local":
+        local = metrics_catalog.client("local")
+        local_mem_raw, local_mem_stats = await asyncio.gather(
+            local.query_range(metrics_catalog.promql("vm", "mem_pct", "local"), start, end,
+                              step=step),
+            _rightsizing_stats(local, "local", days, keys=("mem",)))
+        since = local_metrics.collecting_since()
+        mem_days = max(1, min(days, int((time.time() - since) / 86400))) if since else days
+    local_mem_ids = {s["metric"].get("domain") for s in local_mem_raw}
 
     # Domain → metadata (instance_name, project_name, flavor; host_name from PCD, or our
     # hypervisor label locally)
@@ -1435,16 +1454,28 @@ async def collect_rightsizing() -> None:
         flavor_name = fl.get("original_name") or fl.get("id", "unknown")
 
         cpu_avg = _prom_avg(cpu_series_raw, uuid)
-        mem_avg = _prom_avg(mem_series_raw, uuid)
         io_avg  = _prom_avg(io_series_raw,  uuid)
-
         cpu_series = cpu_series_by_domain.get(uuid, [])
-        mem_series = mem_series_by_domain.get(uuid, [])
         io_series  = io_series_by_domain.get(uuid, [])
-
-        classification, risk = rightsizing.classify(cpu_avg, mem_avg, uuid in idle_by_id)
-        idle = idle_by_id.get(uuid)
         stats = stats_by_domain.get(uuid, {})
+
+        if uuid in local_mem_ids:
+            mem_avg = _prom_avg(local_mem_raw, uuid)
+            mem_series = _series_from_range([s for s in local_mem_raw
+                                             if s["metric"].get("domain") == uuid])
+            stats.pop("mem", None)
+            if "mem" in local_mem_stats.get(uuid, {}):
+                stats["mem"] = local_mem_stats[uuid]["mem"]
+            mem_source = "local"
+        else:
+            mem_avg = _prom_avg(mem_series_raw, uuid)
+            mem_series = mem_series_by_domain.get(uuid, [])
+            mem_source = src if mem_avg is not None else None
+        counts_cache = mem_source == "pcd"
+
+        classification, risk = rightsizing.classify(cpu_avg, mem_avg, uuid in idle_by_id,
+                                                    mem_counts_cache=counts_cache)
+        idle = idle_by_id.get(uuid)
         for key, avg in (("cpu", cpu_avg), ("mem", mem_avg), ("io", io_avg)):
             if avg is not None:
                 stats.setdefault(key, {})["avg"] = avg
@@ -1499,10 +1530,10 @@ async def collect_rightsizing() -> None:
             suggested_flavor = rightsizing.larger_flavor(
                 cur, cpu_avg, mem_avg, flavors,
                 cpu_short=cpu_avg is not None and cpu_avg >= rightsizing.CPU_HIGH,
-                mem_short=mem_avg is not None and mem_avg >= rightsizing.MEM_HIGH)
+                mem_short=rightsizing.mem_high(mem_avg, counts_cache))
         custom = rightsizing.custom_flavor(
             {"classification": classification, "current_flavor": cur, "cpu_avg_pct": cpu_avg,
-             "mem_avg_pct": mem_avg}, suggested_flavor)
+             "mem_avg_pct": mem_avg, "mem_source": mem_source}, suggested_flavor)
 
         recommendations.append({
             "server_id":    uuid,
@@ -1530,6 +1561,9 @@ async def collect_rightsizing() -> None:
                                         "iops": idle.get("iops"), "rule": idle_rule},
             "window_days":    days,
             "source":         src,
+            # Where RAM came from ("local": what the guest uses; "pcd": counts disk cache)
+            "mem_source":     mem_source,
+            "mem_window_days": mem_days if mem_source == "local" else days,
             "analysis":       analysis,
         })
 

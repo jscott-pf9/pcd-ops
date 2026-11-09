@@ -4,6 +4,8 @@ import { canCopyImage, chartPng, type ChartSummary, copyImage, pngName, saveImag
 
 type Props = {
   title: string;
+  /** What the chart shows: its title's tooltip, and a line in the pop-out. */
+  hint?: string;
   /** The latest values, labelled, shown right of the title. */
   values?: ReactNode;
   /** The item, for the image's title and file name: "vjailbreak-01". */
@@ -34,7 +36,7 @@ export default function ChartFrame({ height = 170, ...p }: Props) {
   );
 }
 
-function Header({ title, values, name, caption, subtitle, summary, target, big, onExpand, onClose }: Omit<Props, "chart" | "height"> & {
+function Header({ title, hint, values, name, caption, subtitle, summary, target, big, onExpand, onClose }: Omit<Props, "chart" | "height"> & {
   target: React.RefObject<HTMLDivElement>; big?: boolean; onExpand?: () => void; onClose?: () => void;
 }) {
   // Which button just worked or failed, for a moment
@@ -64,7 +66,8 @@ function Header({ title, values, name, caption, subtitle, summary, target, big, 
   };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 2 }}>
-      <span style={{ fontSize: big ? 14 : 12, fontWeight: 600, color: "var(--gray-700)" }}>
+      <span title={hint} style={{ fontSize: big ? 14 : 12, fontWeight: 600, color: "var(--gray-700)",
+        cursor: hint ? "help" : undefined }}>
         {big && name ? `${name} · ${title}` : title}
       </span>
       <span style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 11, alignItems: "baseline", flexWrap: "wrap",
@@ -110,7 +113,8 @@ function PopOut({ onClose, ...p }: Omit<Props, "height"> & { onClose: () => void
         alignItems: "center", justifyContent: "center", padding: 12 }}>
       <div className="card" style={{ width: "min(1400px, 100%)", maxHeight: "100%", overflowY: "auto", padding: "12px 14px 10px" }}>
         <Header {...p} target={ref} big onClose={onClose} />
-        {p.subtitle && <div className="text-muted" style={{ fontSize: 12, marginBottom: 8 }}>{p.subtitle}</div>}
+        {p.subtitle && <div className="text-muted" style={{ fontSize: 12, marginBottom: p.hint ? 2 : 8 }}>{p.subtitle}</div>}
+        {p.hint && <div style={{ fontSize: 12, color: "var(--gray-600)", marginBottom: 8 }}>{p.hint}</div>}
         <div ref={ref}>{p.chart(height, true)}</div>
         {!!rows && <SummaryTable rows={p.summary!} />}
       </div>

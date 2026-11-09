@@ -238,18 +238,21 @@ function Row({ rec, tenant, onClick }: { rec: Rec; tenant: string; onClick: (e: 
         )}
       </td>
       <Pct v={rec.cpu_avg_pct} p95={rec.stats?.cpu?.p95} />
-      <Pct v={rec.mem_avg_pct} p95={rec.stats?.mem?.p95} />
+      <Pct v={rec.mem_avg_pct} p95={rec.stats?.mem?.p95} cache={rec.mem_source === "pcd"} />
       <td style={{ whiteSpace: "nowrap" }}>{rec.io_avg_iops == null ? "—" : rec.io_avg_iops.toFixed(rec.io_avg_iops < 10 ? 1 : 0)}</td>
       <td style={{ whiteSpace: "nowrap", fontSize: 12 }}>{rec.hypervisor ?? "—"}</td>
     </tr>
   );
 }
 
-/** An average %, coloured against the thresholds, with its busiest hours (p95) underneath. */
-function Pct({ v, p95 }: { v: number | null; p95?: number | null }) {
+/** An average %, coloured against the thresholds, with its busiest hours (p95) underneath.
+ *  `cache`: RAM from PCD's Grafana, which counts disk cache as used. */
+function Pct({ v, p95, cache }: { v: number | null; p95?: number | null; cache?: boolean }) {
   return (
     <td style={{ whiteSpace: "nowrap" }}>
-      <div style={{ fontWeight: 600, color: pctColor(v, 20, 80) }}>{pctText(v)}</div>
+      <div style={{ fontWeight: 600, color: cache ? "var(--gray-500)" : pctColor(v, 20, 80) }}>{pctText(v)}</div>
+      {cache && <div style={{ fontSize: 11, color: "var(--gray-400)" }}
+        title="From PCD's Grafana, which counts the guest's disk cache as used; not treated as memory pressure">counts cache</div>}
       {p95 != null && <div style={{ fontSize: 11, color: "var(--gray-500)" }} title="Busiest hours: 95th percentile of hourly averages">
         p95 {pctText(p95)}</div>}
     </td>

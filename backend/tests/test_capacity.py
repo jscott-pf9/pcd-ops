@@ -591,3 +591,73 @@ def test_create_custom_flavor(admin, nova):
     assert db.cache_get("rightsizing:flavor_access")[0] == {"new-id": ["p1"]}
     # Nothing left to create
     assert admin.post(url, json={"name": "again"}, headers=CSRF).status_code == 409
+
+
+def test_ram_that_counts_cache_isnt_memory_pressure():
+    assert rs.classify(30, 95, False) == ("memory-pressure", "high")
+    assert rs.classify(30, 95, False, mem_counts_cache=True) == ("right-sized", "low")
+    assert rs.classify(90, 95, False, mem_counts_cache=True)[0] == "cpu-pressure"
+    assert rs.classify(5, 10, False, mem_counts_cache=True)[0] == "overprovisioned"
+    rec = {"classification": "right-sized", "cpu_avg_pct": 30, "mem_avg_pct": 95,
+           "mem_source": "pcd", "window_days": 7, "current_flavor": {"vcpus": 2, "ram_mb": 4096}}
+    why = rs.reasons(rec)
+    assert "between 20 % and 80 %" in why[0] and "RAM" not in why[0]
+    assert "counts the guest's disk cache" in why[1]
+    # CPU pressure with cache-counting RAM: only CPU grows
+    rec |= {"classification": "cpu-pressure", "cpu_avg_pct": 95}
+    assert rs.basis(rec)["ram_mb"] == 4096 and rs.basis(rec)["vcpus"] > 2
+    local = {**rec, "mem_source": "local", "source": "pcd", "mem_window_days": 3,
+             "mem_avg_pct": 22}
+    assert "PCD Ops' metrics store (its last 3 days)" in rs.reasons(local)[-1]
+
+
+def test_collector_takes_ram_from_the_local_store(monkeypatch):
+    import time as _time
+
+    from app.agent import collector
+    from app.services import local_metrics, metrics_catalog
+
+    def series(values):
+        return [{"metric": {"domain": d}, "values": [[1_800_000_000, str(v)]]}
+                for d, v in values.items()]
+
+    class Prom:
+        def __init__(self, src):
+            self.src = src
+
+        async def query(self, q):
+            return []
+
+        async def query_range(self, q, start, end, step):
+            if self.src == "local":
+                assert "used_percent" in q
+                return series({"vm1": 22})          # vm2 has no local data
+            if "cpu" in q:
+                return series({"vm1": 30, "vm2": 30})
+            if "mem" in q:
+                return series({"vm1": 95, "vm2": 95})
+            return []
+
+    async def source(min_days=0):
+        return "local" if min_days <= collector.RS_MEM_LOCAL_MIN_DAYS else "pcd"
+
+    monkeypatch.setattr(metrics_catalog, "source", source)
+    monkeypatch.setattr(metrics_catalog, "client", lambda s: Prom(s))
+    monkeypatch.setattr(local_metrics, "collecting_since", lambda: _time.time() - 3.5 * 86400)
+    monkeypatch.setattr(settings, "ai_rightsizing_enabled", False)
+    flavor = {"original_name": "2x4", "vcpus": 2, "ram": 4096, "disk": 20}
+    def vm(i):
+        return NS(id=i, name=i, status="ACTIVE", project_id="p1", flavor=flavor, image={},
+                  hypervisor_hostname="h1")
+
+    conn = NS(compute=NS(servers=lambda all_projects: [vm("vm1"), vm("vm2")], flavors=lambda: [],
+                         get_flavor_access=lambda f: []))
+    monkeypatch.setattr(collector, "get_connection", lambda: conn)
+    monkeypatch.setattr(collector, "get_ai_provider", lambda: None)
+
+    asyncio.run(collector.collect_rightsizing())
+    recs = {r["server_id"]: r for r in db.cache_get("rightsizing:recommendations")[0]}
+    assert recs["vm1"]["mem_source"] == "local" and recs["vm1"]["mem_avg_pct"] == 22
+    assert recs["vm1"]["mem_window_days"] == 3 and recs["vm1"]["source"] == "pcd"
+    assert recs["vm2"]["mem_source"] == "pcd" and recs["vm2"]["mem_avg_pct"] == 95
+    assert {r["classification"] for r in recs.values()} == {"right-sized"}

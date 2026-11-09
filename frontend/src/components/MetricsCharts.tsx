@@ -10,19 +10,38 @@ import { formatBytes, formatPct, formatRate } from "./format";
 import ChartFrame from "./ChartFrame";
 import TimeChart, { type SeriesDef } from "./TimeChart";
 
-/** `unit` follows a value in the header and statistics when `format` has none (IOPS, VMs). */
-type ChartDef = { title: string; series: SeriesDef[]; format: (v: number) => string; unit?: string; max?: number };
+/** `unit` follows a value in the header and statistics when `format` has none (IOPS, VMs).
+ *  `hint` explains the chart (its title's tooltip, and the pop-out). `requires`: shown only when
+ *  one of these series has data (a flavor's RAM alone isn't worth a chart). `pcdLabel`: a
+ *  series' name when it comes from PCD's Grafana, where it means something else. */
+type ChartDef = {
+  title: string; series: (SeriesDef & { pcdLabel?: string })[]; format: (v: number) => string; unit?: string;
+  max?: number; hint?: string; requires?: string[];
+};
 export type MetricsKind = "host" | "vm" | "storage" | "cluster" | "volume";
 
 const BLUE = "var(--blue-primary)", GREEN = "var(--green)", PURPLE = "var(--purple)",
-  YELLOW = "var(--yellow)", GRAY = "var(--gray-400)";
+  YELLOW = "var(--yellow)", GRAY = "var(--gray-400)", RED = "var(--red)";
 const ms = (v: number) => `${v.toFixed(v < 10 ? 2 : 0)} ms`;
 const iops = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(v < 10 ? 1 : 0));
 const count = (v: number) => String(Math.round(v));
+const rate = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2));
 
 const HOST_CHARTS: ChartDef[] = [
   { title: "CPU",        series: [{ key: "cpu_pct",  label: "CPU",    color: BLUE }],  format: formatPct, max: 100 },
-  { title: "Memory",     series: [{ key: "mem_pct",  label: "Memory", color: GREEN }], format: formatPct, max: 100 },
+  { title: "Memory",     series: [{ key: "mem_pct",  label: "Used", color: GREEN },
+                                  { key: "mem_incl_cache_pct", label: "With page cache", color: GRAY }],
+    format: formatPct, max: 100,
+    hint: "Used leaves out page cache, which the kernel frees when VMs need it; with page cache counts everything that isn't free." },
+  { title: "Swap used",  series: [{ key: "swap_used_pct", label: "Swap used", color: YELLOW }], format: formatPct, max: 100,
+    hint: "How full the host's swap is. Swap that just sits there is harmless; swapping (below) is what hurts." },
+  { title: "Swapping",   series: [{ key: "swap_in_pps", label: "In", color: YELLOW },
+                                  { key: "swap_out_pps", label: "Out", color: PURPLE }], format: rate, unit: " pages/s",
+    hint: "Pages read back from swap (in) and written to it (out). Sustained swap-in means the host is short of memory." },
+  { title: "OOM kills",  series: [{ key: "oom_kills", label: "Kills", color: RED }], format: count, unit: " per hour",
+    hint: "Processes the kernel killed because memory ran out (a VM's QEMU process among them, possibly)." },
+  { title: "Hugepages",  series: [{ key: "hugepages_used_pct", label: "Used", color: PURPLE }], format: formatPct, max: 100,
+    hint: "Hugepages reserved for VMs that are in use. Only on hosts with hugepages configured." },
   { title: "Disk space", series: [{ key: "disk_pct", label: "Used",   color: PURPLE }], format: formatPct, max: 100 },
   { title: "Disk I/O",   series: [{ key: "disk_read_bps", label: "Read", color: PURPLE },
                                   { key: "disk_write_bps", label: "Write", color: YELLOW }], format: formatRate },
@@ -35,7 +54,18 @@ const CHARTS: Record<MetricsKind, ChartDef[]> = {
   vm: [
     { title: "CPU",          series: [{ key: "cpu_pct", label: "CPU", color: BLUE },
                                       { key: "cpu_wait_pct", label: "Wait (steal)", color: YELLOW }], format: formatPct, max: 100 },
-    { title: "Memory",       series: [{ key: "mem_pct", label: "Memory", color: GREEN }], format: formatPct, max: 100 },
+    { title: "Memory",       series: [{ key: "mem_pct", label: "In use", color: GREEN, pcdLabel: "In use, with disk cache (PCD)" },
+                                      { key: "mem_incl_cache_pct", label: "With disk cache", color: GRAY }],
+      format: formatPct, max: 100,
+      hint: "In use is what the guest needs; with disk cache adds the cache it gives back on demand. PCD's Grafana only has the second kind, so there a caching VM looks full." },
+    { title: "Memory size",  series: [{ key: "mem_total_bytes", label: "Flavor", color: GRAY },
+                                      { key: "mem_available_bytes", label: "Guest sees", color: BLUE },
+                                      { key: "mem_used_bytes", label: "In use", color: GREEN },
+                                      { key: "mem_cache_bytes", label: "Disk cache", color: PURPLE }],
+      format: formatBytes, requires: ["mem_used_bytes", "mem_cache_bytes"],
+      hint: "The flavor's RAM, what the guest sees of it, what it uses, and its disk cache." },
+    { title: "Page-ins",     series: [{ key: "major_faults_ps", label: "Major faults", color: YELLOW }], format: rate, unit: "/s",
+      hint: "Pages the guest had to read back from disk (major page faults): swap, or files it dropped from its cache. Sustained, it's short of memory." },
     { title: "Disk IOPS",    series: [{ key: "disk_iops", label: "IOPS", color: PURPLE }], format: iops, unit: " IOPS" },
     { title: "Disk latency", series: [{ key: "disk_latency_ms", label: "Latency", color: YELLOW }], format: ms },
     { title: "Network",      series: [{ key: "net_rx_bps", label: "In", color: BLUE },
@@ -91,8 +121,12 @@ export default function MetricsCharts({ kind, id, context = [], initialRange = "
   // Storage and volume history only come from PCD Ops' own store
   const localOnly = kind === "storage" || kind === "volume";
   const retention = localOnly ? status?.local.retention_days : status?.retention_days;
+  const has = (key: string) => (data?.series[key]?.length ?? 0) > 0;
   const charts = CHARTS[kind]
-    .map(c => ({ ...c, series: c.series.filter(s => !data || (data.series[s.key]?.length ?? 0) > 0) }))
+    .filter(c => !data || !c.requires || c.requires.some(has))
+    .map(c => ({ ...c, series: c.series
+      .filter(s => !data || has(s.key))
+      .map(s => (data?.source === "pcd" && s.pcdLabel ? { ...s, label: s.pcdLabel } : s)) }))
     .filter(c => c.series.length > 0);
   const known = context.filter(([, v]) => v) as [string, string][];
   const name = known[0]?.[1];
@@ -125,7 +159,7 @@ export default function MetricsCharts({ kind, id, context = [], initialRange = "
             const stats = c.series.map(sd => ({ sd, st: seriesStats(data.series[sd.key]) }));
             const span = rows.length ? `${timeLabel(rows[0].ts)} – ${timeLabel(rows[rows.length - 1].ts)}` : "";
             return (
-              <ChartFrame key={c.title} title={c.title} name={name}
+              <ChartFrame key={c.title} title={c.title} name={name} hint={c.hint}
                 caption={`last ${data.days === 1 ? "24 hours" : `${data.days} days`}`}
                 subtitle={[...known.map(([k, v]) => `${k} ${v}`), span, `a point every ${stepText(data.step)}`, SOURCE_LABEL[data.source]]
                   .filter(Boolean).join(" · ")}

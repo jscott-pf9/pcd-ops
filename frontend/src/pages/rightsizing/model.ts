@@ -41,6 +41,10 @@ export interface Rec {
   stats?: { cpu?: Stat; mem?: Stat; io?: Stat };
   window_days?: number;
   source?: string;
+  /** Where RAM came from: "local" is what the guest uses; "pcd" (PCD's Grafana) counts its
+   *  disk cache as used, so it isn't called memory pressure on its own. */
+  mem_source?: string | null;
+  mem_window_days?: number;
   analysis: string | null;
 }
 

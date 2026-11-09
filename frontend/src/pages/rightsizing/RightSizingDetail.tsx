@@ -73,7 +73,8 @@ export default function RightSizingDetail() {
       </>}
     >
       <Section title={`Why ${cls.label}`} full
-        aside={`Over ${windowText(d.window_days)}${d.source ? ` · ${SOURCE[d.source] ?? d.source}` : ""}`}>
+        aside={`Over ${windowText(d.window_days)}${d.source ? ` · ${SOURCE[d.source] ?? d.source}` : ""}${
+          d.mem_source && d.source && d.mem_source !== d.source ? ` · RAM from ${SOURCE[d.mem_source] ?? d.mem_source}` : ""}`}>
         <ul style={{ margin: "0 0 14px", paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
           {d.reasons.map(r => <li key={r}>{r}</li>)}
         </ul>

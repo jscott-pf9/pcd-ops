@@ -1,7 +1,11 @@
 """Right-sizing: which flavor a VM should move to, and whether that flavor fits anywhere (pure
 functions; the collector, the API and the rightsizing-resize job call them).
 
-A VM's class comes from its average CPU and RAM over the window (classify); the suggested
+A VM's class comes from its average CPU and RAM over the window (classify). RAM is what the
+guest really uses (libvirt's used %, which leaves out disk cache the guest gives back on demand)
+from PCD Ops' own store whenever it has a day of data. PCD's Grafana only has a figure that
+counts the cache as used, so a high one there isn't called memory pressure on its own
+(`mem_counts_cache`); the suggested
 flavor is a formula, not the AI's: the smallest flavor that would run the VM's average load at a
 target utilisation. The AI only comments. For the drill-down, `reasons` says why in words,
 `project` shows its use on another flavor and `alternatives` lists the other flavors that would do.
@@ -33,12 +37,20 @@ CUSTOM_MIN_RAM_MB = 4096
 AGG_SPEC = "aggregate_instance_extra_specs:"
 
 
-def classify(cpu_avg: float | None, mem_avg: float | None, idle: bool) -> tuple[str, str]:
+def mem_high(mem_avg: float | None, mem_counts_cache: bool = False) -> bool:
+    """RAM at the pressure threshold. Not when the figure counts disk cache as used (PCD's
+    Grafana): a caching VM would always look full."""
+    return mem_avg is not None and mem_avg >= MEM_HIGH and not mem_counts_cache
+
+
+def classify(cpu_avg: float | None, mem_avg: float | None, idle: bool,
+             mem_counts_cache: bool = False) -> tuple[str, str]:
     """(classification, risk) from the window's average CPU and RAM %. `idle` is Reclamation's
-    rule, so both pages call the same VMs idle."""
+    rule, so both pages call the same VMs idle. With `mem_counts_cache` a high RAM figure
+    doesn't make it memory-pressured (and a low one still means little is used)."""
     if cpu_avg is None and mem_avg is None:
         return "no-data", "unknown"
-    if mem_avg is not None and mem_avg >= MEM_HIGH:
+    if mem_high(mem_avg, mem_counts_cache):
         return "memory-pressure", "high" if mem_avg >= RISK_HIGH else "medium"
     if cpu_avg is not None and cpu_avg >= CPU_HIGH:
         return "cpu-pressure", "high" if cpu_avg >= RISK_HIGH else "medium"
@@ -49,13 +61,36 @@ def classify(cpu_avg: float | None, mem_avg: float | None, idle: bool) -> tuple[
     return "right-sized", "low"
 
 
+def counts_cache(rec: dict) -> bool:
+    """Whether a recommendation's RAM came from PCD's Grafana, which counts disk cache."""
+    return rec.get("mem_source") == "pcd"
+
+
 def _pct(v: float | None) -> str:
     return "no data" if v is None else f"{v:.1f} %"
 
 
 def reasons(rec: dict) -> list[str]:
-    """Why a recommendation has its class, in the order classify() checks."""
+    """Why a recommendation has its class, in the order classify() checks, then where its RAM
+    figure came from when that matters."""
+    out = _class_reasons(rec)
+    mem, days = rec.get("mem_avg_pct"), rec.get("mem_window_days")
+    if counts_cache(rec) and mem is not None and mem >= MEM_HIGH:
+        out.append(f"RAM reads {_pct(mem)} from PCD's Grafana, which counts the guest's disk "
+                   "cache as used, so it isn't treated as memory pressure. PCD Ops' metrics "
+                   "store measures what the guest really uses; once it has a day of data, RAM "
+                   "comes from there.")
+    elif rec.get("mem_source") == "local" and rec.get("source") == "pcd":
+        span = f" (its last {days} day{'s' if days != 1 else ''})" if days else ""
+        out.append(f"RAM is what the guest really uses, from PCD Ops' metrics store{span}; CPU "
+                   "and disk are from PCD's Grafana.")
+    return out
+
+
+def _class_reasons(rec: dict) -> list[str]:
     cls, cpu, mem = rec.get("classification"), rec.get("cpu_avg_pct"), rec.get("mem_avg_pct")
+    # RAM that only reads high because it counts disk cache: explained after the class
+    cached_high = counts_cache(rec) and mem is not None and mem >= MEM_HIGH
     days = rec.get("window_days")
     over = (f"over the last {days} day{'s' if days != 1 else ''}" if days
             else "over the window")
@@ -68,8 +103,8 @@ def reasons(rec: dict) -> list[str]:
             out.append(f"At {RISK_HIGH:.0f} % or more it risks running out of memory: high risk.")
         return out
     if cls == "cpu-pressure":
-        out = [f"Average CPU {over} is {_pct(cpu)}, at or above {CPU_HIGH:.0f} %; "
-               f"RAM ({_pct(mem)}) is under {MEM_HIGH:.0f} %."]
+        out = [f"Average CPU {over} is {_pct(cpu)}, at or above {CPU_HIGH:.0f} %"
+               + ("." if cached_high else f"; RAM ({_pct(mem)}) is under {MEM_HIGH:.0f} %.")]
         if cpu is not None and cpu >= RISK_HIGH:
             out.append(f"At {RISK_HIGH:.0f} % or more its work is likely waiting for CPU: high "
                        "risk.")
@@ -92,6 +127,9 @@ def reasons(rec: dict) -> list[str]:
     if cls == "overprovisioned":
         return [f"Average CPU ({_pct(cpu)}) and RAM ({_pct(mem)}) {over} are both under "
                 f"{CPU_LOW:.0f} %: it uses a small part of its flavor."]
+    if cached_high:
+        return [f"Average CPU ({_pct(cpu)}) {over} is between {CPU_LOW:.0f} % and "
+                f"{CPU_HIGH:.0f} %: no change needed."]
     return [f"Average CPU ({_pct(cpu)}) and RAM ({_pct(mem)}) {over} are between "
             f"{CPU_LOW:.0f} % and {CPU_HIGH:.0f} %: no change needed."]
 
@@ -174,7 +212,7 @@ def basis(rec: dict) -> dict | None:
                 "rule": f"The smallest flavor with room for its average use plus "
                         f"{round((DOWN_MARGIN - 1) * 100)} %, smaller than now in vCPUs or RAM."}
     if cls in ("cpu-pressure", "memory-pressure"):
-        cpu_short, mem_short = (cpu or 0) >= CPU_HIGH, (mem or 0) >= MEM_HIGH
+        cpu_short, mem_short = (cpu or 0) >= CPU_HIGH, mem_high(mem, counts_cache(rec))
         v, r = _need_up(cur, cpu, mem, cpu_short, mem_short)
         what = " and ".join(w for w, short in (
             (f"CPU at {CPU_TARGET:.0f} %", cpu_short), (f"RAM at {MEM_TARGET:.0f} %", mem_short))
