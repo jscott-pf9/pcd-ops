@@ -19,9 +19,10 @@
 | 9 | Anomaly, config changes and alerting (0.8.x) | 🔄 |
 | 10 | Reports and exports | 🔄 |
 | 11 | Log analysis | 🔄 |
-| 12 | Hardening for 1.0 | 🔄 |
+| 12 | Local metrics only: PCD's Grafana becomes an optional fallback | ⬜ |
+| 13 | Hardening for 1.0 | 🔄 |
 
-**Features first, then hardening.** Phase 5 fixed the settings and jobs that later phases build on. Phases 6–11 are in pickup order, not strict dependencies; Phase 8 is on hold and Phase 9 was done first. Phase 6 feeds 7 and 8. Phase 8 also needs the SSH settings fix (Phase 5) and pinned host keys (Phase 11).
+**Features first, then hardening.** Phase 5 fixed the settings and jobs that later phases build on. Phases 6–12 are in pickup order, not strict dependencies; Phase 8 is on hold and Phase 9 was done first. Phase 12 (local metrics only) comes before hardening. Phase 6 feeds 7 and 8. Phase 8 also needs the SSH settings fix (Phase 5) and pinned host keys (Phase 11).
 
 **App building has left this app.** App Builder, App Catalog and App Deployments (the Orchestration nav section) moved to a new appliance, **pcd-app-builder**. PCD Ops observes and maintains the cloud; building and deploying applications on it belongs to the new app.
 
@@ -140,7 +141,7 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 **Sources** (`services/metrics_catalog.py`): each host and VM metric is defined for the local store (raw exporter series) and for PCD's Grafana (`pcd:*`). Local data is used when it exists; Grafana otherwise, and always for the `openstack_*` series only PCD has (Capacity). VMs join on `domain` = the Nova server UUID in both. Through Grafana, hosts join on Nova's compute service host, the PCD host UUID.
 
 - ⬜ Confirm on the lab appliance: exporters reachable from its network, root filesystem at 60 GB, values match PCD's host dashboards.
-- ⬜ Later: export or back up the store (with Phase 12's backup and restore).
+- ⬜ Later: export or back up the store (with Phase 13's backup and restore).
 
 ## Phase 7 — Reclamation, overcommit, idle VMs, capacity, right-sizing 🧪 (0.7.x, branch `feature/phase7`)
 
@@ -256,7 +257,17 @@ Phase 8 is on hold; Phase 9 ships after Phase 7 as 0.8.1 (alerting), 0.8.2 (conf
 - ⬜ Time-range queries and kept history. Today there's one snapshot of the last 100–300 lines per file every 15 minutes.
 - ⬜ Control-plane logs, from wherever PCD exposes them.
 
-## Phase 12 — Hardening for 1.0 🔄
+## Phase 12 — Local metrics only: PCD's Grafana becomes an optional fallback ⬜
+
+Plan: [plans/local-metrics-only.md](plans/local-metrics-only.md). Since Phase 6, PCD Ops scrapes the hypervisors' exporters itself, so PCD's Grafana (SaaS, 14 days, reduced `pcd:*` series) adds little and costs a token at setup, WAN traffic for every metric query, and a second set of definitions that don't agree (its VM RAM counts disk cache). Picked up before Hardening for 1.0.
+
+- ⬜ **Capacity report without Grafana:** each tenant's usage from Nova's and Cinder's quota APIs, the trend from per-tenant samples PCD Ops writes into its own store. It's the last feature on the `openstack_*` series.
+- ⬜ **One source:** the local store whenever it works, no switching at 7 days. Right-sizing, idle detection, overcommit and anomaly use the history the store has and say how much ("collecting: 3 of 14 days").
+- ⬜ **Grafana as a fallback** only for appliances that can't reach the exporters: its settings move from Connection to a collapsed section under Settings → Metrics, pointed to when the exporter probe fails; with the store working, Settings offers to remove the token.
+- ⬜ **Setup and docs:** no Grafana token in the setup path, the manifest's post-install notes (also still saying plain HTTP), the README and CLAUDE.md.
+- ⬜ **Verify:** the lab appliance with the token removed, every page working and no requests to PCD's Grafana; the fallback with the exporters blocked.
+
+## Phase 13 — Hardening for 1.0 🔄
 
 - 🔄 **Tests:**
   - 163 backend tests (pytest; Keystone and OpenStack mocked): login, setup, config.env, and now most feature APIs, collectors, rules and jobs. 53 frontend tests (vitest) on the page models and chart helpers.
