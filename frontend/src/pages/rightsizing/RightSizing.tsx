@@ -1,14 +1,17 @@
-import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Briefcase, ChevronRight } from "lucide-react";
+import { Briefcase } from "lucide-react";
 import { apiFetch, errorDetail, noDataReason } from "../../api/client";
-import { Metric } from "../../components/Metric";
 import { pctColor } from "../../components/format";
 import DataFreshness from "../../components/DataFreshness";
 import { useTenants } from "../../api/tenants";
 import { getSettings } from "../../api/settings";
-import { CC, type Classification, FIT, isUpsize, pctText, type Rec } from "./model";
+import { HeaderRow, useSort } from "../inventory/shared";
+import {
+  ATTENTION, CC, CLASS_RANK, CLASSES, type Classification, FIT, filterRecs, flavorText, isUpsize, pctText,
+  type Rec,
+} from "./model";
 
 /** Classes the resize job can act on: down to a smaller flavor, or up to a bigger one. */
 const RESIZE_CLASSES: [Classification, string][] = [
@@ -16,28 +19,36 @@ const RESIZE_CLASSES: [Classification, string][] = [
   ["cpu-pressure", "CPU pressure"], ["memory-pressure", "Memory pressure"],
 ];
 
-const ATTENTION_CLASSES: Classification[] = ["memory-pressure", "cpu-pressure", "overprovisioned"];
-const ALL_FILTERS = ["all", "attention", "memory-pressure", "cpu-pressure", "overprovisioned", "right-sized", "idle", "no-data"] as const;
+const ALL_FILTERS = ["all", "attention", ...CLASSES] as const;
 type Filter = typeof ALL_FILTERS[number];
+const PAGE = 200;
+
+const COLS: [string, string][] = [
+  ["VM", "server_name"], ["Tenant", "tenant"], ["Class", "rank"], ["Flavor", "flavor"],
+  ["Suggested", "suggested"], ["CPU avg", "cpu_avg_pct"], ["RAM avg", "mem_avg_pct"],
+  ["Disk IOPS", "io_avg_iops"], ["Host", "hypervisor"],
+];
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function RightSizing() {
-  // The filter lives in the URL, so coming back from a VM's drill-down keeps it
+  // Filters live in the URL, so coming back from a VM's drill-down keeps them
   const [params, setParams] = useSearchParams();
   const filter = (ALL_FILTERS as readonly string[]).includes(params.get("class") ?? "")
     ? params.get("class") as Filter : "all";
-  const setFilter = (f: Filter | ((cur: Filter) => Filter)) => {
-    const next = typeof f === "function" ? f(filter) : f;
-    setParams(p => { if (next === "all") p.delete("class"); else p.set("class", next); return p; }, { replace: true });
-  };
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const tenant = params.get("tenant") ?? "";
+  const q = params.get("q") ?? "";
+  const setParam = (key: string, value: string, empty = "") =>
+    setParams(p => { if (value === empty) p.delete(key); else p.set(key, value); return p; }, { replace: true });
+  const setFilter = (f: Filter) => setParam("class", filter === f ? "all" : f, "all");
   const [showJobModal, setShowJobModal] = useState(false);
+  const [limit, setLimit] = useState(PAGE);
   const tenants = useTenants();
+  const navigate = useNavigate();
 
   const { data: recs = [], isLoading, error } = useQuery<Rec[]>({
     queryKey: ["rightsizing"],
-    queryFn: () => apiFetch("/rightsizing/recommendations"),
+    queryFn: () => apiFetch("/rightsizing/recommendations?series=false"),
     retry: false,
   });
   const noData = noDataReason(error);
@@ -47,15 +58,28 @@ export default function RightSizing() {
 
   const counts: Record<string, number> = { all: recs.length };
   for (const r of recs) counts[r.classification] = (counts[r.classification] ?? 0) + 1;
+  const attention = recs.filter(r => ATTENTION.includes(r.classification)).length;
 
-  const attention = recs.filter(r => ATTENTION_CLASSES.includes(r.classification));
+  const tenantName = (r: Rec) => tenants.get(r.project_id) ?? r.tenant_name ?? r.project_id;
+  const tenantList = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of recs) seen.set(r.project_id, tenants.get(r.project_id) ?? r.tenant_name ?? r.project_id);
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [recs, tenants]);
 
-  const filtered = filter === "all"       ? recs
-                 : filter === "attention" ? attention
-                 : recs.filter(r => r.classification === filter);
+  // Sortable rows: the derived columns become fields
+  const rows = useMemo(() => filterRecs(recs, { cls: filter, tenant, q }).map(r => ({
+    ...r, tenant: tenantName(r), rank: CLASS_RANK[r.classification], flavor: r.current_flavor.name,
+    suggested: r.suggested_flavor?.name ?? "",
+  })), [recs, filter, tenant, q, tenants]);
+  const { sorted, sort, toggle } = useSort(rows);
+  useEffect(() => setLimit(PAGE), [filter, tenant, q]);
 
-  const toggle = (id: string) =>
-    setExpanded(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const open = (e: React.MouseEvent, id: string) => {
+    if ((e.target as HTMLElement).closest("a")) return;
+    if (e.ctrlKey || e.metaKey) window.open(`/rightsizing/${id}`, "_blank");
+    else navigate(`/rightsizing/${id}`);
+  };
 
   return (
     <div>
@@ -99,10 +123,9 @@ export default function RightSizing() {
       {/* ── Summary row ── */}
       {recs.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.6rem", marginBottom: 14 }}>
-          {(["memory-pressure","cpu-pressure","overprovisioned","right-sized","idle","no-data"] as Classification[]).map(cls => (
+          {CLASSES.map(cls => (
             <SummaryCard key={cls} cls={cls} count={counts[cls] ?? 0} total={recs.length}
-              active={filter === cls}
-              onClick={() => setFilter(f => f === cls ? "all" : cls as Filter)} />
+              active={filter === cls} onClick={() => setFilter(cls)} />
           ))}
         </div>
       )}
@@ -110,144 +133,128 @@ export default function RightSizing() {
       {/* ── Filter tabs ── */}
       {recs.length > 0 && (
         <div className="tabs" style={{ marginBottom: 12, overflowX: "auto" }}>
-          <button className={`tab${filter === "all" ? " active" : ""}`} onClick={() => setFilter("all")}>
+          <button className={`tab${filter === "all" ? " active" : ""}`} onClick={() => setParam("class", "all", "all")}>
             All <span style={{ color: "var(--gray-400)", fontSize: 11, marginLeft: 4 }}>{recs.length}</span>
           </button>
-          {attention.length > 0 && (
+          {attention > 0 && (
             <button className={`tab${filter === "attention" ? " active" : ""}`}
-              onClick={() => setFilter(f => f === "attention" ? "all" : "attention")}
-              style={{ color: filter === "attention" ? "var(--red)" : "var(--red)", fontWeight: 600 }}>
-              ⚠ Needs Attention <span style={{ fontSize: 11, marginLeft: 4 }}>{attention.length}</span>
+              onClick={() => setFilter("attention")} style={{ color: "var(--red)", fontWeight: 600 }}>
+              ⚠ Needs Attention <span style={{ fontSize: 11, marginLeft: 4 }}>{attention}</span>
             </button>
           )}
-          {(["memory-pressure","cpu-pressure","overprovisioned","right-sized","idle","no-data"] as Classification[])
-            .filter(c => (counts[c] ?? 0) > 0)
-            .map(c => (
-              <button key={c} className={`tab${filter === c ? " active" : ""}`} onClick={() => setFilter(f => f === c ? "all" : c)}>
-                {CC[c].label}
-                <span style={{ color: "var(--gray-400)", fontSize: 11, marginLeft: 4 }}>{counts[c] ?? 0}</span>
-              </button>
-            ))}
+          {CLASSES.filter(c => (counts[c] ?? 0) > 0).map(c => (
+            <button key={c} className={`tab${filter === c ? " active" : ""}`} onClick={() => setFilter(c)}>
+              {CC[c].label}
+              <span style={{ color: "var(--gray-400)", fontSize: 11, marginLeft: 4 }}>{counts[c] ?? 0}</span>
+            </button>
+          ))}
         </div>
       )}
 
-      {/* ── Cards grid ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(360px, 100%), 1fr))", gap: "0.75rem" }}>
-        {filtered.map(rec => {
-          const cfg = CC[rec.classification];
-          const isOpen = expanded.has(rec.server_id);
-          const tenantName = tenants.get(rec.project_id) ?? rec.tenant_name ?? null;
+      {/* ── Tenant and search ── */}
+      {recs.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          <select className="form-select" style={{ width: "auto", maxWidth: "100%" }} value={tenant}
+            onChange={e => setParam("tenant", e.target.value)} aria-label="Tenant">
+            <option value="">All tenants</option>
+            {tenantList.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+          <input className="form-input" style={{ width: 220, maxWidth: "100%" }} value={q}
+            placeholder="Search VM, flavor or host…" onChange={e => setParam("q", e.target.value)} />
+          <span className="text-muted" style={{ fontSize: 12, marginLeft: "auto" }}>
+            {sorted.length === recs.length ? `${recs.length} VMs` : `${sorted.length} of ${recs.length} VMs`}
+          </span>
+        </div>
+      )}
 
-          return (
-            <div key={rec.server_id} className="card" style={{ borderLeft: `4px solid ${cfg.color}` }}>
-
-              {/* Header */}
-              <div style={{ padding: "10px 12px 8px", borderBottom: "1px solid var(--gray-100)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <Link to={`/rightsizing/${rec.server_id}`} title="Details: why, projected use, alternatives, hosts"
-                      style={{ display: "block", fontWeight: 600, fontSize: 13, color: "var(--gray-900)", marginBottom: 3 }}>
-                      {rec.server_name}
-                    </Link>
-                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
-                        background: cfg.bg, color: cfg.color }}>
-                        {cfg.label}
-                      </span>
-                      {rec.risk === "high" && <span className="badge badge-error" style={{ fontSize: 10 }}>High Risk</span>}
-                      {rec.risk === "medium" && <span className="badge badge-warn" style={{ fontSize: 10 }}>Medium Risk</span>}
-                      {tenantName && <span className="badge badge-neutral" style={{ fontSize: 10 }}>{tenantName}</span>}
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: 11, color: "var(--gray-500)", fontFamily: "var(--font-mono)" }}>
-                      {rec.current_flavor.name}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--gray-400)" }}>
-                      {rec.current_flavor.vcpus}v · {Math.round(rec.current_flavor.ram_mb / 1024)}GB
-                    </div>
-                    {rec.suggested_flavor && (() => {
-                      const up = isUpsize(rec.current_flavor, rec.suggested_flavor);
-                      const fit = rec.fit && FIT[rec.fit.status];
-                      return (
-                        <div style={{ fontSize: 10, marginTop: 2 }}
-                          title={`Suggested flavor: ${rec.suggested_flavor.vcpus}v · ${Math.round(rec.suggested_flavor.ram_mb / 1024)}GB, the smallest that runs its average load with room to spare${rec.fit ? `. ${rec.fit.reason}` : ""}`}>
-                          <span style={{ color: up ? "#B45309" : "var(--green)" }}>{up ? "↑" : "↓"} {rec.suggested_flavor.name}</span>
-                          {fit && <div style={{ color: fit.color }}>{fit.label}</div>}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
-              </div>
-
-              {/* Metrics */}
-              <div style={{ padding: "8px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-                <Metric
-                  label="CPU"
-                  avg={rec.cpu_avg_pct}
-                  unit="%"
-                  series={rec.cpu_series}
-                  low={20} high={80}
-                  color={pctColor(rec.cpu_avg_pct, 20, 80)}
-                />
-                <Metric
-                  label="RAM"
-                  avg={rec.mem_avg_pct}
-                  unit="%"
-                  series={rec.mem_series}
-                  low={20} high={80}
-                  color={pctColor(rec.mem_avg_pct, 20, 80)}
-                />
-                {(rec.stats?.cpu?.p95 != null || rec.stats?.mem?.p95 != null) && (
-                  <div style={{ fontSize: 11, color: "var(--gray-500)" }}
-                    title="95th percentile of hourly averages over the window: its busy hours, not its average">
-                    Busiest hours (p95): CPU {pctText(rec.stats?.cpu?.p95)} · RAM {pctText(rec.stats?.mem?.p95)}
-                  </div>
-                )}
-                {rec.io_series.length > 1 && (
-                  <Metric
-                    label="Disk IOPS"
-                    avg={rec.io_avg_iops}
-                    unit=" avg"
-                    series={rec.io_series}
-                    color="var(--purple)"
-                  />
-                )}
-              </div>
-
-              <Link to={`/rightsizing/${rec.server_id}`}
-                style={{ display: "flex", alignItems: "center", gap: 3, padding: "6px 12px", fontSize: 12,
-                  borderTop: "1px solid var(--gray-100)", color: "var(--blue-primary)", fontWeight: 500 }}>
-                Details <ChevronRight size={13} />
-              </Link>
-
-              {/* AI insight */}
-              {rec.analysis && (
-                <div style={{ borderTop: "1px solid var(--gray-100)" }}>
-                  <button onClick={() => toggle(rec.server_id)}
-                    style={{ width: "100%", textAlign: "left", padding: "6px 12px",
-                      background: "none", border: "none", cursor: "pointer",
-                      fontSize: 12, color: "var(--blue-primary)", fontWeight: 500,
-                      display: "flex", alignItems: "center", gap: 5 }}>
-                    <span>🤖</span>{isOpen ? "▲ Hide insight" : "▼ AI insight"}
-                  </button>
-                  {isOpen && (
-                    <div style={{ padding: "0 12px 10px", fontSize: 12, color: "var(--gray-700)", lineHeight: 1.6 }}>
-                      {rec.analysis}
-                    </div>
-                  )}
-                </div>
+      {/* ── The list ── */}
+      {recs.length > 0 && (
+        <div className="card table-wrap">
+          <table>
+            <thead><HeaderRow cols={COLS} sort={sort} toggle={toggle} /></thead>
+            <tbody>
+              {sorted.slice(0, limit).map(rec => <Row key={rec.server_id} rec={rec} tenant={rec.tenant}
+                onClick={e => open(e, rec.server_id)} />)}
+              {sorted.length === 0 && (
+                <tr><td colSpan={COLS.length} className="text-muted" style={{ textAlign: "center", padding: 20 }}>
+                  No VMs match these filters.
+                </td></tr>
               )}
+            </tbody>
+          </table>
+          {sorted.length > limit && (
+            <div style={{ padding: 10, textAlign: "center" }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setLimit(l => l + PAGE)}>
+                Show {Math.min(PAGE, sorted.length - limit)} more ({sorted.length - limit} not shown)
+              </button>
             </div>
-          );
-        })}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
+
+function Row({ rec, tenant, onClick }: { rec: Rec; tenant: string; onClick: (e: React.MouseEvent) => void }) {
+  const cfg = CC[rec.classification];
+  const sug = rec.suggested_flavor;
+  const fit = sug && rec.fit ? FIT[rec.fit.status] : null;
+  const up = sug && isUpsize(rec.current_flavor, sug);
+  const sub = { fontSize: 11, color: "var(--gray-500)" };
+  return (
+    <tr onClick={onClick} style={{ cursor: "pointer" }}>
+      <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+        <Link to={`/rightsizing/${rec.server_id}`} style={{ color: "var(--gray-900)" }}>{rec.server_name}</Link>
+      </td>
+      <td>{tenant}</td>
+      <td style={{ whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 99, background: cfg.bg, color: cfg.color }}
+          title={cfg.desc}>{cfg.label}</span>
+        {rec.risk === "high" && <span className="badge badge-error" style={{ fontSize: 10, marginLeft: 4 }}>High Risk</span>}
+        {rec.risk === "medium" && <span className="badge badge-warn" style={{ fontSize: 10, marginLeft: 4 }}>Medium Risk</span>}
+      </td>
+      <td style={{ whiteSpace: "nowrap" }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{rec.current_flavor.name}</div>
+        <div style={sub}>{flavorText(rec.current_flavor)}</div>
+      </td>
+      <td style={{ whiteSpace: "nowrap" }} title={sug && rec.fit ? rec.fit.reason : undefined}>
+        {sug ? (
+          <>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: up ? "#B45309" : "var(--green)" }}>
+              {up ? "↑" : "↓"} {sug.name}
+            </div>
+            <div style={sub}>
+              {flavorText(sug)}{fit && <span style={{ color: fit.color }}> · {fit.label}</span>}
+            </div>
+          </>
+        ) : !rec.custom_flavor && <span className="text-muted">—</span>}
+        {rec.custom_flavor && (
+          <div style={{ fontSize: 11, color: "var(--blue-primary)" }}
+            title={`A flavor shaped for it: ${rec.custom_flavor.reason}`}>
+            ✱ custom {flavorText(rec.custom_flavor)}
+          </div>
+        )}
+      </td>
+      <Pct v={rec.cpu_avg_pct} p95={rec.stats?.cpu?.p95} />
+      <Pct v={rec.mem_avg_pct} p95={rec.stats?.mem?.p95} />
+      <td style={{ whiteSpace: "nowrap" }}>{rec.io_avg_iops == null ? "—" : rec.io_avg_iops.toFixed(rec.io_avg_iops < 10 ? 1 : 0)}</td>
+      <td style={{ whiteSpace: "nowrap", fontSize: 12 }}>{rec.hypervisor ?? "—"}</td>
+    </tr>
+  );
+}
+
+/** An average %, coloured against the thresholds, with its busiest hours (p95) underneath. */
+function Pct({ v, p95 }: { v: number | null; p95?: number | null }) {
+  return (
+    <td style={{ whiteSpace: "nowrap" }}>
+      <div style={{ fontWeight: 600, color: pctColor(v, 20, 80) }}>{pctText(v)}</div>
+      {p95 != null && <div style={{ fontSize: 11, color: "var(--gray-500)" }} title="Busiest hours: 95th percentile of hourly averages">
+        p95 {pctText(p95)}</div>}
+    </td>
+  );
+}
 
 function SummaryCard({ cls, count, total, active, onClick }: {
   cls: Classification; count: number; total: number; active: boolean; onClick: () => void;

@@ -431,6 +431,16 @@ def test_detail_endpoint(admin):
     assert d["thresholds"]["cpu_high"] == rs.CPU_HIGH
 
 
+def test_list_without_series(admin):
+    db.cache_set("rightsizing:recommendations", [{
+        "server_id": "1", "server_name": "web", "classification": "right-sized",
+        "current_flavor": {"name": "4x8", "vcpus": 4, "ram_mb": 8192}, "suggested_flavor": None,
+        "cpu_series": [{"ts": 1, "v": 2}], "mem_series": [], "io_series": [],
+    }])
+    assert admin.get("/api/rightsizing/recommendations").json()[0]["cpu_series"]
+    assert admin.get("/api/rightsizing/recommendations?series=false").json()[0]["cpu_series"] == []
+
+
 def test_image_backed_vms_keep_their_disk():
     flavors = [
         {"id": "u", "name": "pf9.unknown", "vcpus": 1, "ram_mb": 1024, "disk_gb": 0},
@@ -450,3 +460,134 @@ def test_image_backed_vms_keep_their_disk():
     rec = {"classification": "overprovisioned", "current_flavor": img, "cpu_avg_pct": 1,
            "mem_avg_pct": 5}
     assert [a["flavor"]["name"] for a in rs.alternatives(rec, flavors)] == ["medium"]
+
+
+def _rec(cls, cur, cpu, mem):
+    return {"classification": cls, "current_flavor": cur, "cpu_avg_pct": cpu, "mem_avg_pct": mem}
+
+
+def test_custom_flavor_when_the_catalog_fits_badly():
+    # Memory pressure on 2 vCPUs / 8 GB: it needs 2 vCPUs and 11 GB, the catalog's best is 8x16
+    specs = {"aggregate_instance_extra_specs:c": "1"}
+    rec = _rec("memory-pressure", {"vcpus": 2, "ram_mb": 8192, "disk_gb": 40, "extra_specs": specs},
+               30, 95)
+    choice = rs.larger_flavor(rec["current_flavor"], 30, 95, FLAVORS, False, True)
+    assert choice["name"] == "8x16"
+    c = rs.custom_flavor(rec, choice)
+    assert (c["name"], c["vcpus"], c["ram_mb"], c["disk_gb"]) == ("rs.2c11g.40d", 2, 11264, 40)
+    assert c["extra_specs"] == specs
+    assert "8x16, has 6 more vCPUs" in c["reason"]
+    # A close catalog fit: none
+    over = _rec("overprovisioned", {"vcpus": 8, "ram_mb": 16384}, 10, 10)
+    close = rs.smaller_flavor(over["current_flavor"], 10, 10, FLAVORS)
+    assert rs.custom_flavor(over, close) is None
+    # Nothing to change, or nothing smaller to shape
+    assert rs.custom_flavor(_rec("right-sized", {"vcpus": 2, "ram_mb": 4096}, 50, 50), None) is None
+    assert rs.custom_flavor(_rec("idle", {"vcpus": 1, "ram_mb": 512}, 1, 5), None) is None
+
+
+def test_custom_flavor_keeps_an_image_backed_disk_the_catalog_lacks():
+    cur = {"vcpus": 4, "ram_mb": 8192, "disk_gb": 120, "swap_mb": 512, "image_backed": True}
+    rec = _rec("overprovisioned", cur, 10, 10)
+    disked = [{**f, "disk_gb": 20} for f in FLAVORS]
+    assert rs.smaller_flavor(cur, 10, 10, disked) is None
+    c = rs.custom_flavor(rec, None)
+    assert (c["vcpus"], c["ram_mb"], c["disk_gb"], c["swap_mb"]) == (1, 2048, 120, 512)
+    assert c["reason"].startswith("No flavor in the catalog it can resize to is smaller")
+    assert rs.flavor_label(c) == "1 vCPU, 2 GB RAM, 120 GB disk"
+
+
+def test_private_flavors_only_for_projects_with_access():
+    fl = [{"id": "pub", "public": True}, {"id": "mine", "public": False},
+          {"id": "theirs", "public": False}]
+    access = {"mine": ["p1"], "theirs": ["p2"]}
+    assert [f["id"] for f in rs.usable(fl, access, "p1")] == ["pub", "mine"]
+    assert [f["id"] for f in rs.usable(fl, access, "p3")] == ["pub"]
+
+
+class FakeNova:
+    """The compute calls the create-flavor endpoint makes."""
+
+    def __init__(self, flavors=(), access=None, fail_access=False):
+        self.existing, self.access, self.fail_access = list(flavors), access or {}, fail_access
+        self.calls = []
+
+    def flavors(self):
+        return self.existing
+
+    def get_flavor_access(self, fid):
+        return [{"flavor_id": fid, "tenant_id": t} for t in self.access.get(fid, [])]
+
+    def create_flavor(self, **attrs):
+        self.calls.append(("create", attrs))
+        return NS(id="new-id", **attrs)
+
+    def flavor_add_tenant_access(self, fid, tenant):
+        self.calls.append(("access", fid, tenant))
+        if self.fail_access:
+            raise RuntimeError("forbidden")
+
+    def create_flavor_extra_specs(self, fid, specs):
+        self.calls.append(("specs", fid, specs))
+
+    def delete_flavor(self, fid, ignore_missing=True):
+        self.calls.append(("delete", fid))
+
+
+def _flv(name, vcpus, ram, public=True, fid=None):
+    return NS(id=fid or name, name=name, vcpus=vcpus, ram=ram, disk=40, ephemeral=0, swap=0,
+              is_public=public, is_disabled=False)
+
+
+@pytest.fixture
+def nova(admin):
+    from app.main import app
+    from app.services.openstack import user_connection
+
+    holder = {"nova": FakeNova()}
+    app.dependency_overrides[user_connection] = lambda: NS(compute=holder["nova"])
+    custom = {"name": "rs.2c11g.40d", "vcpus": 2, "ram_mb": 11264, "disk_gb": 40,
+              "ephemeral_gb": 0, "swap_mb": 0, "extra_specs": {"hw:cpu_policy": "shared"},
+              "reason": "…"}
+    db.cache_set("rightsizing:recommendations", [{
+        "server_id": "1", "server_name": "db", "project_id": "p1", "tenant_name": "tenant-a",
+        "classification": "memory-pressure", "cpu_avg_pct": 30, "mem_avg_pct": 95,
+        "current_flavor": {"name": "2x8", "vcpus": 2, "ram_mb": 8192, "disk_gb": 40},
+        "suggested_flavor": FLAVORS[3], "custom_flavor": custom,
+    }], collected_at="2026-11-01T00:00:00")
+    yield holder
+    app.dependency_overrides.pop(user_connection, None)
+
+
+def test_create_custom_flavor(admin, nova):
+    url = "/api/rightsizing/recommendations/1/flavor"
+    d = admin.get("/api/rightsizing/recommendations/1").json()
+    assert d["custom"]["name"] == "rs.2c11g.40d" and d["custom"]["projected"]["mem"] is not None
+    assert "fit" in d["custom"]
+
+    nova["nova"] = FakeNova([_flv("rs.2c11g.40d", 1, 1024)])
+    r = admin.post(url, json={"name": "rs.2c11g.40d"}, headers=CSRF)
+    assert r.status_code == 409 and r.json()["detail"]["existing"] == "rs.2c11g.40d"
+    # The same shape, private to another tenant, doesn't count; public does
+    nova["nova"] = FakeNova([_flv("other", 2, 11264, public=False, fid="o")], {"o": ["p2"]})
+    nova["nova"].fail_access = True
+    r = admin.post(url, json={"name": "db-flavor"}, headers=CSRF)
+    assert r.status_code == 502 and ("delete", "new-id") in nova["nova"].calls
+    nova["nova"] = FakeNova([_flv("shared", 2, 11264)])
+    assert admin.post(url, json={"name": "db-flavor"}, headers=CSRF).json()["detail"]["existing"] \
+        == "shared"
+
+    nova["nova"] = FakeNova()
+    r = admin.post(url, json={"name": " db-flavor "}, headers=CSRF)
+    assert r.status_code == 200, r.text
+    (_, attrs), access, specs = nova["nova"].calls
+    assert attrs["name"] == "db-flavor" and attrs["is_public"] is False
+    assert (attrs["vcpus"], attrs["ram"], attrs["disk"]) == (2, 11264, 40)
+    assert access == ("access", "new-id", "p1")
+    assert specs == ("specs", "new-id", {"hw:cpu_policy": "shared"})
+    [rec], at = db.cache_get("rightsizing:recommendations")
+    assert rec["suggested_flavor"]["id"] == "new-id" and rec["custom_flavor"] is None
+    assert at == "2026-11-01T00:00:00"
+    assert db.cache_get("rightsizing:flavor_access")[0] == {"new-id": ["p1"]}
+    # Nothing left to create
+    assert admin.post(url, json={"name": "again"}, headers=CSRF).status_code == 409

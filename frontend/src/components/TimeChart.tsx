@@ -1,5 +1,5 @@
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { type Row, timeLabel, timeTick } from "./chartData";
+import { dayTicks, type Row, timeLabel, timeTick } from "./chartData";
 
 export type SeriesDef = { key: string; label: string; color: string };
 
@@ -12,6 +12,7 @@ export default function TimeChart({ data, series, format, days, syncId, height =
   max?: number;
 }) {
   const tick = timeTick(days);
+  const ticks = days > 1 && data.length > 1 ? dayTicks(data[0].ts, data[data.length - 1].ts) : undefined;
   const top = max == null ? "auto" : (dataMax: number) => Math.max(max, Math.ceil(dataMax));
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -27,7 +28,7 @@ export default function TimeChart({ data, series, format, days, syncId, height =
         </defs>
         <CartesianGrid stroke="var(--gray-100)" vertical={false} />
         <XAxis dataKey="ts" type="number" scale="time" domain={["dataMin", "dataMax"]}
-          tickFormatter={tick} minTickGap={40} tick={{ fontSize: 10, fill: "var(--gray-500)" }}
+          ticks={ticks} tickFormatter={tick} minTickGap={40} tick={{ fontSize: 10, fill: "var(--gray-500)" }}
           axisLine={{ stroke: "var(--gray-200)" }} tickLine={false} />
         <YAxis domain={[0, top]} tickFormatter={format} width={78}
           tick={{ fontSize: 10, fill: "var(--gray-500)" }} axisLine={false} tickLine={false} />

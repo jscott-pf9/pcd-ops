@@ -1238,11 +1238,18 @@ Delete a capacity report.
 
 ### **GET** `/api/rightsizing/recommendations`
 
-Return VM right-sizing recommendations with CPU/memory usage metrics and AI-generated analysis.
+VM right-sizing recommendations: CPU, RAM and IOPS use and AI analysis. A suggested
 
-A suggested flavor carries `fit`: whether a host in the VM's cluster has room for it now
-(fits, same_host, no_room, unknown). 503 no_data until the first run succeeds; `error` says
-why the last one failed.
+flavor carries `fit`: whether a host in the VM's cluster has room for it now (fits,
+same_host, no_room, unknown). `series=false` leaves out the per-VM series (the list doesn't
+draw them). 503 no_data until the first run succeeds; `error` says why the last one
+failed.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `series` | query | boolean | no | `true` |  |
 
 **Response:** 200 — Successful Response  
 
@@ -1254,14 +1261,40 @@ One VM's recommendation in detail: why it has its class (`reasons`), what the su
 
 flavor had to have (`basis`), the VM's CPU and RAM projected onto it (`projected`, with
 `warnings` when its busiest hours would run it hot), other flavors that would do
-(`alternatives`, each with its fit), and every host in its cluster with its free room
-(`hosts`). `thresholds` are the classification rules.
+(`alternatives`, each with its fit), and every host in its cluster with its free room for
+the suggested flavor, or the shaped one when there's none (`hosts`). `custom` is a flavor
+shaped for it when the catalog has no good match, with its
+projection and fit. `thresholds` are the classification rules.
 
 **Parameters**
 
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `server_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/rightsizing/recommendations/{server_id}/flavor`
+
+Create the flavor shaped for this VM (`custom_flavor` of the last run) as a private
+
+flavor its tenant can use, with the current flavor's extra specs. Only the name comes from
+the request. It becomes the VM's suggested flavor at once. 409 when the name is taken or a
+flavor the tenant can already use has this shape (`existing` names it).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `server_id` | path | string | yes | — |  |
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | yes | — | Name |
 
 **Response:** 200 — Successful Response  
 

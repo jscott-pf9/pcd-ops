@@ -92,7 +92,7 @@ export function HypervisorDetail({ item: h, ctx }: DetailProps) {
         </p>
       </Section>
       <Section title="Metrics" full>
-        <MetricsCharts kind="host" id={h.id} />
+        <MetricsCharts kind="host" id={h.id} name={h.hostname} />
       </Section>
       <Section title={`Hosted VMs (${vms.length})`} full>
         <RelatedTable rows={vms} rowKey={s => s.id} to={s => detailPath("servers", s.id)}
@@ -159,7 +159,7 @@ export function ServerDetail({ item: s, ctx }: DetailProps) {
         <Interfaces id={s.id} />
       </Section>
       <Section title="Metrics" full>
-        <MetricsCharts kind="vm" id={s.id} />
+        <MetricsCharts kind="vm" id={s.id} name={s.name} />
       </Section>
       <Section title={`Volumes (${attached.length})`} full>
         <RelatedTable rows={attached} rowKey={v => v.id} to={v => detailPath("volumes", v.id)} empty="No volumes attached"
@@ -305,7 +305,7 @@ export function ClusterDetail({ item: c, ctx }: DetailProps) {
         ]} />
       </Section>
       <Section title="Utilization" full>
-        <MetricsCharts kind="cluster" id={String(c.id)} />
+        <MetricsCharts kind="cluster" id={String(c.id)} name={c.name} />
       </Section>
       <Section title={`Hosts (${hosts.length})`} full>
         <RelatedTable rows={hosts} rowKey={(h: any) => h.service_host} empty="No hosts"

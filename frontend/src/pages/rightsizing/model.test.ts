@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { flavorText, isUpsize, pctText, projColor, ramText, windowText } from "./model";
+import { type Classification, filterRecs, flavorText, isUpsize, pctText, projColor, ramText, type Rec, windowText } from "./model";
 
 describe("right-sizing model", () => {
   it("formats sizes", () => {
@@ -25,5 +25,26 @@ describe("right-sizing model", () => {
     expect(isUpsize(cur, { name: "l", vcpus: 4, ram_mb: 16384 })).toBe(true);
     expect(isUpsize(cur, { name: "s", vcpus: 2, ram_mb: 8192 })).toBe(false);
     expect(windowText(30)).toBe("the last 30 days");
+  });
+});
+
+describe("right-sizing list", () => {
+  const rec = (server_name: string, classification: Classification, project_id = "p1", extra: Partial<Rec> = {}) =>
+    ({ server_id: server_name, server_name, classification, project_id, current_flavor: { name: "m1.large", vcpus: 4, ram_mb: 8192 },
+       suggested_flavor: null, hypervisor: "hyp1", ...extra }) as Rec;
+  const recs = [rec("web-10", "right-sized"), rec("web-2", "idle", "p2"), rec("db", "memory-pressure"),
+                rec("cache", "overprovisioned", "p2", { hypervisor: "hyp9" })];
+
+  it("puts the worst class first, then names in natural order", () => {
+    expect(filterRecs(recs, { cls: "all", tenant: "", q: "" }).map(r => r.server_name))
+      .toEqual(["db", "cache", "web-2", "web-10"]);
+  });
+
+  it("filters by class tab, tenant and search", () => {
+    expect(filterRecs(recs, { cls: "attention", tenant: "", q: "" }).map(r => r.server_name)).toEqual(["db", "cache"]);
+    expect(filterRecs(recs, { cls: "idle", tenant: "", q: "" }).map(r => r.server_name)).toEqual(["web-2"]);
+    expect(filterRecs(recs, { cls: "all", tenant: "p2", q: "" }).map(r => r.server_name)).toEqual(["cache", "web-2"]);
+    expect(filterRecs(recs, { cls: "all", tenant: "", q: "HYP9" }).map(r => r.server_name)).toEqual(["cache"]);
+    expect(filterRecs(recs, { cls: "all", tenant: "", q: "m1.large" })).toHaveLength(4);
   });
 });

@@ -48,6 +48,7 @@ export function errorDetail(err: unknown): string {
   try {
     const detail = JSON.parse(json).detail;
     if (typeof detail === "string") return detail;
+    if (typeof detail?.error === "string") return detail.error;
   } catch {
     // not JSON
   }

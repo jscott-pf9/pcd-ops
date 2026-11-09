@@ -1390,14 +1390,29 @@ async def collect_rightsizing() -> None:
         asyncio.to_thread(lambda: list(conn.compute.flavors())),
     )
 
-    # Flavors any project can resize to, smallest first so the first that fits is chosen
+    # Flavors to resize to, smallest first so the first that fits is chosen: public ones, and
+    # private ones for the projects with access (a flavor shaped for a VM is private to its
+    # tenant)
     all_flavors = sorted(
         [{"id": f.id, "name": f.name, "vcpus": f.vcpus, "ram_mb": f.ram,
-          "disk_gb": f.disk or 0, "ephemeral_gb": f.ephemeral or 0,
+          "disk_gb": f.disk or 0, "ephemeral_gb": f.ephemeral or 0, "swap_mb": f.swap or 0,
+          "public": f.is_public is not False,
           "extra_specs": getattr(f, "extra_specs", None) or {}}
-         for f in flavors_raw if f.is_public is not False and not f.is_disabled],
+         for f in flavors_raw if not f.is_disabled],
         key=lambda f: (f["vcpus"], f["ram_mb"]),
     )
+
+    async def _access(fid: str) -> tuple[str, list[str]]:
+        try:
+            rows = await asyncio.to_thread(conn.compute.get_flavor_access, fid)
+            return fid, [a["tenant_id"] for a in rows]
+        except Exception as e:
+            logger.warning("Right-sizing: couldn't read access to flavor %s: %s", fid, e)
+            return fid, []
+
+    flavor_access = dict(await asyncio.gather(
+        *(_access(f["id"]) for f in all_flavors if not f["public"])))
+    db.cache_set("rightsizing:flavor_access", flavor_access)
     hyps, _ = db.cache_get("inventory:hypervisors")
     hyp_of_name = {h["hostname"]: h["id"] for h in hyps or []}
 
@@ -1474,15 +1489,20 @@ async def collect_rightsizing() -> None:
         # The suggested flavor: smaller for spare capacity, bigger under pressure
         cur = {"name": flavor_name, "vcpus": vcpus, "ram_mb": ram_mb,
                "disk_gb": fl.get("disk") or 0, "ephemeral_gb": fl.get("ephemeral") or 0,
+               "swap_mb": fl.get("swap") or 0, "extra_specs": fl.get("extra_specs") or {},
                "image_backed": isinstance(server.image, dict) and bool(server.image.get("id"))}
+        flavors = rightsizing.usable(all_flavors, flavor_access, server.project_id)
         suggested_flavor = None
         if classification in ("overprovisioned", "idle"):
-            suggested_flavor = rightsizing.smaller_flavor(cur, cpu_avg, mem_avg, all_flavors)
+            suggested_flavor = rightsizing.smaller_flavor(cur, cpu_avg, mem_avg, flavors)
         elif classification in ("cpu-pressure", "memory-pressure"):
             suggested_flavor = rightsizing.larger_flavor(
-                cur, cpu_avg, mem_avg, all_flavors,
+                cur, cpu_avg, mem_avg, flavors,
                 cpu_short=cpu_avg is not None and cpu_avg >= rightsizing.CPU_HIGH,
                 mem_short=mem_avg is not None and mem_avg >= rightsizing.MEM_HIGH)
+        custom = rightsizing.custom_flavor(
+            {"classification": classification, "current_flavor": cur, "cpu_avg_pct": cpu_avg,
+             "mem_avg_pct": mem_avg}, suggested_flavor)
 
         recommendations.append({
             "server_id":    uuid,
@@ -1495,6 +1515,7 @@ async def collect_rightsizing() -> None:
             "hypervisor_id": hyp_of_name.get(getattr(server, "hypervisor_hostname", None)),
             "current_flavor":   cur,
             "suggested_flavor": suggested_flavor,
+            "custom_flavor":  custom,
             "classification": classification,
             "risk":           risk,
             "cpu_avg_pct":    cpu_avg,

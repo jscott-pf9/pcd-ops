@@ -10,6 +10,8 @@ export interface Flavor {
   image_backed?: boolean;
 }
 export interface Fit { status: FitStatus; hosts: string[]; reason: string }
+/** A flavor shaped for the VM when the catalog has no good match; not created yet. */
+export interface CustomFlavor extends Flavor { swap_mb: number; extra_specs: Record<string, string>; reason: string }
 export interface Point { ts: number; v: number }
 /** avg, 95th percentile and peak over the window (hourly averages); hours_high_pct is the
  *  share of hours at or above the pressure threshold. */
@@ -25,6 +27,7 @@ export interface Rec {
   hypervisor_id?: string | null;
   current_flavor: Flavor;
   suggested_flavor: Flavor | null;
+  custom_flavor?: CustomFlavor | null;
   /** Whether a host in its cluster has room for the suggested flavor now. */
   fit?: Fit;
   classification: Classification;
@@ -55,6 +58,7 @@ export interface Detail extends Rec {
   basis: { direction: "up" | "down"; vcpus: number; ram_mb: number; rule: string } | null;
   projected: Projected | null;
   alternatives: { flavor: Flavor; projected: Projected; fit: Fit }[];
+  custom: (CustomFlavor & { projected: Projected; fit: Fit }) | null;
   hosts: HostRoom[];
   thresholds: { cpu_low: number; cpu_high: number; mem_low: number; mem_high: number; risk_high: number; busy_warn: number };
 }
@@ -112,4 +116,27 @@ export function projColor(v: number | null | undefined, high: number, warn: numb
 /** "the last 30 days" for the window a run looked at. */
 export function windowText(days: number | null | undefined): string {
   return days ? `the last ${days} day${days === 1 ? "" : "s"}` : "the window";
+}
+
+// ── The list ──────────────────────────────────────────────────────────────────
+
+/** The classes that need action, worst first; the list's default order follows CLASS_RANK. */
+export const ATTENTION: Classification[] = ["memory-pressure", "cpu-pressure", "overprovisioned"];
+export const CLASS_RANK: Record<Classification, number> = {
+  "memory-pressure": 0, "cpu-pressure": 1, "overprovisioned": 2, "idle": 3, "right-sized": 4, "no-data": 5,
+};
+
+export interface ListFilter { cls: string; tenant: string; q: string }
+
+/** Recommendations matching the class tab ("all", "attention" or a class), the tenant and the
+ *  search (VM name, flavor, suggested flavor or host), worst class first, then by name. */
+export function filterRecs(recs: Rec[], f: ListFilter): Rec[] {
+  const q = f.q.trim().toLowerCase();
+  return recs
+    .filter(r => f.cls === "all" || (f.cls === "attention" ? ATTENTION.includes(r.classification) : r.classification === f.cls))
+    .filter(r => !f.tenant || r.project_id === f.tenant)
+    .filter(r => !q || [r.server_name, r.current_flavor?.name, r.suggested_flavor?.name, r.hypervisor]
+      .some(v => (v ?? "").toLowerCase().includes(q)))
+    .sort((a, b) => CLASS_RANK[a.classification] - CLASS_RANK[b.classification]
+      || a.server_name.localeCompare(b.server_name, undefined, { numeric: true }));
 }

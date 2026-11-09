@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, errorDetail } from "../../api/client";
 import { useTenants } from "../../api/tenants";
 import { DetailPage, Facts, ItemLink, Section } from "../../components/DetailPage";
@@ -7,7 +8,7 @@ import MetricsCharts from "../../components/MetricsCharts";
 import { detailPath } from "../inventory/kinds";
 import { StatCard } from "../inventory/shared";
 import {
-  CC, type Detail, FIT, type Flavor, flavorText, isUpsize, type Projected, pctText, projColor, ramText,
+  CC, type CustomFlavor, type Detail, FIT, type Flavor, flavorText, isUpsize, type Projected, pctText, projColor, ramText,
   type Stat, windowText,
 } from "./model";
 
@@ -88,7 +89,13 @@ export default function RightSizingDetail() {
         <SuggestedFlavor d={d} />
       </Section>
 
-      <Section title="Where it can run" aside={sug ? `for ${sug.name}` : undefined}>
+      {d.custom && (
+        <Section title="A flavor shaped for it" aside="not in the catalog yet">
+          <Custom d={d} custom={d.custom} tenant={tenant ?? d.project_id} />
+        </Section>
+      )}
+
+      <Section title="Where it can run" aside={sug ? `for ${sug.name}` : d.custom ? `for the shaped ${d.custom.name}` : undefined}>
         <HostTable d={d} />
       </Section>
 
@@ -120,7 +127,7 @@ export default function RightSizingDetail() {
       </Section>
 
       <Section title="History" full>
-        <MetricsCharts kind="vm" id={d.server_id} initialRange={(d.window_days ?? 7) >= 30 ? "30d" : "7d"} />
+        <MetricsCharts kind="vm" id={d.server_id} name={d.server_name} initialRange={(d.window_days ?? 7) >= 30 ? "30d" : "7d"} />
       </Section>
     </DetailPage>
   );
@@ -209,7 +216,7 @@ function SuggestedFlavor({ d }: { d: Detail }) {
       <p style={{ fontSize: 13, margin: 0 }}>
         {keep
           ? `No change: it stays on ${d.current_flavor.name} (${flavorText(d.current_flavor)}).`
-          : <>No public flavor meets the need{d.basis && <> of at least {d.basis.vcpus} vCPU{d.basis.vcpus === 1 ? "" : "s"} and {ramText(d.basis.ram_mb)}</>}{" "}
+          : <>No flavor its tenant can use meets the need{d.basis && <> of at least {d.basis.vcpus} vCPU{d.basis.vcpus === 1 ? "" : "s"} and {ramText(d.basis.ram_mb)}</>}{" "}
               while being {d.basis?.direction === "up" ? "bigger" : "smaller"} than {d.current_flavor.name}
               {d.current_flavor.image_backed && <> and keeping its {d.current_flavor.disk_gb} GB root disk: it boots from a local
                 disk, which Nova can't shrink</>}.</>}
@@ -322,11 +329,12 @@ function Alternatives({ d }: { d: Detail }) {
 }
 
 function HostTable({ d }: { d: Detail }) {
-  if (!d.suggested_flavor) {
+  if (!d.suggested_flavor && !d.custom) {
     return <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>No resize suggested.</p>;
   }
   if (!d.hosts.length) {
-    return <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>{d.fit?.reason ?? "No Placement data for the hosts."}</p>;
+    const fit = d.suggested_flavor ? d.fit : d.custom?.fit;
+    return <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>{fit?.reason ?? "No Placement data for the hosts."}</p>;
   }
   return (
     <div>
@@ -358,6 +366,120 @@ function HostTable({ d }: { d: Detail }) {
         Free room under Placement's allocation ratio, in the VM's cluster. On its current host the VM's own flavor counts as
         free; Nova resizes there only if it allows resizing to the same host.
       </p>
+    </div>
+  );
+}
+
+/** The flavor shaped for the VM: why the catalog doesn't do, its size and the VM's projected
+ *  use on it, where it fits, and a button to create it as a private flavor for the tenant. */
+function Custom({ d, custom, tenant }: { d: Detail; custom: NonNullable<Detail["custom"]>; tenant: string }) {
+  const [creating, setCreating] = useState(false);
+  const th = d.thresholds, p = custom.projected, sug = d.suggested_flavor;
+  return (
+    <div>
+      {creating && <CreateFlavorModal d={d} custom={custom} tenant={tenant} onClose={() => setCreating(false)} />}
+      <p style={{ fontSize: 13, margin: "0 0 10px" }}>{custom.reason}</p>
+      <table style={{ width: "100%", fontSize: 13, marginBottom: 10 }}>
+        <thead>
+          <tr><th style={{ textAlign: "left" }} /><th style={{ textAlign: "right" }}>Now</th>
+            {sug && <th style={{ textAlign: "right" }}>{sug.name}</th>}
+            <th style={{ textAlign: "right" }}>Shaped</th></tr>
+        </thead>
+        <tbody>
+          {([["vCPUs", (f: Flavor) => String(f.vcpus)], ["RAM", (f: Flavor) => ramText(f.ram_mb)],
+             // A volume-backed VM's root disk is its volume: the flavor's doesn't matter
+             ...(d.current_flavor.image_backed ? [["Root disk", (f: Flavor) => `${f.disk_gb ?? 0} GB`]] : []),
+          ] as [string, (f: Flavor) => string][]).map(([label, v]) => (
+            <tr key={label}>
+              <td className="text-muted">{label}</td>
+              <td style={{ textAlign: "right" }}>{v(d.current_flavor)}</td>
+              {sug && <td style={{ textAlign: "right" }}>{v(sug)}</td>}
+              <td style={{ textAlign: "right", fontWeight: 600 }}>{v(custom)}</td>
+            </tr>
+          ))}
+          {([["CPU average", d.cpu_avg_pct, d.projected?.cpu.avg, p.cpu.avg, th.cpu_high],
+             ["CPU busiest hours", d.stats?.cpu?.p95, d.projected?.cpu.p95, p.cpu.p95, th.cpu_high],
+             ["RAM average", d.mem_avg_pct, d.projected?.mem.avg, p.mem.avg, th.mem_high],
+             ["RAM busiest hours", d.stats?.mem?.p95, d.projected?.mem.p95, p.mem.p95, th.mem_high],
+          ] as [string, number | null | undefined, number | null | undefined, number | null, number][]).map(([label, now, onSug, then, high]) => (
+            <tr key={label}>
+              <td className="text-muted">{label}</td>
+              <td style={{ textAlign: "right" }}>{pctText(now)}</td>
+              {sug && <td style={{ textAlign: "right", color: projColor(onSug, high, th.busy_warn) }}>{pctText(onSug)}</td>}
+              <td style={{ textAlign: "right", fontWeight: 600, color: projColor(then, high, th.busy_warn) }}>{pctText(then)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {p.warnings.map(w => (
+        <div key={w} style={{ fontSize: 12, marginBottom: 6, padding: "6px 10px", borderLeft: "3px solid var(--yellow)",
+          background: "var(--yellow-light)", borderRadius: 4 }}>{w}</div>
+      ))}
+      <div style={{ fontSize: 12, color: FIT[custom.fit.status].color, fontWeight: 600, marginBottom: 12 }}>
+        {FIT[custom.fit.status].label}: <span style={{ fontWeight: 400, color: "var(--gray-700)" }}>{custom.fit.reason}</span>
+      </div>
+      <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>Create private flavor…</button>
+    </div>
+  );
+}
+
+function CreateFlavorModal({ d, custom, tenant, onClose }: {
+  d: Detail; custom: CustomFlavor; tenant: string; onClose: () => void;
+}) {
+  const [name, setName] = useState(custom.name);
+  const qc = useQueryClient();
+  const create = useMutation({
+    mutationFn: () => apiFetch<Flavor>(`/rightsizing/recommendations/${d.server_id}/flavor`, {
+      method: "POST", body: JSON.stringify({ name: name.trim() }),
+    }),
+  });
+  // Refetch on close: the new flavor replaces this card, which would take the dialog with it
+  const close = () => { if (create.isSuccess) qc.invalidateQueries({ queryKey: ["rightsizing"] }); onClose(); };
+  const specs = Object.keys(custom.extra_specs ?? {}).length;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 1000, display: "flex",
+      alignItems: "center", justifyContent: "center", padding: 16 }} onClick={e => e.target === e.currentTarget && close()}>
+      <div className="card card-body" style={{ width: 460, maxWidth: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
+        {create.isSuccess ? (
+          <>
+            <div style={{ fontWeight: 600, color: "var(--green)" }}>✓ Created {create.data.name}</div>
+            <p style={{ fontSize: 13, margin: 0 }}>
+              It's private to {tenant} and is now {d.server_name}'s suggested flavor. Resize it with a resize job, or from PCD.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button className="btn btn-primary" onClick={close}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>Create private flavor</div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Name</label>
+              <input className="form-input" value={name} onChange={e => setName(e.target.value)} />
+            </div>
+            <div style={{ fontSize: 13 }}>
+              {flavorText(custom)} · {d.current_flavor.image_backed || custom.disk_gb
+                ? `${custom.disk_gb ?? 0} GB root disk` : "boots from a volume"}
+              {!!custom.ephemeral_gb && <> · {custom.ephemeral_gb} GB ephemeral</>}
+              {!!custom.swap_mb && <> · {custom.swap_mb} MB swap</>}
+            </div>
+            <ul style={{ fontSize: 12, color: "var(--gray-600)", margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+              <li>Private: only <strong>{tenant}</strong> can use it.</li>
+              <li>{specs
+                ? <>Its {specs} extra spec{specs === 1 ? "" : "s"} are copied from {d.current_flavor.name}, so it runs on the same hosts.</>
+                : <>{d.current_flavor.name} has no extra specs to copy.</>}</li>
+              <li>This doesn't resize {d.server_name}: a resize job or PCD does that.</li>
+            </ul>
+            {create.error && <div style={{ fontSize: 12, color: "var(--red)" }}>{errorDetail(create.error)}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="btn btn-primary" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
+                {create.isPending ? "Creating…" : "Create flavor"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

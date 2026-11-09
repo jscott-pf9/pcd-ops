@@ -5,6 +5,8 @@ A VM's class comes from its average CPU and RAM over the window (classify); the 
 flavor is a formula, not the AI's: the smallest flavor that would run the VM's average load at a
 target utilisation. The AI only comments. For the drill-down, `reasons` says why in words,
 `project` shows its use on another flavor and `alternatives` lists the other flavors that would do.
+When the catalog has no flavor that fits the need, or only one with a lot to spare (flavors
+usually grow CPU and RAM together), `custom_flavor` shapes one for the VM.
 
 Fit comes from Placement's headroom per host (services/overcommit.py rows): a resize goes to a
 host in the same cluster as the VM's current one, and the flavor's
@@ -25,6 +27,9 @@ CPU_TARGET = 70.0  # % a bigger flavor should run the VM at
 MEM_TARGET = 75.0
 BUSY_WARN = 90.0  # a flavor that would run the VM's busiest hours (p95) above this is tight
 ALTERNATIVES = 5
+CUSTOM_SLACK = 1.5  # a catalog flavor more than this times the need in vCPUs or RAM...
+CUSTOM_MIN_VCPUS = 2  # ...and over it by at least this much is a poor fit: shape one instead
+CUSTOM_MIN_RAM_MB = 4096
 AGG_SPEC = "aggregate_instance_extra_specs:"
 
 
@@ -178,6 +183,64 @@ def basis(rec: dict) -> dict | None:
                 "rule": f"The smallest flavor that runs its average {what}, and no smaller in "
                         "the other."}
     return None
+
+
+def _gb(mb: int) -> str:
+    return f"{mb / 1024:g} GB"
+
+
+def custom_flavor(rec: dict, choice: dict | None) -> dict | None:
+    """A flavor shaped for the VM when the catalog's `choice` (the suggested flavor) is None or
+    has a lot to spare: the basis in vCPUs and RAM (rounded up to a whole GB), the current
+    flavor's disks and swap (so an image-backed VM keeps its disk) and its extra specs (so it
+    stays in the same cluster). {name, vcpus, ram_mb, disk_gb, ephemeral_gb, swap_mb,
+    extra_specs, reason}, or None when the catalog does well enough or nothing should change."""
+    b, cur = basis(rec), rec.get("current_flavor") or {}
+    if not b:
+        return None
+    vcpus, ram = b["vcpus"], max(1024, math.ceil(b["ram_mb"] / 1024) * 1024)
+    if b["direction"] == "down" and not (vcpus < cur["vcpus"] or ram < cur["ram_mb"]):
+        return None
+    if choice is None:
+        what = ("smaller than now with room for its use" if b["direction"] == "down"
+                else "big enough")
+        reason = f"No flavor in the catalog it can resize to is {what}."
+    else:
+        spare = []
+        if choice["vcpus"] > vcpus * CUSTOM_SLACK and choice["vcpus"] - vcpus >= CUSTOM_MIN_VCPUS:
+            spare.append(f"{choice['vcpus'] - vcpus} more vCPUs")
+        if choice["ram_mb"] > ram * CUSTOM_SLACK and choice["ram_mb"] - ram >= CUSTOM_MIN_RAM_MB:
+            spare.append(f"{_gb(choice['ram_mb'] - ram)} more RAM")
+        if not spare:
+            return None
+        reason = (f"The closest catalog flavor, {choice['name']}, has {' and '.join(spare)} "
+                  "than it needs.")
+    disk = cur.get("disk_gb") or 0
+    return {
+        "name": f"rs.{vcpus}c{ram // 1024}g" + (f".{disk}d" if disk else ""),
+        "vcpus": vcpus, "ram_mb": ram, "disk_gb": disk,
+        "ephemeral_gb": cur.get("ephemeral_gb") or 0, "swap_mb": cur.get("swap_mb") or 0,
+        "extra_specs": cur.get("extra_specs") or {}, "reason": reason,
+    }
+
+
+def flavor_label(f: dict) -> str:
+    """"2 vCPUs, 14 GB RAM, 40 GB disk"."""
+    out = f"{f['vcpus']} vCPU{'s' if f['vcpus'] != 1 else ''}, {_gb(f['ram_mb'])} RAM"
+    return out + (f", {f['disk_gb']} GB disk" if f.get("disk_gb") else "")
+
+
+def same_shape(a: dict, b: dict) -> bool:
+    """Two flavors with the same vCPUs, RAM, disks and swap."""
+    return all((a.get(k) or 0) == (b.get(k) or 0)
+               for k in ("vcpus", "ram_mb", "disk_gb", "ephemeral_gb", "swap_mb"))
+
+
+def usable(flavors: list[dict], access: dict[str, list[str]], project_id: str | None) -> list[dict]:
+    """The flavors a project can use: public ones, and private ones (`public` False) whose
+    access list (`access`: flavor id → project ids) includes it."""
+    return [f for f in flavors
+            if f.get("public") is not False or project_id in access.get(f.get("id"), [])]
 
 
 def project(cur: dict, flavor: dict, stats: dict | None) -> dict:

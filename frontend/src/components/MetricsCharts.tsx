@@ -7,6 +7,7 @@ import {
 } from "../api/metrics";
 import { mergeSeries } from "./chartData";
 import { formatBytes, formatPct, formatRate } from "./format";
+import ChartFrame from "./ChartFrame";
 import TimeChart, { type SeriesDef } from "./TimeChart";
 
 type ChartDef = { title: string; series: SeriesDef[]; format: (v: number) => string; max?: number };
@@ -72,8 +73,11 @@ const FETCH: Record<MetricsKind, (id: string, r: Range) => Promise<History>> = {
 };
 
 /** History charts for one hypervisor, VM or storage backend, with a range picker. Hovering
- *  any chart moves the cursor on all of them to the same time. */
-export default function MetricsCharts({ kind, id, initialRange = "24h" }: { kind: MetricsKind; id: string; initialRange?: Range }) {
+ *  any chart moves the cursor on all of them to the same time. Each opens larger and copies as
+ *  an image, titled with `name` (the item's). */
+export default function MetricsCharts({ kind, id, name, initialRange = "24h" }: {
+  kind: MetricsKind; id: string; name?: string; initialRange?: Range;
+}) {
   const [range, setRange] = useState<Range>(initialRange);
   const syncId = `m${useId().replace(/[^a-z0-9]/gi, "")}`;
   const { data: status } = useQuery({ queryKey: ["metrics", "status"], queryFn: getMetricsStatus, staleTime: 60_000 });
@@ -115,21 +119,18 @@ export default function MetricsCharts({ kind, id, initialRange = "24h" }: { kind
             const rows = mergeSeries(Object.fromEntries(c.series.map(s => [s.key, data.series[s.key]])));
             const latest = (key: string) => { const s = data.series[key]; return s?.length ? s[s.length - 1].v : undefined; };
             return (
-              <div key={c.title} style={{ border: "1px solid var(--gray-100)", borderRadius: 8, padding: "8px 10px 4px" }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 2 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--gray-700)" }}>{c.title}</span>
-                  <span style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 11 }}>
-                    {c.series.map(s => latest(s.key) != null && (
-                      <span key={s.key} style={{ color: "var(--gray-500)" }}>
-                        {c.series.length > 1 && `${s.label} `}
-                        <strong style={{ color: s.color }}>{c.format(latest(s.key)!)}</strong>
-                      </span>
-                    ))}
+              <ChartFrame key={c.title} title={c.title} name={name} legend={c.series}
+                caption={`last ${data.days === 1 ? "24 hours" : `${data.days} days`}`}
+                values={c.series.map(s => latest(s.key) != null && (
+                  <span key={s.key} style={{ color: "var(--gray-500)" }}>
+                    {c.series.length > 1 && `${s.label} `}
+                    <strong style={{ color: s.color }}>{c.format(latest(s.key)!)}</strong>
                   </span>
-                </div>
-                <TimeChart data={rows} series={c.series} format={c.format} days={data.days}
-                  syncId={syncId} max={c.max} />
-              </div>
+                ))}
+                chart={(height, big) => (
+                  <TimeChart data={rows} series={c.series} format={c.format} days={data.days}
+                    syncId={big ? `${syncId}big` : syncId} max={c.max} height={height} />
+                )} />
             );
           })}
         </div>

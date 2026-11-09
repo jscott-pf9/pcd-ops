@@ -131,8 +131,9 @@ def init_db() -> None:
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
 
-def cache_set(key: str, data: Any) -> str:
-    collected_at = datetime.utcnow().isoformat()
+def cache_set(key: str, data: Any, collected_at: str | None = None) -> str:
+    """Store `data` under `key`, collected now (or at `collected_at`, to edit it in place)."""
+    collected_at = collected_at or datetime.utcnow().isoformat()
     with _connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO cache (key, data, collected_at) VALUES (?, ?, ?)",

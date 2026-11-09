@@ -99,7 +99,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
 - `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
 - `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once) and the volume → VM disk series that joins libvirt disk stats to volumes and backends; whether a server group's placement meets its policy
-- `services/capacity.py`, `services/rightsizing.py` — what the cloud can allocate (Placement for vCPUs and RAM, Cinder backends' written GB for storage; not quota sums) and what-if with a tenant's quotas; a VM's class, the suggested flavor (smaller or bigger; an image-backed VM keeps its root disk), whether a host in the VM's cluster has room for it, and the drill-down's reasons, projected use and alternatives
+- `services/capacity.py`, `services/rightsizing.py` — what the cloud can allocate (Placement for vCPUs and RAM, Cinder backends' written GB for storage; not quota sums) and what-if with a tenant's quotas; a VM's class, the suggested flavor (smaller or bigger; an image-backed VM keeps its root disk), whether a host in the VM's cluster has room for it, the drill-down's reasons, projected use and alternatives, and a flavor shaped for the VM when the catalog fits badly (`custom_flavor`). Candidates are public flavors plus private ones the VM's tenant has access to
 - `services/overcommit.py` — CPU and memory overcommit (pure functions): Placement's allocation per host (resource provider UUID = Nova hypervisor id) against the 95th percentile of host load and VM CPU wait; a status and reason per host, summed per cluster
 - `services/reclamation.py` — Reclamation & Warnings rules (pure functions over records): stopped, idle and orphaned VMs, unused images, orphaned ports, unused routers and networks, empty tenants. The collector, the `resource-reclamation` job and Right-Sizing's idle class all use them. PCD's `admin` project is never shown as a tenant
 - `services/anomaly.py` — statistical anomaly detection: each VM's and host's last hour against its usual (same hour on earlier days, z-score, minimum real change); the AI only explains the findings (`collector.explain_anomalies`)
@@ -118,7 +118,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `api/auth.ts` — Session, login/logout, setup and background-access calls
 - `pages/Login.tsx`, `pages/Setup.tsx` — rendered outside the shell; `AuthGate` in `App.tsx` guards everything else
 - `pages/` — One page component per feature domain
-- `components/` — Shared UI (charts, data tables, stat cards)
+- `components/` — Shared UI (charts, data tables, stat cards). `ChartFrame.tsx` gives a chart its pop-out and copy-as-image (`chartImage.ts`; saves a PNG where the browser can't copy images, i.e. not HTTPS)
 
 ### Feature Domains
 Each feature has a backend router and a frontend page:
@@ -129,7 +129,7 @@ Each feature has a backend router and a frontend page:
 | Capacity Planning | `api/capacity.py` (overcommit rules in `services/overcommit.py`) | `pages/Capacity.tsx`, `pages/overcommit/` (Overcommit), `pages/CapacityPlans.tsx` |
 | Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All; live properties from `GET /inventory/{kind}/{id}/details` with the user's token) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
-| Right-Sizing | `api/rightsizing.py` (rules in `services/rightsizing.py`) | `pages/rightsizing/` (`RightSizing.tsx` list, `RightSizingDetail.tsx` drill-down at `/rightsizing/<id>`, `model.ts`) |
+| Right-Sizing | `api/rightsizing.py` (rules in `services/rightsizing.py`; `POST /rightsizing/recommendations/{id}/flavor` creates the shaped flavor, private to the VM's tenant, with the user's token) | `pages/rightsizing/` (`RightSizing.tsx` table with class, tenant and search filters in the URL, `RightSizingDetail.tsx` drill-down at `/rightsizing/<id>`, `model.ts`) |
 | Anomaly Detection | `api/anomaly.py` (`services/anomaly.py`) | `pages/Anomaly.tsx`, `pages/anomaly.ts` |
 | Log Analysis | `api/logs.py` | `pages/Logs.tsx` |
 | Login | `api/auth.py` | `pages/Login.tsx` |
