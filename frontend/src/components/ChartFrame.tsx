@@ -37,23 +37,31 @@ export default function ChartFrame({ height = 170, ...p }: Props) {
 function Header({ title, values, name, caption, subtitle, summary, target, big, onExpand, onClose }: Omit<Props, "chart" | "height"> & {
   target: React.RefObject<HTMLDivElement>; big?: boolean; onExpand?: () => void; onClose?: () => void;
 }) {
-  const [done, setDone] = useState<"" | "ok" | "failed">("");
+  // Which button just worked or failed, for a moment
+  const [done, setDone] = useState<{ action: "copy" | "save"; ok: boolean } | null>(null);
   const copyable = canCopyImage();
   const label = [name, title, caption].filter(Boolean).join(" · ");
-  const copy = async () => {
+  const run = async (action: "copy" | "save") => {
     if (!target.current) return;
     try {
       const png = chartPng(target.current, { title: label, subtitle, summary });
-      if (copyable) await copyImage(png);
+      if (action === "copy") await copyImage(png);
       else saveImage(await png, pngName(label));
-      setDone("ok");
+      setDone({ action, ok: true });
     } catch {
-      setDone("failed");
+      setDone({ action, ok: false });
     }
-    setTimeout(() => setDone(""), 1500);
+    setTimeout(() => setDone(null), 1500);
   };
-  const Icon = done === "ok" ? Check : copyable ? Copy : Download;
-  const what = copyable ? "Copy as image" : "Save as PNG (copying images needs HTTPS)";
+  const button = (action: "copy" | "save", Icon: typeof Copy, what: string) => {
+    const d = done?.action === action ? done : null;
+    return (
+      <IconButton title={d && !d.ok ? "Couldn't make the image" : what} onClick={() => run(action)}
+        color={d ? (d.ok ? "var(--green)" : "var(--red)") : undefined}>
+        {d?.ok ? <Check size={13} /> : <Icon size={13} />}
+      </IconButton>
+    );
+  };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 2 }}>
       <span style={{ fontSize: big ? 14 : 12, fontWeight: 600, color: "var(--gray-700)" }}>
@@ -62,8 +70,12 @@ function Header({ title, values, name, caption, subtitle, summary, target, big, 
       <span style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 11, alignItems: "baseline", flexWrap: "wrap",
         justifyContent: "flex-end" }}>{values}</span>
       <span style={{ display: "flex", gap: 2 }}>
-        <IconButton title={done === "failed" ? "Couldn't make the image" : what} onClick={copy}
-          color={done === "ok" ? "var(--green)" : done === "failed" ? "var(--red)" : undefined}><Icon size={13} /></IconButton>
+        {/* Copying images needs HTTPS; without it the one button saves instead. The pop-out
+            offers both. */}
+        {copyable
+          ? button("copy", Copy, "Copy as image")
+          : button("save", Download, "Save as PNG (copying images needs HTTPS)")}
+        {copyable && big && button("save", Download, "Download as PNG")}
         {onExpand && <IconButton title="Open larger, with min, average and max" onClick={onExpand}><Maximize2 size={13} /></IconButton>}
         {onClose && <IconButton title="Close (Esc)" onClick={onClose}><X size={15} /></IconButton>}
       </span>
