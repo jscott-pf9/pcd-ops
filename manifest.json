@@ -53,7 +53,12 @@
     {
       "protocol": "tcp",
       "port": 80,
-      "purpose": "Web UI"
+      "purpose": "Web UI over HTTP (redirects to HTTPS) and the health check"
+    },
+    {
+      "protocol": "tcp",
+      "port": 443,
+      "purpose": "Web UI over HTTPS"
     }
   ],
   "configuration": [

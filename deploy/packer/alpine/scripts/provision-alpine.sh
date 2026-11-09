@@ -21,7 +21,7 @@ fi
 echo "=== Installing system packages ==="
 apk update
 apk add --no-cache \
-  nginx git curl bash sudo \
+  nginx git curl bash sudo openssl \
   python3 py3-pip \
   gcc musl-dev python3-dev libffi-dev openssl-dev \
   nodejs npm gum \
@@ -90,16 +90,22 @@ chmod 755 /etc/init.d/pcd-ops-metrics
 rc-update add pcd-ops-metrics default
 
 echo "=== Installing nginx config ==="
-# Alpine nginx uses http.d/ not sites-available/sites-enabled
+# Alpine nginx uses http.d/ not sites-available/sites-enabled. HTTP and HTTPS; the app's
+# locations are included from the repo (deploy/nginx/pcd-ops-app.conf), and the certificate is
+# made at first boot by pcd-ops-tls (never in the image).
 cp "$APP_DIR/deploy/nginx/pcd-ops.conf" /etc/nginx/http.d/pcd-ops.conf
 rm -f /etc/nginx/http.d/default.conf
 rc-update add nginx default
+cp "$APP_DIR/deploy/openrc/pcd-ops-tls" /etc/init.d/pcd-ops-tls
+chmod 755 /etc/init.d/pcd-ops-tls
+rc-update add pcd-ops-tls default
 
 echo "=== Configuring sudo for self-update ==="
 chmod +x "$APP_DIR/deploy/scripts/update.sh"
 chmod +x "$APP_DIR/deploy/scripts/appliance-console.sh"
 chmod +x "$APP_DIR/deploy/scripts/appliance-console-gum.sh"
 chmod +x "$APP_DIR/deploy/scripts/reset-setup.sh"
+chmod +x "$APP_DIR/deploy/scripts/tls.sh"
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops restart\n' > /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /sbin/rc-service pcd-ops-metrics restart\n' >> /etc/sudoers.d/pcd-ops
 printf 'pcd-ops ALL=(ALL) NOPASSWD: /usr/sbin/nginx -s reload\n'        >> /etc/sudoers.d/pcd-ops

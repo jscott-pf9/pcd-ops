@@ -32,6 +32,11 @@ HR=$(awk -v n="$BOX_INNER" 'BEGIN{ for(i=0;i<n;i++) printf "─"; }')
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# http:// or https://, depending on whether nginx serves HTTPS
+web_scheme() {
+  if grep -q "listen 443" /etc/nginx/http.d/pcd-ops.conf 2>/dev/null; then echo https; else echo http; fi
+}
+
 get_ip() {
   ip -4 addr show scope global 2>/dev/null \
     | awk '/inet /{print $2}' | cut -d/ -f1 | head -1
@@ -120,7 +125,7 @@ draw_header() {
   box_row ""
   box_row "  Version:     ${VER}"
   box_row "  IP Address:  ${IP:-not assigned}"
-  box_row "  Web URL:     http://${IP:-<not assigned>}/"
+  box_row "  Web URL:     $(web_scheme)://${IP:-<not assigned>}/"
   box_row "  System:      Alpine Linux v${ALPINE}" "${DIM}"
   box_mid
 }
@@ -157,11 +162,12 @@ pick_advanced_menu() {
     --cursor ">  " \
     --cursor.foreground "$C_YELLOW" \
     --selected.foreground "$C_WHITE" \
-    --height 10 \
+    --height 11 \
     "  Force App Update  (git pull + rebuild)" \
     "  Patch OS  (apk update + upgrade)" \
     "  View App Logs" \
     "  Metrics Store  (status, restart)" \
+    "  HTTPS  (certificate, enable)" \
     "  Network Info" \
     "  Reset Setup  (forget background access)" \
     "  Emergency Shell" \
@@ -270,6 +276,34 @@ do_metrics_store() {
   fi
 }
 
+do_https() {
+  clear
+  printf "\n"
+  box_top
+  box_row_c "HTTPS" "${BBLU}${BOLD}"
+  box_row_c "The web UI's certificate (upload one in Settings → HTTPS)" "${DIM}"
+  box_bot
+  printf "\n"
+  if [ "$(web_scheme)" = "https" ]; then
+    sh "$APP_DIR/deploy/scripts/tls.sh" show 2>&1 | sed 's/^/  /'
+    printf "\n"
+    if gum confirm --affirmative "Regenerate" --negative "Back" --default=false \
+      "Replace it with a new self-signed certificate for this appliance's names and addresses?"; then
+      printf "\n"
+      sh "$APP_DIR/deploy/scripts/tls.sh" regenerate 2>&1 | sed 's/^/  /'
+      pause
+    fi
+  else
+    printf "  ${YEL}HTTPS isn't set up on this appliance yet.${RST}\n\n"
+    if gum confirm --affirmative "Enable HTTPS" --negative "Back" --default=false \
+      "Set up HTTPS on port 443 with a self-signed certificate? Plain HTTP will redirect to it."; then
+      printf "\n"
+      sh "$APP_DIR/deploy/scripts/tls.sh" enable 2>&1 | sed 's/^/  /'
+      pause
+    fi
+  fi
+}
+
 do_view_logs() {
   clear
   printf "\n"
@@ -336,6 +370,7 @@ advanced_loop() {
       *"Patch OS"*)          do_patch_os ;;
       *"View App Logs"*)     do_view_logs ;;
       *"Metrics Store"*)     do_metrics_store ;;
+      *"HTTPS"*)             do_https ;;
       *"Network Info"*)      do_network_info ;;
       *"Reset Setup"*)       do_reset_setup ;;
       *"Emergency Shell"*)   do_emergency_shell ;;

@@ -10,6 +10,6 @@ output "vm_ip" {
 
 output "app_url" {
   description = "URL for the pcd-ops UI (once cloud-init completes)"
-  value       = "http://${openstack_compute_instance_v2.pcd_ops.access_ip_v4}"
+  value       = "https://${openstack_compute_instance_v2.pcd_ops.access_ip_v4}"
 }
 

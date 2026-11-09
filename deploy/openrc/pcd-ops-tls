@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+description="PCD Ops: a certificate for nginx's HTTPS (self-signed at first boot)"
+
+depend() {
+  need net
+  before nginx
+}
+
+start() {
+  ebegin "Checking the PCD Ops HTTPS certificate"
+  /opt/pcd-ops/deploy/scripts/tls.sh ensure
+  eend $?
+}

@@ -66,6 +66,7 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 - [Rightsizing](#rightsizing)
 - [Snapshots](#snapshots)
 - [System](#system)
+- [Tls](#tls)
 
 ---
 
@@ -1392,6 +1393,110 @@ Reboot the appliance VM (response returns before the reboot completes).
 ### **POST** `/api/system/update`
 
 Trigger a self-update: runs deploy/scripts/update.sh detached (git pull + pip install + npm build + service restart).
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Tls
+
+### **GET** `/api/tls`
+
+HTTPS on this appliance: whether nginx serves it (`https_enabled`; older appliances turn
+
+it on from the console), whether plain HTTP redirects to it, the certificate (subject,
+names, issuer, validity, fingerprint, chain length), a CSR waiting for its certificate, and
+the names a new self-signed certificate would cover.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/tls/self-signed`
+
+Make a new self-signed certificate for `names` (the first is its common name) and
+
+serve it.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `names` | array | yes | — | Names |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/tls/certificate`
+
+Install a certificate (PEM; the certificate first, then its chain) and its key. Without
+
+a key, the pending CSR's key is used. 422 says what's wrong with them.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `certificate` | string | yes | — | Certificate |
+| `key` | string | no | — | Key |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/tls/certificate.pem`
+
+The certificate and its chain, to trust a self-signed one on a computer.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/tls/csr`
+
+Make a key and a certificate signing request for `names` (the first is its common name).
+
+The key stays on the appliance; upload the signed certificate without a key to use it.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `names` | array | yes | — | Names |
+| `organization` | string | no | `""` | Organization |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/tls/csr`
+
+Discard Csr
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/tls/csr.pem`
+
+Download Csr
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **PUT** `/api/tls/redirect`
+
+Plain HTTP redirects to HTTPS, or serves the app as well. /api/health stays on HTTP
+
+either way, for the catalog's health check.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `redirect` | boolean | yes | — | Redirect |
 
 **Response:** 200 — Successful Response  
 

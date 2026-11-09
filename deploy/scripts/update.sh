@@ -18,8 +18,9 @@ npm ci --prefer-offline
 npm run build
 
 echo "=== Reloading nginx config ==="
-# Apply any nginx config changes from the updated repo (e.g. new cache headers).
-# -s reload is a graceful reload — no dropped connections.
+# Applies changes to deploy/nginx/pcd-ops-app.conf, which nginx includes from the repo on
+# appliances with HTTPS set up. (pcd-ops.conf itself is a copy in /etc/nginx: changing it
+# needs the console.) -s reload is a graceful reload — no dropped connections.
 if command -v rc-service >/dev/null 2>&1; then
   sudo nginx -s reload 2>/dev/null || true
 else

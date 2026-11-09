@@ -6,6 +6,7 @@ Fast  (inventory, reclamation, capacity, overcommit, config changes, anomalies, 
 Slow  (capacity trends, the AI's anomaly explanation — 1 AI call each): every 1 hour.
 Daily (right-sizing — 1 AI call per VM):                   per its schedule in Settings
                                                             (checked hourly).
+HTTPS certificate expiry: hourly; an alert 30 and 7 days before, and once it has expired.
 """
 
 import asyncio
@@ -203,6 +204,7 @@ async def scheduler_loop() -> None:
         (SLOW_INTERVAL,      run_slow),
         (SLOW_INTERVAL,      run_daily),       # gated by ai_rightsizing_schedule
         (DAILY_INTERVAL,     _run_retention_cleanup),
+        (SLOW_INTERVAL,      check_certificate),
     ]
     start = time.monotonic()
     last_run = [start] * len(tasks)
@@ -213,6 +215,50 @@ async def scheduler_loop() -> None:
             if time.monotonic() - last_run[i] >= interval:
                 last_run[i] = time.monotonic()
                 await task()
+
+
+def certificate_level(days_left: int, expired: bool) -> str | None:
+    """The alert severity for a certificate's remaining days: critical once expired, high
+    within 7 days, medium within 30."""
+    if expired:
+        return "critical"
+    if days_left <= 7:
+        return "high"
+    if days_left <= 30:
+        return "medium"
+    return None
+
+
+async def check_certificate() -> None:
+    """Alert when the HTTPS certificate nears expiry: once per level (30 days, 7 days,
+    expired) per certificate, so it isn't repeated every hour."""
+    from app.appliance import tls
+    from app.services import alerts
+    try:
+        pem = tls.current()
+        if not pem or not tls.https_enabled():
+            return
+        info = tls.describe(pem)
+    except Exception as e:
+        logger.warning("Certificate check failed: %s", e)
+        return
+    level = certificate_level(info["days_left"], info["expired"])
+    sent, _ = db.cache_get("tls:expiry_alerted")
+    if not level or (sent and sent.get("fingerprint") == info["fingerprint_sha256"]
+                     and alerts.rank(sent.get("severity", "")) >= alerts.rank(level)):
+        return
+    when = (f"expired on {info['not_after'][:10]}" if info["expired"]
+            else f"expires in {info['days_left']} days ({info['not_after'][:10]})")
+    await alerts.raise_alert(alerts.Alert(
+        source="certificate", key="tls:expiry", severity=level,
+        title=f"PCD Ops HTTPS certificate {when}",
+        body=("Browsers will refuse the appliance until it's replaced. " if info["expired"] else "")
+        + "Upload a new one or regenerate the self-signed one in Settings → HTTPS.",
+        fields=[["Certificate", info["subject"]], ["Issuer", info["issuer"]],
+                ["Valid until", info["not_after"][:10]]],
+        link="/settings?tab=https"))
+    db.cache_set("tls:expiry_alerted",
+                 {"fingerprint": info["fingerprint_sha256"], "severity": level})
 
 
 async def _run_due_jobs() -> None:

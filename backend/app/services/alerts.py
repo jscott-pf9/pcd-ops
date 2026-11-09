@@ -19,14 +19,14 @@ from app.services import db, notifications
 logger = logging.getLogger(__name__)
 
 SEVERITIES = ("low", "medium", "high", "critical")
-SOURCES = ("anomaly", "drift", "job")
+SOURCES = ("anomaly", "drift", "job", "certificate")
 CHANNELS = ("email", "webhook", "slack")
 SLACK_COLOR = {"low": "#6b7280", "medium": "#d97706", "high": "#dc2626", "critical": "#7f1d1d"}
 
 
 @dataclass
 class Alert:
-    source: str           # anomaly | drift | job | test
+    source: str           # anomaly | drift | job | certificate | test
     key: str              # the same key within the cooldown is one alert, e.g. job:3
     severity: str         # one of SEVERITIES
     title: str

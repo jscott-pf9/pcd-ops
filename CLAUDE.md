@@ -81,6 +81,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
   - Unattended work (scheduler collectors, scheduled jobs) uses the **background application credential** minted at `/setup` (`api/access.py`, `appliance/app_credentials.py`).
   - Call `report_background_failure(exc)` on errors from background work: Keystone rejecting the credential (401, or 404 from `/auth/tokens` when it was deleted) marks it failed → re-authorize banner + `setup_required` in `/api/health`.
 - **Console TUI** "Reset setup" (`deploy/scripts/reset-setup.sh`) forgets the credential and logs everyone out.
+- **HTTPS** (APPLIANCE_STANDARD §7.9, `appliance/tls.py`, `api/tls.py`, Settings → HTTPS): nginx serves 443 with `<state dir>/tls/cert.pem` + `key.pem`; port 80 answers `/api/health` and otherwise does what `tls/http.conf` says (redirect, the default, or include the app). First boot: OpenRC `pcd-ops-tls` runs `deploy/scripts/tls.sh ensure` before nginx (self-signed, via the app's own Python; openssl fallback). Settings regenerates, uploads (checked: key matches, valid, chain order), makes a CSR (key stays in `tls/pending-key.pem`) and reloads nginx with `sudo nginx -s reload`. Console: Advanced → HTTPS (regenerate; **Enable HTTPS** for appliances built before it, which copies `deploy/nginx/pcd-ops.conf` into `/etc/nginx`). The app's locations are in `deploy/nginx/pcd-ops-app.conf`, included from the repo, so updates change them; `pcd-ops.conf` itself only changes through the image or the console. Expiry alerts at 30 and 7 days and when expired (`runner.check_certificate`).
 
 ### Metrics: PCD Ops' own store, and PCD's Grafana
 - **Own store (host and VM metrics):** VictoriaMetrics single-node on the appliance (`pcd-ops-metrics`, `127.0.0.1:8428`) scrapes node-exporter (`:9388`) and libvirt-exporter (`:9177`) on every hypervisor. `services/local_metrics.py` writes its scrape config, targets (labelled `hypervisor_id`, `hypervisor`, `host_ip`) and retention in the state dir. `services/exporters.py` probes the exporters (Inventory → Hypervisors → Probe exporters).
@@ -94,7 +95,7 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `config.py` — App settings via Pydantic BaseSettings (env, then `settings.json` overrides). Read `settings.<field>` when the work runs, never at import, so saved changes apply at once
 - `dependencies.py` — FastAPI dependency injection: OpenStack connection, Prometheus client, AI provider
 - `api/` — One router per feature domain (see table below)
-- `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir)
+- `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir), `tls.py` (HTTPS certificate)
 - `services/openstack.py` — Wraps `openstacksdk`; all features import from here, never instantiate `openstack.connect()` elsewhere. `get_connection()` returns the user's connection inside `acting_as()`, else the background one
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
 - `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
@@ -138,6 +139,7 @@ Each feature has a backend router and a frontend page:
 | Config Changes | `api/drift.py` (`services/drift.py`) | `pages/drift/` (`ChangeLog.tsx`, `model.ts`) |
 | Alerts | `api/alerts.py` (`services/alerts.py`) | `pages/settings/SettingsAlerts.tsx` |
 | Settings | `api/settings.py` | `pages/settings/Settings.tsx` (one page, tabs in `?tab=`), `pages/settings/*.tsx` |
+| HTTPS certificate | `api/tls.py` (`appliance/tls.py`) | `pages/settings/SettingsHttps.tsx` |
 | System (version/update) | `api/system.py` | `pages/settings/SettingsUpdates.tsx` |
 
 ### Available Prometheus Metrics (openstack-exporter)
@@ -166,7 +168,8 @@ Production runs as a dedicated Alpine Linux appliance VM. The image is a qcow2 b
 **Release:** `deploy/release.sh` — build → boot tests (UEFI + BIOS) → manifest validation → GitHub release (three assets, public) → anonymous download check → PR to the extension index `jscott-pf9/pcd-extensions`. Don't publish or open the index PR without Jeff's approval.
 
 **Runtime on VM:**
-- nginx on port 80 — serves `frontend/dist/` and proxies `/api/` to uvicorn
+- nginx on 443 (HTTPS, certificate in `/var/lib/pcd-ops/tls`) and 80 (`/api/health`, and a redirect to HTTPS unless Settings turns it off) — serves `frontend/dist/` and proxies `/api/` to uvicorn (`deploy/nginx/`)
+- OpenRC service `pcd-ops-tls` — a self-signed certificate at first boot, before nginx
 - OpenRC service `pcd-ops` — uvicorn on `127.0.0.1:8000`
 - OpenRC service `pcd-ops-metrics` — VictoriaMetrics on `127.0.0.1:8428` (`deploy/openrc/run-metrics.sh`), data in `/var/lib/pcd-ops/metrics`
 - `/etc/pcd-app/config.env` then `/opt/pcd-ops/.env`, sourced by `deploy/openrc/run-uvicorn.sh`

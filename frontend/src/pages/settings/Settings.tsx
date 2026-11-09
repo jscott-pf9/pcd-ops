@@ -1,6 +1,7 @@
 import { useSearchParams } from "react-router-dom";
 import SettingsAI from "./SettingsAI";
 import SettingsAlerts from "./SettingsAlerts";
+import SettingsHttps from "./SettingsHttps";
 import SettingsConnection from "./SettingsConnection";
 import SettingsMetrics from "./SettingsMetrics";
 import SettingsStatus from "./SettingsStatus";
@@ -14,6 +15,7 @@ export const SETTINGS_TABS = [
   { id: "metrics",    label: "Metrics",    Page: SettingsMetrics },
   { id: "ai",         label: "AI",         Page: SettingsAI },
   { id: "alerts",     label: "Alerts",     Page: SettingsAlerts },
+  { id: "https",      label: "HTTPS",      Page: SettingsHttps },
   { id: "software",   label: "Software",   Page: SettingsUpdates },
 ] as const;
 
@@ -24,7 +26,7 @@ export default function Settings() {
   return (
     <div>
       <h1>Settings</h1>
-      <div className="tabs" role="tablist" style={{ marginBottom: "1.25rem" }}>
+      <div className="tabs" role="tablist" style={{ marginBottom: "1.25rem", overflowX: "auto" }}>
         {SETTINGS_TABS.map(t => (
           <button key={t.id} role="tab" aria-selected={t.id === active.id}
             className={`tab${t.id === active.id ? " active" : ""}`}

@@ -23,6 +23,11 @@ get_ip() {
     | awk '/inet /{print $2}' | cut -d/ -f1 | head -1
 }
 
+# http:// or https://, depending on whether nginx serves HTTPS
+web_scheme() {
+  if grep -q "listen 443" /etc/nginx/http.d/pcd-ops.conf 2>/dev/null; then echo https; else echo http; fi
+}
+
 get_status() {
   if rc-service pcd-ops status >/dev/null 2>&1; then
     printf "${G}● Running${N}"
@@ -75,7 +80,7 @@ draw_main() {
   printf "\n"
   printf "  System Status:    $(get_status)\n"
   printf "  IP Address:       ${W}${IP:-not assigned}${N}\n"
-  printf "  Web Interface:    ${W}http://${IP:-<ip-not-assigned>}/${N}\n"
+  printf "  Web Interface:    ${W}$(web_scheme)://${IP:-<ip-not-assigned>}/${N}\n"
   printf "\n"
   printf "  ${D}──────────────────────────────────────────────────${N}\n"
   printf "\n"
@@ -108,6 +113,7 @@ draw_advanced() {
   printf "  ${W}│${N}  ${Y}[P]${N}  Patch OS (apk update + upgrade)        ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[L]${N}  View app logs                          ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[M]${N}  Metrics store (status, restart)        ${W}│${N}\n"
+  printf "  ${W}│${N}  ${Y}[H]${N}  HTTPS (certificate, enable)            ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[N]${N}  Network info                           ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[R]${N}  Reset setup (forget background access) ${W}│${N}\n"
   printf "  ${W}│${N}  ${Y}[X]${N}  Emergency shell                        ${W}│${N}\n"
@@ -185,6 +191,30 @@ do_metrics_store() {
   fi
 }
 
+do_https() {
+  printf "${CLS}"
+  printf "\n  ${W}HTTPS${N} ${D}— the web UI's certificate (upload one in Settings → HTTPS)${N}\n"
+  printf "  ${D}──────────────────────────────────────────────────────${N}\n\n"
+  if [ "$(web_scheme)" = "https" ]; then
+    sh "$APP_DIR/deploy/scripts/tls.sh" show 2>&1 | sed 's/^/  /'
+    printf "\n  Type ${W}regenerate${N} for a new self-signed certificate, or Enter to go back: "
+    read -r answer
+    if [ "$answer" = "regenerate" ]; then
+      sh "$APP_DIR/deploy/scripts/tls.sh" regenerate 2>&1 | sed 's/^/  /'
+      press_any_key
+    fi
+  else
+    printf "  ${Y}HTTPS isn't set up on this appliance yet.${N}\n"
+    printf "  Type ${W}enable${N} to set it up on port 443 with a self-signed certificate\n"
+    printf "  (plain HTTP will redirect to it), or Enter to go back: "
+    read -r answer
+    if [ "$answer" = "enable" ]; then
+      sh "$APP_DIR/deploy/scripts/tls.sh" enable 2>&1 | sed 's/^/  /'
+      press_any_key
+    fi
+  fi
+}
+
 do_network_info() {
   printf "${CLS}"
   printf "\n  ${W}Network Information${N}\n"
@@ -214,7 +244,7 @@ do_emergency_shell() {
   printf "\n"
   printf "  ${Y}Warning:${N} This drops to a root shell.\n"
   IP=$(get_ip)
-  printf "  Use the web interface at ${W}http://${IP:-<ip>}/${N} for configuration.\n"
+  printf "  Use the web interface at ${W}$(web_scheme)://${IP:-<ip>}/${N} for configuration.\n"
   printf "  Type ${D}exit${N} when done to return to the appliance menu.\n\n"
   /bin/sh
 }
@@ -230,6 +260,7 @@ advanced_menu() {
       p) do_patch_os ;;
       l) do_view_logs ;;
       m) do_metrics_store ;;
+      h) do_https ;;
       n) do_network_info ;;
       r) do_reset_setup ;;
       x) do_emergency_shell ;;

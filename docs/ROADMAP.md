@@ -261,7 +261,13 @@ Phase 8 is on hold; Phase 9 ships after Phase 7 as 0.8.1 (alerting), 0.8.2 (conf
   - ⬜ A CI workflow.
   - ⬜ Playwright in the repo. UI checks so far are scripts against a local harness with lab data, not committed.
   - ⬜ Refresh [testing-plan.md](testing-plan.md), which still says no tests exist.
-- ⬜ **HTTPS** (APPLIANCE_STANDARD §7.9): a self-signed certificate at first boot, certificate upload, a redirect from HTTP, and "regenerate" in the console. The session cookie then gets `Secure`, and the charts' Copy button works (browsers allow copying images only over HTTPS; on HTTP it saves a PNG).
+- 🧪 **HTTPS** (APPLIANCE_STANDARD §7.9; `appliance/tls.py`, Settings → **HTTPS**, on `feature/phase7`):
+  - A self-signed certificate at first boot (OpenRC `pcd-ops-tls`, before nginx; the host name, instance name and addresses), served on 443. Plain HTTP redirects to HTTPS except `/api/health`; Settings can turn the redirect off. The session cookie gets `Secure`, and the charts' Copy button works (browsers allow copying images only in a secure context; a self-signed certificate counts once accepted, checked in Chrome).
+  - Settings shows the certificate (names, issuer, validity, fingerprint, chain) and warns when it doesn't cover the address in use. **Download** it to trust it on a computer; **New self-signed** for other names or a floating IP; **Create CSR** (the key stays on the appliance; upload the signed certificate without a key); **Upload** a certificate, chain and key, checked first (key matches, valid now, chain order). Each change reloads nginx and checks it serves the new certificate, and is logged.
+  - Console → Advanced → **HTTPS**: show and regenerate; **Enable HTTPS** for appliances built before it (installs the nginx config and the boot service). The manifest and Terraform open 443.
+  - Alerts 30 and 7 days before the certificate expires, and once it has.
+  - Checked on Alpine 3.21 with nginx in a container: Enable HTTPS from the old config, the redirect and `/api/health` on HTTP, a certificate installed by the app as `pcd-ops` through sudo, console regenerate, the openssl fallback.
+- ⬜ HTTPS on the lab appliance: Enable HTTPS from the console, allow 443, then upload a CA-signed certificate. And a new image's first boot (`deploy/release.sh --preflight`).
 - ⬜ **Versioned upgrades with rollback** instead of `git pull` of `main` on the appliance. Today that `git pull` also needs GitHub and npm access from the VM. The standard puts upgrades in the catalog.
 - ⬜ **Data:**
   - The SQLite database moves from `/opt/pcd-ops/backend/data` to `/var/lib/pcd-ops`.

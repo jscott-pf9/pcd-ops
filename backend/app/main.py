@@ -26,6 +26,7 @@ from app.api import (
     settings,
     snapshots,
     system,
+    tls,
 )
 from app.appliance import web_auth
 from app.services import local_metrics
@@ -95,6 +96,7 @@ for router in (
     events.router,
     alerts.router,
     drift.router,
+    tls.router,
 ):
     app.include_router(router, prefix="/api")
 
