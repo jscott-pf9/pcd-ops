@@ -55,7 +55,7 @@ export function VolumeDetail({ item: v, ctx }: DetailProps) {
           ]} />
       </Section>
       <Section title="I/O" full>
-        <MetricsCharts kind="volume" id={v.id} name={v.name || v.id} />
+        <MetricsCharts kind="volume" id={v.id} context={[["Volume", v.name || v.id], ["Tenant", ctx.tenant(v.project_id)], ["Backend", v.backend], ["Attached to", attachments.map((a: any) => servers.data?.find(s => s.id === a.server_id)?.name ?? a.server_id).filter(Boolean).join(", ")]]} />
         <p className="text-muted" style={{ fontSize: 11, margin: "8px 0 0" }}>
           From the hypervisor's view of the VM disk this volume is attached as. How full the filesystem
           inside is needs a guest agent; "Allocated" is what the host sees written (file-backed volumes
@@ -110,7 +110,7 @@ export function StorageBackendDetail({ item: b }: DetailProps) {
         ]} />
       </Section>
       <Section title="Capacity and I/O" full>
-        <MetricsCharts kind="storage" id={b.name} name={b.name} />
+        <MetricsCharts kind="storage" id={b.name} context={[["Storage backend", b.name], ["Volumes", String(vols.length)]]} />
       </Section>
       <Section title={`Pools (${b.pools?.length ?? 0})`} full aside={b.shared ? "One shared store, reported by each host" : undefined}>
         <RelatedTable rows={b.pools ?? []} rowKey={(p: any) => p.name}

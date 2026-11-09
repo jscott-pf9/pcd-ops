@@ -127,7 +127,7 @@ export default function RightSizingDetail() {
       </Section>
 
       <Section title="History" full>
-        <MetricsCharts kind="vm" id={d.server_id} name={d.server_name} initialRange={(d.window_days ?? 7) >= 30 ? "30d" : "7d"} />
+        <MetricsCharts kind="vm" id={d.server_id} context={[["VM", d.server_name], ["Tenant", tenant ?? d.project_id], ["Host", d.hypervisor], ["Flavor", d.current_flavor.name]]} initialRange={(d.window_days ?? 7) >= 30 ? "30d" : "7d"} />
       </Section>
     </DetailPage>
   );

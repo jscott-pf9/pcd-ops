@@ -29,18 +29,36 @@ export function pngName(title: string): string {
   return `${title.toLowerCase().replace(/[^a-z0-9.]+/g, "-").replace(/^-+|-+$/g, "") || "chart"}.png`;
 }
 
-export type LegendItem = { label: string; color: string };
+/** One series' statistics over the chart's range, already formatted. */
+export interface ChartSummary {
+  label: string; color: string; now: string; min: string; avg: string; p95: string; max: string; maxAt: string;
+}
 
-/** The first chart SVG in `container`, drawn at 2× on white with `title` above it and, for
- *  more than one series, a legend. */
-export async function chartPng(container: HTMLElement, title: string, legend: LegendItem[] = []): Promise<Blob> {
+const COLS: [string, keyof ChartSummary][] = [
+  ["Now", "now"], ["Min", "min"], ["Average", "avg"], ["p95", "p95"], ["Max", "max"], ["Max at", "maxAt"],
+];
+
+/** The first chart SVG in `container`, drawn at 2× on white: the title, a subtitle (what and
+ *  when), the chart, and a table of each series' statistics. */
+export async function chartPng(container: HTMLElement, { title, subtitle, summary = [] }: {
+  title: string; subtitle?: string; summary?: ChartSummary[];
+}): Promise<Blob> {
   const svg = container.querySelector<SVGSVGElement>("svg.recharts-surface");
   if (!svg) throw new Error("No chart to copy");
-  const { width, height } = svg.getBoundingClientRect();
+  const box = svg.getBoundingClientRect();
+  // At least 640 wide so the table fits; a small chart is scaled up a little (sharp, it's SVG)
+  // and centred
+  const pad = 14, scale = 2, rowH = 20;
+  const w = Math.max(box.width + pad * 2, 640);
+  const zoom = Math.min(1.25, (w - pad * 2) / box.width);
+  const width = box.width * zoom, height = box.height * zoom, left = (w - width) / 2;
   const clone = svg.cloneNode(true) as SVGSVGElement;
   copyStyles([svg, ...svg.querySelectorAll("*")], [clone, ...clone.querySelectorAll<SVGElement>("*")],
     el => getComputedStyle(el));
+  // Not the hover cursor where the mouse happened to be
+  clone.querySelectorAll(".recharts-tooltip-cursor, .recharts-active-dot").forEach(el => el.remove());
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  if (!clone.getAttribute("viewBox")) clone.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
   clone.setAttribute("width", String(width));
   clone.setAttribute("height", String(height));
   const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml" }));
@@ -48,35 +66,63 @@ export async function chartPng(container: HTMLElement, title: string, legend: Le
     const img = new Image();
     img.src = url;
     await img.decode();
-    const pad = 14, head = 30, scale = 2;
+    const font = getComputedStyle(document.body).fontFamily;
     const canvas = document.createElement("canvas");
-    canvas.width = (width + pad * 2) * scale;
-    canvas.height = (height + head + pad) * scale;
     const ctx = canvas.getContext("2d")!;
+    ctx.font = `400 11px ${font}`;
+    const sub = subtitle ? wrap(subtitle, w - pad * 2, t => ctx.measureText(t).width) : [];
+    const head = 30 + sub.length * 15 + (sub.length ? 4 : 0);
+    const table = summary.length ? 14 + rowH * (summary.length + 1) : 0;
+    canvas.width = w * scale;
+    canvas.height = (head + height + table + pad) * scale;
     ctx.scale(scale, scale);
     ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, width + pad * 2, height + head + pad);
+    ctx.fillRect(0, 0, w, head + height + table + pad);
     ctx.fillStyle = "#1f2937";
-    ctx.font = `600 13px ${getComputedStyle(document.body).fontFamily}`;
+    ctx.font = `600 13px ${font}`;
     ctx.fillText(title, pad, 21);
-    if (legend.length > 1) {
-      ctx.font = `400 11px ${getComputedStyle(document.body).fontFamily}`;
-      let x = width + pad;
-      for (const item of [...legend].reverse()) {
-        x -= ctx.measureText(item.label).width;
-        ctx.fillStyle = "#4b5563";
-        ctx.fillText(item.label, x, 20);
-        x -= 14;
-        ctx.fillStyle = resolveColor(item.color, container);
-        ctx.fillRect(x, 12, 9, 9);
-        x -= 12;
-      }
+    ctx.fillStyle = "#6b7280";
+    ctx.font = `400 11px ${font}`;
+    sub.forEach((line, i) => ctx.fillText(line, pad, 39 + i * 15));
+    ctx.drawImage(img, left, head, width, height);
+    if (summary.length) {
+      // Series name, then the figures right-aligned in equal columns
+      const top = head + height + 14, nameW = 140, colW = (w - pad * 2 - nameW) / COLS.length;
+      ctx.font = `600 10px ${font}`;
+      ctx.fillStyle = "#6b7280";
+      ctx.textAlign = "right";
+      COLS.forEach(([h], i) => ctx.fillText(h.toUpperCase(), pad + nameW + colW * (i + 1) - 4, top + 12));
+      summary.forEach((r, n) => {
+        const y = top + rowH * (n + 1) + 12;
+        ctx.textAlign = "left";
+        ctx.fillStyle = resolveColor(r.color, container);
+        ctx.fillRect(pad, y - 8, 9, 9);
+        ctx.fillStyle = "#1f2937";
+        ctx.font = `400 11px ${font}`;
+        ctx.fillText(r.label, pad + 14, y, nameW - 18);
+        ctx.textAlign = "right";
+        COLS.forEach(([, k], i) => {
+          ctx.font = `${k === "avg" ? 600 : 400} 11px ${font}`;
+          ctx.fillStyle = k === "maxAt" ? "#6b7280" : "#1f2937";
+          ctx.fillText(r[k], pad + nameW + colW * (i + 1) - 4, y, colW - 6);
+        });
+      });
     }
-    ctx.drawImage(img, pad, head, width, height);
     return await new Promise((ok, fail) => canvas.toBlob(b => (b ? ok(b) : fail(new Error("Couldn't draw the chart"))), "image/png"));
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** `text` ("a · b · c") in lines no wider than `max`, breaking between its parts. */
+export function wrap(text: string, max: number, measure: (t: string) => number): string[] {
+  const lines: string[] = [];
+  for (const part of text.split(" · ")) {
+    const last = lines[lines.length - 1];
+    if (last != null && measure(`${last} · ${part}`) <= max) lines[lines.length - 1] = `${last} · ${part}`;
+    else lines.push(part);
+  }
+  return lines;
 }
 
 /** A CSS colour as the page resolves it ("var(--blue-primary)" → "rgb(0, 137, 199)"). */

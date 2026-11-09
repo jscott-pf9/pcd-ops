@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyStyles, pngName } from "./chartImage";
+import { copyStyles, pngName, wrap } from "./chartImage";
 
 describe("chart image", () => {
   it("copies resolved styles onto the clone, skipping empty ones", () => {
@@ -17,5 +17,11 @@ describe("chart image", () => {
   it("names the file after the title", () => {
     expect(pngName("vjailbreak-01 · CPU · last 7 days")).toBe("vjailbreak-01-cpu-last-7-days.png");
     expect(pngName("··")).toBe("chart.png");
+  });
+
+  it("wraps the subtitle between its parts", () => {
+    const measure = (t: string) => t.length;
+    expect(wrap("VM web · Tenant a · Host h1", 20, measure)).toEqual(["VM web · Tenant a", "Host h1"]);
+    expect(wrap("a-very-long-single-part", 5, measure)).toEqual(["a-very-long-single-part"]);
   });
 });
