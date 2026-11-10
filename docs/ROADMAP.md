@@ -20,9 +20,10 @@
 | 10 | Reports and exports | 🔄 |
 | 11 | Log analysis | 🔄 |
 | 12 | Local metrics only: PCD's Grafana becomes an optional fallback | ⬜ |
-| 13 | Hardening for 1.0 | 🔄 |
+| 13 | Workloads: application-aware right-sizing and capacity | ⬜ |
+| 14 | Hardening for 1.0 | 🔄 |
 
-**Features first, then hardening.** Phase 5 fixed the settings and jobs that later phases build on. Phases 6–12 are in pickup order, not strict dependencies; Phase 8 is on hold and Phase 9 was done first. Phase 12 (local metrics only) comes before hardening. Phase 6 feeds 7 and 8. Phase 8 also needs the SSH settings fix (Phase 5) and pinned host keys (Phase 11).
+**Features first, then hardening.** Phase 5 fixed the settings and jobs that later phases build on. Phases 6–13 are in pickup order, not strict dependencies; Phase 8 is on hold and Phase 9 was done first. Phase 12 (local metrics only) comes before Phase 13 (workloads), whose seasonal sizing needs its long, single-source history; both come before hardening. Phase 6 feeds 7 and 8. Phase 8 also needs the SSH settings fix (Phase 5) and pinned host keys (Phase 11).
 
 **App building has left this app.** App Builder, App Catalog and App Deployments (the Orchestration nav section) moved to a new appliance, **pcd-app-builder**. PCD Ops observes and maintains the cloud; building and deploying applications on it belongs to the new app.
 
@@ -141,7 +142,7 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 **Sources** (`services/metrics_catalog.py`): each host and VM metric is defined for the local store (raw exporter series) and for PCD's Grafana (`pcd:*`). Local data is used when it exists; Grafana otherwise, and always for the `openstack_*` series only PCD has (Capacity). VMs join on `domain` = the Nova server UUID in both. Through Grafana, hosts join on Nova's compute service host, the PCD host UUID.
 
 - ⬜ Confirm on the lab appliance: exporters reachable from its network, root filesystem at 60 GB, values match PCD's host dashboards.
-- ⬜ Later: export or back up the store (with Phase 13's backup and restore).
+- ⬜ Later: export or back up the store (with Phase 14's backup and restore).
 
 ## Phase 7 — Reclamation, overcommit, idle VMs, capacity, right-sizing 🧪 (0.7.x, branch `feature/phase7`)
 
@@ -267,7 +268,19 @@ Plan: [plans/local-metrics-only.md](plans/local-metrics-only.md). Since Phase 6,
 - ⬜ **Setup and docs:** no Grafana token in the setup path, the manifest's post-install notes (also still saying plain HTTP), the README and CLAUDE.md.
 - ⬜ **Verify:** the lab appliance with the token removed, every page working and no requests to PCD's Grafana; the fallback with the exporters blocked.
 
-## Phase 13 — Hardening for 1.0 🔄
+## Phase 13 — Workloads: application-aware right-sizing and capacity ⬜
+
+Plan: [plans/workloads.md](plans/workloads.md). PCD Ops knows each VM's metrics, not the application behind them: vendor minimums, RAM used as cache by design (LINSTOR), seasonal use (tax season), known spikes (the Super Bowl). A **workload** is a saved application (members by VM, Nova metadata, name pattern, image or tenant; rules; notes) that right-sizing, capacity, overcommit, anomaly detection, reclamation and alerts all use. Rules feed the formulas; the AI reads the notes as data and still only explains.
+
+- ⬜ **Workloads store and page:** match rules, minimums, size for average / busy hours / peak, cache by design, busy periods and events, growth, no overcommit, hold; notes; Nova metadata (`pcdops:*`) read, never written; every change in the event log.
+- ⬜ **Right-sizing:** minimums as floors, sizing for the busy hours or peak, cache counted as needed, no downsizing or idle outside a busy period, held VMs skipped by the resize job and Reclamation; the workload in the AI prompt and Re-analyse after a note changes.
+- ⬜ **Capacity planning:** demand by workload; each cluster's headroom against its workloads' peaks, overlapping periods added up; a 12-month calendar; what-if from a workload (at peak, growth, N more like it); reclaimable capacity that respects minimums, holds and seasons.
+- ⬜ **Overcommit:** latency-sensitive workloads flagged on overcommitted hosts; cache-by-design RAM not offered as spare; ratio suggestions from the coming peak.
+- ⬜ **Anomaly and alerts:** spikes inside a busy period are expected, not anomalies; an alert before a busy period when a cluster lacks room for its peak.
+- ⬜ **VM disk:** a Disk space chart and per-disk table on VM pages (provisioned, written for file-backed disks, "not reported" for RBD, growth, days until full); right-sizing warns when a disk is nearly full or IO-limited, never suggests shrinking (Nova and Cinder can't); capacity's storage view shows written against provisioned.
+- ⬜ **Load:** load average isn't available (PCD's node-exporter runs without `loadavg` and `pressure`; a VM's is inside the guest). Host charts gain iowait % and VM CPU demand per core; the drill-down shows CPU wait next to CPU.
+
+## Phase 14 — Hardening for 1.0 🔄
 
 - 🔄 **Tests:**
   - 163 backend tests (pytest; Keystone and OpenStack mocked): login, setup, config.env, and now most feature APIs, collectors, rules and jobs. 53 frontend tests (vitest) on the page models and chart helpers.
@@ -333,3 +346,4 @@ Plan: [plans/local-metrics-only.md](plans/local-metrics-only.md). Since Phase 6,
 - **Upgrades:** keep in-app self-update, or move to catalog-driven upgrades?
 - **Control-plane logs:** where do they come from in PCD?
 - **Private AI:** does it later point at a PCD Private AI service?
+- **Host load and pressure:** ask PCD to enable node-exporter's `loadavg` and `pressure` collectors on hosts (PCD Ops already keeps `node_load*`), and a guest-agent filesystem collector for free space inside VMs?

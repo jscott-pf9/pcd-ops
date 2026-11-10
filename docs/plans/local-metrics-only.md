@@ -1,7 +1,7 @@
 # Plan: local metrics only, PCD's Grafana optional (Phase 12)
 
 > Status: planned, not started (written 2026-11-09). Picked up after Phase 11 and before
-> Hardening for 1.0 (Phase 13). Version decided when it's picked up.
+> Workloads (Phase 13) and Hardening for 1.0 (Phase 14). Version decided when it's picked up.
 
 ## Why
 
