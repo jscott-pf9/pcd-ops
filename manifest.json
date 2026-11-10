@@ -6,7 +6,7 @@
   "publisher": "Platform9",
   "repo": "https://github.com/jscott-pf9/pcd-ops",
   "tagline": "Reclamation, right-sizing and capacity planning.",
-  "description": "The day-two dashboard. Resource reclamation, cluster capacity planning with what-if analysis, a searchable inventory, snapshot management, right-sizing recommendations from real Prometheus usage, and anomaly and drift detection.",
+  "description": "The day-two dashboard. Resource reclamation and warnings, cluster capacity planning with what-if analysis and CPU and memory overcommit, a searchable inventory with host and VM metrics, snapshot management, right-sizing recommendations from real usage, anomaly detection, a config change log and alerts.",
   "category": "operations",
   "tags": [
     "PCD",
@@ -125,7 +125,7 @@
       "icon": "chart"
     }
   },
-  "post_deploy_notes": "Open the URL and log in with your PCD account; you need the admin role in the project PCD Ops was installed into. The first admin to log in clicks Complete install (one click, no passwords), then pastes a Grafana service account token and, if used, the Claude API key under Settings. AI settings from the install form are defaults that Settings can change. The appliance serves plain HTTP and has no sshd; manage it from the VM console menu.",
+  "post_deploy_notes": "Open the URL over HTTPS and log in with your PCD account; you need the admin role in the project PCD Ops was installed into. The appliance makes a self-signed certificate at first boot, so the browser warns until you trust it or upload your own under Settings > HTTPS. The first admin to log in clicks Complete install (one click, no passwords). PCD Ops scrapes host and VM metrics itself (TCP 9388 and 9177 on the hypervisors); a Grafana service account token under Settings > Connection is optional and adds PCD's 14 days of history from the first day. If you use Claude, paste its API key under Settings > AI; AI settings from the install form are defaults that Settings can change. The appliance has no sshd; manage it from the VM console menu.",
   "todo": [
     "Move repo to github.com/platform9."
   ]

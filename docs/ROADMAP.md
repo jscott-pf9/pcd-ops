@@ -1,10 +1,10 @@
 # PCD Ops — Roadmap
 
-> Last updated: 2026-11-09 · Latest release: 0.6.1 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
+> Last updated: 2026-11-09 · Latest release: 0.8.0 · Setup and deployment: [README.md](../README.md) · Architecture and conventions: [CLAUDE.md](../CLAUDE.md) · API: [API.md](API.md) · Tests: [testing-plan.md](testing-plan.md)
 
 **Legend:** ✅ done · 🧪 built, needs lab/field validation · 🔄 partly done · ⏸ on hold · ⬜ not started
 
-**Where the code is:** `main` is 0.7.0 (Phase 6), merged but not tagged or released. Phases 7 and 9 are on `feature/phase7` (15 commits ahead of `main`, version files still 0.7.0), mirrored to `feature/phase6-metrics`, which the lab appliance updates from. Phase 7 ships as 0.7.x and Phase 9 as 0.8.x; the version bump, merge, tag and release haven't been done.
+**Where the code is:** `main` is 0.8.0, released 2026-11-09 with Phases 6, 7 and 9, HTTPS and the chart and right-sizing work (0.6.1 and 0.7.0 were never released on their own). New work goes on a branch: appliances pull `main`. `feature/phase6-metrics`, which the lab appliance updates from, follows `main` until the next branch.
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -13,10 +13,10 @@
 | 3 | Appliance | ✅ Done |
 | 4 | Extension catalog and PCD login | ✅ Done |
 | 5 | Correctness, install and settings experience, App Builder moves out (0.6.0) | 🧪 |
-| 6 | Host and VM metrics, scraped and kept by PCD Ops (0.7.0, on `main`, not released) | 🧪 |
-| 7 | Reclamation & warnings, CPU and memory overcommit, idle VMs, capacity, right-sizing (0.7.x) | 🧪 |
+| 6 | Host and VM metrics, scraped and kept by PCD Ops (released in 0.8.0) | 🧪 |
+| 7 | Reclamation & warnings, CPU and memory overcommit, idle VMs, capacity, right-sizing (0.8.0) | 🧪 |
 | 8 | Hypervisor lifecycle: OS updates, maintenance mode, live migration, rolling upgrades | ⏸ |
-| 9 | Anomaly, config changes and alerting (0.8.x) | 🔄 |
+| 9 | Anomaly, config changes and alerting (0.8.0) | 🔄 |
 | 10 | Reports and exports | 🔄 |
 | 11 | Log analysis | 🔄 |
 | 12 | Local metrics only: PCD's Grafana becomes an optional fallback | ⬜ |
@@ -121,7 +121,7 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 - 🧪 Inventory → Hypervisors: CPU, memory and disk bars, network in/out, stale badge. Servers: CPU and memory bars.
 - 🧪 Every Inventory row opens a full detail page (`/inventory/<kind>/<id>`, replacing the side drawer) with links to related items: a VM's host, volumes, server group, security groups and floating IPs; a host's VMs and aggregates; a backend's pools, types and volumes. Hovering a row shows a card of its facts (no requests). Tab, filter and tenant are in the URL, so Back returns to them.
 - 🧪 Host page: CPU, memory, disk space, disk I/O and network over 24h to 2 years. VM page: CPU with CPU wait (steal), memory, disk IOPS and latency, network. Hovering one chart moves the cursor and tooltip on all of them to the same time.
-- 🧪 Every metrics chart (host, VM, cluster, storage backend, volume and right-sizing pages; added on `feature/phase7`) opens larger in a pop-out, and copies as a PNG titled with the item, chart and range, with a legend. Browsers allow copying images only over HTTPS or on localhost; elsewhere (the appliance on plain HTTP) the button saves the PNG instead. Ranges of days have one date tick per day. Each chart's corner value is labelled "now" with its unit (IOPS, VMs); the pop-out and the image add what it's of (VM, tenant, host and flavor; a host's aggregates; a volume's tenant, backend and VM), the period, the point spacing and the source, and each series' latest, min, average, p95 and max with when the max was.
+- 🧪 Every metrics chart (host, VM, cluster, storage backend, volume and right-sizing pages; 0.8.0) opens larger in a pop-out, and copies as a PNG titled with the item, chart and range, with a legend. Browsers allow copying images only over HTTPS or on localhost; elsewhere (the appliance on plain HTTP) the button saves the PNG instead. Ranges of days have one date tick per day. Each chart's corner value is labelled "now" with its unit (IOPS, VMs); the pop-out and the image add what it's of (VM, tenant, host and flavor; a host's aggregates; a volume's tenant, backend and VM), the period, the point spacing and the source, and each series' latest, min, average, p95 and max with when the max was.
 - 🧪 **Memory charts** (PCD Ops' store): a VM's in use and with disk cache, its size (flavor, what the guest sees, in use, disk cache) and page-ins (major faults); a host's or cluster's used and with page cache, swap used, swapping in and out, OOM kills per hour, and hugepages where configured. Each chart's title explains it. Guest swap needs an agent in the guest, the balloon always equals the flavor (Nova doesn't use it) and libvirt-exporter's host RSS reads 0, so none of those are shown.
 - 🧪 Topology: CPU and RAM bars on each hypervisor, and "Open details" to its page.
 - 🧪 Hypervisor hardware: CPU model and topology from `lscpu` and installed RAM from `dmidecode` over SSH; otherwise from Nova at microversion 2.87, the last one that returns `cpu_info` and `memory_mb`.
@@ -144,7 +144,7 @@ PCD hypervisors run node-exporter (`<host-ip>:9388`) and libvirt-exporter (`<hos
 - ⬜ Confirm on the lab appliance: exporters reachable from its network, root filesystem at 60 GB, values match PCD's host dashboards.
 - ⬜ Later: export or back up the store (with Phase 14's backup and restore).
 
-## Phase 7 — Reclamation, overcommit, idle VMs, capacity, right-sizing 🧪 (0.7.x, branch `feature/phase7`)
+## Phase 7 — Reclamation, overcommit, idle VMs, capacity, right-sizing 🧪 (0.8.0)
 
 Builds on Phase 6: real host load and up to 2 years of history from PCD Ops' own store (`services/metrics_catalog.py`), so idle detection and trends can use long windows. All built: reclamation and warnings (0.7.1), overcommit (0.7.2), capacity and right-sizing (0.7.3). The right-sizing list, drill-down and shaped flavors came later (2026-11-06 and 09, after Phase 9's 0.8.x work) and ship with the next release. What's left is checking it on the lab appliance and a release.
 
@@ -232,9 +232,9 @@ Here:
 **Later**
 - ⬜ Rolling upgrades of the PCD host software, not only the OS. This depends on how PCD upgrades its host agents.
 
-## Phase 9 — Anomaly, config changes and alerting 🔄 (0.8.x, on `feature/phase7`)
+## Phase 9 — Anomaly, config changes and alerting 🔄 (0.8.0)
 
-Phase 8 is on hold; Phase 9 ships after Phase 7 as 0.8.1 (alerting), 0.8.2 (config change log), 0.8.3 (statistical anomalies). Drift is a change log only: no approved baseline to compare against.
+Phase 8 is on hold. Phase 9 was built as 0.8.1 (alerting), 0.8.2 (config change log) and 0.8.3 (statistical anomalies) and released with Phase 7 as 0.8.0. Drift is a change log only: no approved baseline to compare against.
 
 - 🧪 **Alerts** (0.8.1; `services/alerts.py`): anomalies, config changes and jobs raise alerts, each source on or off with a minimum severity; the same alert again within the cooldown (60 minutes) is recorded but not sent unless it got more severe. Sent to every configured channel: email, the generic webhook (its JSON keeps its old keys and adds the alert's source, key, fields and link) and **Slack** (incoming webhook, Block Kit, colored by severity, with a link to the page when the appliance's address is set). Settings → Alerts: the rules, a test button per channel, and the recent alerts with what each channel did. Jobs: a failed run alerts high, a run with items that failed (a snapshot, a resize, a delete) medium, success only if asked. Alerts also go to the event log; SMTP no longer blocks the server while it sends.
 - 🧪 **Config change log** (0.8.2; `services/drift.py`, page Infrastructure → **Config Changes**): every collection snapshots flavors (with extra specs), security groups (rules compared by what they allow, so order doesn't matter), aggregates (metadata, hosts), hosts (state, enabled, hypervisor and OS version, CPU, memory, Placement allocation ratios and reserved) and each tenant's Nova, Cinder and Neutron quotas (never `admin`), and records what was added, removed or changed since the last one, field by field. It shows what and when, not who (PCD doesn't record it). A source that can't be read keeps its last snapshot, so a failure isn't logged as everything removed. High: security group rules added or removed, a host down, disabled or gone, an aggregate losing a host; the rest medium. Each kind with changes raises one alert per collection. Filters and kind in the URL, export to a workbook, kept 180 days (`drift_retention_days`). Lab check (2026-11-06): 16 flavors, 36 security groups, 1 aggregate, 3 hosts and 7 tenants' quotas tracked; a second run recorded nothing; one simulated edit per kind was each recorded and alerted.
@@ -287,7 +287,7 @@ Plan: [plans/workloads.md](plans/workloads.md). PCD Ops knows each VM's metrics,
   - ⬜ A CI workflow.
   - ⬜ Playwright in the repo. UI checks so far are scripts against a local harness with lab data, not committed.
   - ⬜ Refresh [testing-plan.md](testing-plan.md), which still says no tests exist.
-- 🧪 **HTTPS** (APPLIANCE_STANDARD §7.9; `appliance/tls.py`, Settings → **HTTPS**, on `feature/phase7`):
+- 🧪 **HTTPS** (APPLIANCE_STANDARD §7.9; `appliance/tls.py`, Settings → **HTTPS**, 0.8.0):
   - A self-signed certificate at first boot (OpenRC `pcd-ops-tls`, before nginx; the host name, instance name and addresses), served on 443. Plain HTTP redirects to HTTPS except `/api/health`; Settings can turn the redirect off. The session cookie gets `Secure`, and the charts' Copy button works (browsers allow copying images only in a secure context; a self-signed certificate counts once accepted, checked in Chrome).
   - Settings shows the certificate (names, issuer, validity, fingerprint, chain) and warns when it doesn't cover the address in use. **Download** it to trust it on a computer; **New self-signed** for other names or a floating IP; **Create CSR** (the key stays on the appliance; upload the signed certificate without a key); **Upload** a certificate, chain and key, checked first (key matches, valid now, chain order). Each change reloads nginx and checks it serves the new certificate, and is logged.
   - Console → Advanced → **HTTPS**: show and regenerate; **Enable HTTPS** for appliances built before it (installs the nginx config and the boot service). The manifest and Terraform open 443.
