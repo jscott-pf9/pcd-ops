@@ -883,13 +883,24 @@ async def collect_overcommit() -> None:
             "host": hyp_of_name.get(s.get("hypervisor_hostname"))}
            for s in servers or [] if s.get("status") == "ACTIVE"]
     hosts = overcommit.host_rows(hyps, placement, load, overcommit.vm_wait_by_host(vms, waits))
+    cluster_rows = overcommit.cluster_rows(clusters or [], hosts)
     db.cache_set("capacity:overcommit", {
         "hosts": hosts,
-        "clusters": overcommit.cluster_rows(clusters or [], hosts),
+        "clusters": cluster_rows,
         "totals": overcommit.totals(hosts),
         "load": info,
         "thresholds": overcommit.THRESHOLDS,
     })
+    # What each cluster's allocation ratios allow, for its allocation chart
+    await local_metrics.push([
+        (f"pcd_ops_cluster_{res}_{field}{suffix}", {"aggregate": str(c["id"])},
+         c[key][field] * scale)
+        for c in cluster_rows
+        for key, res, suffix, scale in (("cpu", "vcpus", "", 1),
+                                        ("memory", "memory", "_bytes", 1024**2))
+        if c[key]
+        for field in ("capacity", "allocated")
+    ])
     t = overcommit.totals(hosts)
     logger.info("Overcommit: %d hosts (CPU %s; memory %s)", len(hosts), t["cpu_counts"], t["mem_counts"])
 
@@ -912,6 +923,7 @@ async def collect_capacity() -> None:
 # ── Config change log ──────────────────────────────────────────────────────────
 
 QUOTA_CONCURRENCY = 8
+VM_ACTION_LOOKUPS = 50     # VMs whose Nova action log one collection reads, at most
 
 
 def _quota_sets(conn, project_id: str) -> tuple[dict | None, dict | None, dict | None]:
@@ -929,10 +941,47 @@ def _quota_sets(conn, project_id: str) -> tuple[dict | None, dict | None, dict |
             get(conn.network, f"/quotas/{project_id}", "quota"))
 
 
+def _vm_actions(conn, server_id: str, since: str, users: dict[str, str]) -> list[dict]:
+    """Nova's actions on a VM that started after `since` (deleted VMs' too): what was done, by
+    whom and when. `users` caches user names by id."""
+    out = []
+    for a in conn.compute.server_actions(server_id):
+        # "2026-11-10T12:00:00.000000", or with a Z in newer microversions; both UTC
+        if str(a.start_time or "")[:19] < since[:19]:
+            continue
+        uid = a.user_id
+        if uid and uid not in users:
+            try:
+                users[uid] = conn.identity.get_user(uid).name
+            except Exception as e:
+                logger.debug("User %s: %s", uid, e)
+                users[uid] = uid
+        out.append({"action": a.action, "user": users.get(uid) if uid else None,
+                    "at": a.start_time, "request_id": a.request_id})
+    return out
+
+
+async def _changed_vm_actions(conn, changes: list[dict], since: str) -> dict[str, list[dict]]:
+    """{server id: actions since `since`} for the VMs among `changes`; failures leave a VM out."""
+    ids = [c["item_id"] for c in changes if c["kind"] == "servers"][:VM_ACTION_LOOKUPS]
+    users: dict[str, str] = {}
+    sem = asyncio.Semaphore(QUOTA_CONCURRENCY)
+
+    async def one(sid):
+        async with sem:
+            try:
+                return sid, await asyncio.to_thread(_vm_actions, conn, sid, since, users)
+            except Exception as e:
+                logger.debug("Actions of VM %s: %s", sid, e)
+                return sid, []
+    return dict(await asyncio.gather(*(one(i) for i in ids)))
+
+
 async def collect_drift() -> None:
-    """Snapshot flavors, security groups, aggregates, hosts and quotas, and record what changed
-    since the last collection (services/drift.py). Runs after inventory and overcommit, whose
-    results it reads; the first run only takes the snapshot."""
+    """Snapshot VMs, flavors, security groups, aggregates, hosts and quotas, and record what
+    changed since the last collection (services/drift.py), with Nova's actions on the VMs that
+    changed. Runs after inventory and overcommit, whose results it reads; the first run only
+    takes the snapshot."""
     conn = get_connection()
     notes: dict[str, str] = {}
     cur: dict[str, dict] = {}
@@ -943,6 +992,8 @@ async def collect_drift() -> None:
             notes[kind] = f"No {kind.replace('_', ' ')} collected yet"
         return data
 
+    if (v := cached("inventory:servers", "servers")) is not None:
+        cur["servers"] = drift.servers(v)
     if (f := cached("inventory:flavors", "flavors")) is not None:
         cur["flavors"] = drift.flavors(f)
     if (g := cached("inventory:security_groups", "security_groups")) is not None:
@@ -978,6 +1029,10 @@ async def collect_drift() -> None:
     now = datetime.utcnow().isoformat()
     snapshot = drift.merge(prev, cur, partial)
     changes = drift.diff(prev, cur) if prev else []
+    if changes and (status or {}).get("last_run"):
+        # A few minutes' slack: an operation under way at the last collection, and clock skew
+        since = (datetime.fromisoformat(status["last_run"]) - timedelta(minutes=5)).isoformat()
+        drift.attach_actions(changes, await _changed_vm_actions(conn, changes, since))
     db.cache_set("drift:snapshot", snapshot)
     if changes:
         db.drift_add(changes, now)

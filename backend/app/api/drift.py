@@ -10,10 +10,11 @@ router = APIRouter(prefix="/drift", tags=["drift"])
 @router.get("/changes")
 async def list_changes(kind: str | None = None, days: int | None = None, q: str | None = None,
                        limit: int = 500):
-    """The config change log, newest first: flavors, security groups, aggregates, hosts and
-    quotas added, removed or modified between collections, each with its changed fields
-    ({field, op: added|removed|changed, before, after}) and severity. Filter by `kind`, the
-    last `days`, and `q` (item name or field)."""
+    """The config change log, newest first: VMs, flavors, security groups, aggregates, hosts
+    and quotas added, removed or modified between collections, each with its changed fields
+    ({field, op: added|removed|changed, before, after}) and severity. VM changes carry Nova's
+    actions on the VM since the previous collection (`actions`: [{action, user, at,
+    request_id}], else null). Filter by `kind`, the last `days`, and `q` (item name or field)."""
     if kind and kind not in drift.KINDS:
         raise HTTPException(400, detail=f"kind must be one of {', '.join(drift.KINDS)}")
     since = (datetime.utcnow() - timedelta(days=days)).isoformat() if days else None

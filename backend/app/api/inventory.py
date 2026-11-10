@@ -30,11 +30,21 @@ async def list_servers():
 
 def _with_metrics(hypervisors: list[dict]) -> list[dict]:
     """Each hypervisor with its latest CPU, memory, disk and network (`metrics`, null without
-    data) and where they came from (`metrics_source`: local or pcd)."""
+    data) and where they came from (`metrics_source`: local or pcd), and its allocation."""
     data, _ = cache_get("metrics:hosts")
     hosts = (data or {}).get("hosts", {})
     source = (data or {}).get("source")
-    return [{**h, "metrics": hosts.get(h["id"]), "metrics_source": source} for h in hypervisors]
+    alloc = _allocation("hosts")
+    return [{**h, "metrics": hosts.get(h["id"]), "metrics_source": source,
+             "allocation": alloc.get(h["id"])} for h in hypervisors]
+
+
+def _allocation(rows: str) -> dict:
+    """{id: {cpu, memory}} from the last overcommit collection: Placement's allocation against
+    the physical size and what the allocation ratio allows (services/overcommit.allocation)."""
+    data, _ = cache_get("capacity:overcommit")
+    return {str(r["id"]): {"cpu": r["cpu"], "memory": r["memory"]}
+            for r in (data or {}).get(rows) or []}
 
 
 @router.get("/hypervisors")
@@ -154,8 +164,11 @@ async def topology():
 @router.get("/clusters")
 async def list_clusters():
     """Return host aggregates (`kind` "cluster" for PCD clusters, which are pf9-managed
-    aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation."""
-    return _require("inventory:clusters")
+    aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation (`allocation`:
+    against the physical size and what the allocation ratios allow, null before Placement
+    was read)."""
+    alloc = _allocation("clusters")
+    return [{**c, "allocation": alloc.get(str(c["id"]))} for c in _require("inventory:clusters")]
 
 
 @router.get("/storage_backends")

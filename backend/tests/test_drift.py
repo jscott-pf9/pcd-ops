@@ -268,3 +268,107 @@ def test_api(admin):
     assert rows[0]["fields"][0]["after"] == 8
     assert admin.get("/api/drift/changes?q=nothing").json() == []
     assert admin.get("/api/drift/changes?kind=bogus").status_code == 400
+
+
+VM = {
+    "id": "v1",
+    "name": "ceph-test",
+    "status": "ACTIVE",
+    "project_id": "p1",
+    "flavor_name": "m1.small",
+    "flavor_vcpus": 1,
+    "flavor_ram_mb": 2048,
+    "image_id": "img1",
+    "hypervisor_hostname": "hyp1",
+    "security_groups": ["default"],
+}
+
+
+def test_vms_resized_migrated_created_and_building():
+    a = snap(servers=d.servers([VM, dict(VM, id="v2", name="db")]))
+    b = snap(servers=d.servers([
+        dict(VM, flavor_name="m1.large", flavor_vcpus=4, flavor_ram_mb=8192),
+        dict(VM, id="v2", name="db", hypervisor_hostname="hyp2"),
+        dict(VM, id="v3", name="web"),
+        dict(VM, id="v4", name="new", status="BUILD", hypervisor_hostname=None),
+    ]))
+    ch = {c["item_id"]: c for c in d.diff(a, b)}
+    assert set(ch) == {"v1", "v2", "v3"}  # v4 is still building
+    assert [f["field"] for f in ch["v1"]["fields"]] == ["flavor", "ram_mb", "vcpus"]
+    assert ch["v1"]["severity"] == "medium" and ch["v1"]["project_id"] == "p1"
+    assert ch["v2"]["fields"] == [
+        {"field": "host", "op": "changed", "before": "hyp1", "after": "hyp2"}
+    ]
+    assert ch["v2"]["severity"] == "low"
+    assert (ch["v3"]["change"], ch["v3"]["severity"]) == ("added", "low")
+
+    d.attach_actions(list(ch.values()), {"v1": [
+        {"action": "confirmResize", "user": "alice", "at": "2026-11-10T10:02:00"},
+        {"action": "resize", "user": "alice", "at": "2026-11-10T10:00:00"},
+    ]})
+    assert [a["action"] for a in ch["v1"]["actions"]] == ["resize", "confirmResize"]
+    assert "actions" not in ch["v2"]
+    assert d.describe(ch["v1"]).startswith(
+        "VM ceph-test modified (resize, confirmResize by alice): flavor m1.small → m1.large"
+    )
+
+
+def test_collector_records_vm_changes_with_nova_actions(monkeypatch):
+    from app.agent import collector
+    from app.services import alerts
+
+    db.cache_set("inventory:servers", [VM])
+    db.cache_set("inventory:tenants", [])
+
+    def actions(server_id):
+        assert server_id == "v1"
+        return [
+            NS(action="create", user_id="u1", start_time="2020-01-01T00:00:00.000000",
+               request_id="req-0"),
+            NS(action="resize", user_id="u1", start_time="2099-01-01T00:00:00.000000",
+               request_id="req-1"),
+        ]
+
+    looked_up = []
+
+    def get_user(uid):
+        looked_up.append(uid)
+        return NS(name="alice")
+
+    conn = NS(compute=NS(server_actions=actions), identity=NS(get_user=get_user))
+    monkeypatch.setattr(collector, "get_connection", lambda: conn)
+    raised = []
+
+    async def fake_raise(a):
+        raised.append(a)
+
+    monkeypatch.setattr(alerts, "raise_alert", fake_raise)
+
+    asyncio.run(collector.collect_drift())
+    db.cache_set("inventory:servers", [dict(VM, flavor_name="m1.large", flavor_vcpus=4)])
+    asyncio.run(collector.collect_drift())
+    (row,) = db.drift_list("servers")
+    assert row["change"] == "modified" and row["severity"] == "medium"
+    # Only the actions since the previous collection, with the user's name looked up once
+    assert row["actions"] == [
+        {"action": "resize", "user": "alice", "at": "2099-01-01T00:00:00.000000",
+         "request_id": "req-1"}
+    ]
+    assert looked_up == ["u1"]
+    assert raised[0].key == "drift:servers" and "resize by alice" in raised[0].body
+
+
+def test_old_change_log_table_gains_the_actions_column():
+    with db._connect() as conn:
+        conn.executescript("""
+            DROP TABLE drift_changes;
+            CREATE TABLE drift_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL,
+                item_id TEXT NOT NULL, name TEXT, project_id TEXT, change TEXT NOT NULL,
+                severity TEXT NOT NULL, fields TEXT);
+            INSERT INTO drift_changes (at, kind, item_id, change, severity, fields)
+                VALUES ('2026-11-01T00:00:00', 'flavors', 'f1', 'added', 'medium', '[]');
+        """)
+    db.init_db()
+    (row,) = db.drift_list()
+    assert row["item_id"] == "f1" and row["actions"] is None

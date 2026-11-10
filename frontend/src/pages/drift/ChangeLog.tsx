@@ -7,15 +7,15 @@ import DataFreshness from "../../components/DataFreshness";
 import { ItemLink } from "../../components/DetailPage";
 import { downloadWorkbook } from "../../components/workbook";
 import { detailPath } from "../inventory/kinds";
-import { type Change, DRIFT_KINDS, fieldText, isDriftKind, KIND, parseAt, PERIODS } from "./model";
+import { actionsText, type Change, DRIFT_KINDS, fieldText, isDriftKind, KIND, parseAt, PERIODS } from "./model";
 
 interface Status {
   started_at: string; last_run: string; notes: Record<string, string>; items: Record<string, number>;
   last_changes: number; counts_24h: Record<string, number>; counts_7d: Record<string, number>;
 }
 
-/** Config Changes: flavors, security groups, aggregates, hosts and quotas changed between
- *  collections. Kind, period and filter live in the URL. */
+/** Config Changes: VMs, flavors, security groups, aggregates, hosts and quotas changed between
+ *  collections, and for VMs what Nova did and who asked. Kind, period and filter live in the URL. */
 export default function ChangeLog() {
   const [params, setParams] = useSearchParams();
   const kind = isDriftKind(params.get("kind")) ? params.get("kind")! : "";
@@ -40,10 +40,11 @@ export default function ChangeLog() {
   function exportAll() {
     downloadWorkbook("config-changes.xlsx", [{
       name: "Config changes",
-      headers: ["When (UTC)", "Kind", "Item", "Tenant", "Change", "Severity", "Field", "Before", "After"],
+      headers: ["When (UTC)", "Kind", "Item", "Tenant", "Change", "Severity", "Nova actions", "Field", "Before", "After"],
       rows: rows.flatMap(c => {
         const base = [c.at.slice(0, 19).replace("T", " "), KIND[c.kind]?.singular ?? c.kind, c.name ?? c.item_id,
-                      c.project_id ? tenants.get(c.project_id) ?? c.project_id : "", c.change, c.severity];
+                      c.project_id ? tenants.get(c.project_id) ?? c.project_id : "", c.change, c.severity,
+                      actionsText(c.actions)];
         return c.fields.length
           ? c.fields.map(f => [...base, f.field, f.op === "added" ? "" : String(f.before ?? ""), f.op === "removed" ? "" : String(f.after ?? "")])
           : [[...base, "", "", ""]];
@@ -58,8 +59,9 @@ export default function ChangeLog() {
         <DataFreshness domainKey="drift:status" />
       </div>
       <p className="text-muted" style={{ margin: "0 0 14px", fontSize: 13 }}>
-        Flavors, security groups, aggregates, hosts and tenant quotas, compared at every collection (every 15 minutes).
-        A change shows what changed and when it was first seen, not who changed it: PCD doesn't record that.
+        VMs, flavors, security groups, aggregates, hosts and tenant quotas, compared at every collection (every 15 minutes).
+        A change shows what changed and when it was first seen. Who changed it is known only for VMs, from Nova's
+        action log; PCD doesn't record it for the rest. A VM's size, host, image and security groups count, not starting or stopping it.
         {st && <> Recording since {parseAt(st.started_at).toLocaleString()}.</>}
       </p>
 
@@ -122,7 +124,12 @@ export default function ChangeLog() {
                             {c.severity === "high" && <span className="badge badge-error" style={{ marginLeft: 4 }}>high</span>}
                           </td>
                           <td style={{ fontSize: 12 }}>
-                            {c.fields.length === 0 ? <span className="text-muted">—</span>
+                            {c.actions?.length ? (
+                              <div style={{ marginBottom: 2 }} title={c.actions.map(a => `${parseAt(a.at).toLocaleString()} ${a.action}${a.user ? ` by ${a.user}` : ""}`).join("\n")}>
+                                {actionsText(c.actions)}
+                              </div>
+                            ) : null}
+                            {c.fields.length === 0 ? (c.actions?.length ? null : <span className="text-muted">—</span>)
                               : c.fields.map((f, i) => (
                                   <div key={i} className="text-mono" style={{ fontSize: 11, color: f.op === "removed" ? "var(--red)" : f.op === "added" ? "var(--green)" : undefined }}>
                                     {fieldText(f)}

@@ -2,9 +2,10 @@
 // reads in the table and the workbook.
 import type { Kind } from "../inventory/kinds";
 
-export type DriftKind = "flavors" | "security_groups" | "aggregates" | "hosts" | "quotas";
+export type DriftKind = "servers" | "flavors" | "security_groups" | "aggregates" | "hosts" | "quotas";
 
 export const DRIFT_KINDS: { id: DriftKind; label: string; singular: string; inventory?: Kind }[] = [
+  { id: "servers", label: "VMs", singular: "VM", inventory: "servers" },
   { id: "flavors", label: "Flavors", singular: "Flavor", inventory: "flavors" },
   { id: "security_groups", label: "Security groups", singular: "Security group", inventory: "security_groups" },
   { id: "aggregates", label: "Aggregates", singular: "Aggregate", inventory: "clusters" },
@@ -18,9 +19,14 @@ export const isDriftKind = (k: string | null): k is DriftKind => DRIFT_KINDS.som
 
 export interface FieldChange { field: string; op: "added" | "removed" | "changed"; before: unknown; after: unknown }
 
+/** Something Nova did to a VM, and who asked for it. */
+export interface Action { action: string; user: string | null; at: string; request_id?: string }
+
 export interface Change {
   id: number; at: string; kind: DriftKind; item_id: string; name: string | null; project_id: string | null;
-  change: "added" | "removed" | "modified"; severity: "medium" | "high"; fields: FieldChange[];
+  change: "added" | "removed" | "modified"; severity: "low" | "medium" | "high"; fields: FieldChange[];
+  /** VMs only: Nova's actions on it since the previous collection. */
+  actions: Action[] | null;
 }
 
 export const PERIODS: { days: number; label: string }[] = [
@@ -40,6 +46,14 @@ export function fieldText(f: FieldChange): string {
   if (f.op === "added") return `+ ${f.field}${f.after !== "" && f.after != null ? ` = ${valueText(f.after)}` : ""}`;
   if (f.op === "removed") return `− ${f.field}${f.before !== "" && f.before != null ? ` (was ${valueText(f.before)})` : ""}`;
   return `${f.field}: ${valueText(f.before)} → ${valueText(f.after)}`;
+}
+
+/** "resize, confirmResize by alice". */
+export function actionsText(actions: Action[] | null | undefined): string {
+  if (!actions?.length) return "";
+  const names = [...new Set(actions.map(a => a.action))];
+  const users = [...new Set(actions.map(a => a.user).filter(Boolean))];
+  return names.join(", ") + (users.length ? ` by ${users.join(", ")}` : "");
 }
 
 /** Zone-less backend times are UTC. */

@@ -116,7 +116,8 @@ def init_db() -> None:
                 project_id TEXT,
                 change     TEXT NOT NULL,
                 severity   TEXT NOT NULL,
-                fields     TEXT
+                fields     TEXT,
+                actions    TEXT
             );
             CREATE INDEX IF NOT EXISTS drift_changes_at ON drift_changes (at);
             CREATE TABLE IF NOT EXISTS reclamation_seen (
@@ -127,6 +128,9 @@ def init_db() -> None:
                 PRIMARY KEY (kind, id)
             );
         """)
+        # Columns added since the table was first created
+        if "actions" not in {r["name"] for r in conn.execute("PRAGMA table_info(drift_changes)")}:
+            conn.execute("ALTER TABLE drift_changes ADD COLUMN actions TEXT")
 
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
@@ -503,9 +507,10 @@ def drift_add(changes: list[dict], at: str | None = None) -> None:
     with _connect() as conn:
         conn.executemany(
             "INSERT INTO drift_changes (at, kind, item_id, name, project_id, change, severity,"
-            " fields) VALUES (?,?,?,?,?,?,?,?)",
+            " fields, actions) VALUES (?,?,?,?,?,?,?,?,?)",
             [(at, c["kind"], c["item_id"], c["name"], c.get("project_id"), c["change"],
-              c["severity"], json.dumps(c["fields"], default=str)) for c in changes])
+              c["severity"], json.dumps(c["fields"], default=str),
+              json.dumps(c["actions"]) if c.get("actions") else None) for c in changes])
 
 
 def drift_list(kind: str | None = None, since: str | None = None, q: str | None = None,
@@ -525,7 +530,8 @@ def drift_list(kind: str | None = None, since: str | None = None, q: str | None 
     args.append(limit)
     with _connect() as conn:
         rows = conn.execute(sql, args).fetchall()
-    return [{**dict(r), "fields": json.loads(r["fields"] or "[]")} for r in rows]
+    return [{**dict(r), "fields": json.loads(r["fields"] or "[]"),
+             "actions": json.loads(r["actions"]) if r["actions"] else None} for r in rows]
 
 
 def drift_counts(since: str | None = None) -> dict[str, int]:

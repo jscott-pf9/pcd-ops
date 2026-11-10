@@ -205,6 +205,10 @@ CLUSTER: dict[str, dict[str, str | None]] = {
 CLUSTER_ALLOC: dict[str, dict[str, str | None]] = {
     "vcpu_alloc_pct": {"local": "100 * max(last_over_time(pcd_ops_cluster_vcpus_used{SEL})) / max(last_over_time(pcd_ops_cluster_vcpus_total{SEL}))", "pcd": None},
     "mem_alloc_pct": {"local": "100 * max(last_over_time(pcd_ops_cluster_memory_used_bytes{SEL})) / max(last_over_time(pcd_ops_cluster_memory_total_bytes{SEL}))", "pcd": None},
+    # Against what the allocation ratios allow (Placement: (total - reserved) × ratio), from the
+    # overcommit collection
+    "vcpu_ratio_pct": {"local": "100 * max(last_over_time(pcd_ops_cluster_vcpus_allocated{SEL})) / max(last_over_time(pcd_ops_cluster_vcpus_capacity{SEL}))", "pcd": None},
+    "mem_ratio_pct": {"local": "100 * max(last_over_time(pcd_ops_cluster_memory_allocated_bytes{SEL})) / max(last_over_time(pcd_ops_cluster_memory_capacity_bytes{SEL}))", "pcd": None},
     "vms": {"local": "max(last_over_time(pcd_ops_cluster_vms{SEL}))", "pcd": None},
 }
 

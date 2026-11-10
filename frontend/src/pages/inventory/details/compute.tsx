@@ -84,11 +84,11 @@ export function HypervisorDetail({ item: h, ctx }: DetailProps) {
         ]} />
       </Section>
       <Section title="Allocation (Nova)">
-        <Usage label="vCPUs" used={h.vcpus_used} total={h.vcpus_total} format={n0} neutral />
-        <Usage label="Memory" used={mbToGb(h.memory_mb_used)} total={mbToGb(h.memory_mb_total)} format={gb} />
+        <Allocation x={h} />
         <Usage label="Local disk" used={h.disk_gb_used} total={h.disk_gb_total} format={gb} />
         <p className="text-muted" style={{ fontSize: 11, margin: 0 }}>
-          What VM flavors reserve, against what Nova schedules; actual use is under Metrics.
+          What VM flavors reserve, against the host's CPUs and RAM and against what its allocation
+          ratios let Nova schedule; actual use is under Metrics.
         </p>
       </Section>
       <Section title="Metrics" full>
@@ -272,6 +272,22 @@ export function ServerGroupDetail({ item: g, ctx }: DetailProps) {
   );
 }
 
+/** "4:1", or "2–4:1" for a cluster whose hosts differ. */
+const ratioText = (a: { ratio: number | null; ratios?: number[] }) =>
+  a.ratio != null ? `${a.ratio}:1` : `${a.ratios?.[0]}–${a.ratios?.[a.ratios.length - 1]}:1`;
+
+/** A host's or cluster's vCPUs and RAM allocated, against the physical size and, once the
+ *  overcommit collection has read Placement, against (total − reserved) × allocation ratio. */
+function Allocation({ x }: { x: any }) {
+  const { cpu, memory } = x.allocation ?? {};
+  return <>
+    <Usage label="vCPUs, physical" used={x.vcpus_used} total={x.vcpus_total} format={n0} neutral />
+    {cpu && <Usage label={`vCPUs, at ${ratioText(cpu)}`} used={cpu.allocated} total={cpu.capacity} format={n0} high={80} />}
+    <Usage label="Memory, physical" used={mbToGb(x.memory_mb_used)} total={mbToGb(x.memory_mb_total)} format={gb} />
+    {memory && <Usage label={`Memory, at ${ratioText(memory)}`} used={mbToGb(memory.allocated)} total={mbToGb(memory.capacity)} format={gb} high={80} />}
+  </>;
+}
+
 // ── Cluster / aggregate ─────────────────────────────────────────────────────────
 
 export function ClusterDetail({ item: c, ctx }: DetailProps) {
@@ -292,8 +308,11 @@ export function ClusterDetail({ item: c, ctx }: DetailProps) {
         <StatCard label="RAM" value={`${mbToGb(c.memory_mb_used) ?? 0} / ${mbToGb(c.memory_mb_total) ?? 0} GB`} sub="allocated / total" accent="var(--green)" />
       </>}>
       <Section title="Allocation">
-        <Usage label="vCPUs" used={c.vcpus_used} total={c.vcpus_total} format={n0} neutral />
-        <Usage label="Memory" used={mbToGb(c.memory_mb_used)} total={mbToGb(c.memory_mb_total)} format={gb} />
+        <Allocation x={c} />
+        <p className="text-muted" style={{ fontSize: 11, margin: 0 }}>
+          What VM flavors reserve, against the hosts' CPUs and RAM and against what their allocation
+          ratios let Nova schedule.
+        </p>
       </Section>
       <Section title="Details">
         <Facts rows={[

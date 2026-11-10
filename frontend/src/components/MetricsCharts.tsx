@@ -6,7 +6,7 @@ import {
   getVmHistory, getVolumeHistory, rangesWithin, SOURCE_LABEL,
 } from "../api/metrics";
 import { mergeSeries, seriesStats, stepText, timeLabel } from "./chartData";
-import { formatBytes, formatPct, formatRate } from "./format";
+import { formatBytes, formatNumber, formatPct, formatRate } from "./format";
 import ChartFrame from "./ChartFrame";
 import TimeChart, { type SeriesDef } from "./TimeChart";
 
@@ -23,9 +23,9 @@ export type MetricsKind = "host" | "vm" | "storage" | "cluster" | "volume";
 const BLUE = "var(--blue-primary)", GREEN = "var(--green)", PURPLE = "var(--purple)",
   YELLOW = "var(--yellow)", GRAY = "var(--gray-400)", RED = "var(--red)";
 const ms = (v: number) => `${v.toFixed(v < 10 ? 2 : 0)} ms`;
-const iops = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(v < 10 ? 1 : 0));
+const iops = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : formatNumber(v));
 const count = (v: number) => String(Math.round(v));
-const rate = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2));
+const rate = formatNumber;
 
 const HOST_CHARTS: ChartDef[] = [
   { title: "CPU",        series: [{ key: "cpu_pct",  label: "CPU",    color: BLUE }],  format: formatPct, max: 100 },
@@ -83,8 +83,13 @@ const CHARTS: Record<MetricsKind, ChartDef[]> = {
   ],
   cluster: [
     ...HOST_CHARTS,
-    { title: "Allocation", series: [{ key: "vcpu_alloc_pct", label: "vCPUs", color: BLUE },
-                                    { key: "mem_alloc_pct", label: "RAM", color: GREEN }], format: formatPct, max: 100 },
+    { title: "Allocation, physical", series: [{ key: "vcpu_alloc_pct", label: "vCPUs", color: BLUE },
+                                              { key: "mem_alloc_pct", label: "RAM", color: GREEN }], format: formatPct, max: 100,
+      hint: "What VM flavors reserve against the hosts' CPUs and RAM. Above 100% is overcommit." },
+    { title: "Allocation, at the ratios", series: [{ key: "vcpu_ratio_pct", label: "vCPUs", color: BLUE },
+                                                   { key: "mem_ratio_pct", label: "RAM", color: GREEN }], format: formatPct, max: 100,
+      requires: ["vcpu_ratio_pct", "mem_ratio_pct"],
+      hint: "What VM flavors reserve against what the allocation ratios let Nova schedule: (total − reserved) × ratio, from Placement. At 100% the cluster is full." },
     { title: "VMs", series: [{ key: "vms", label: "VMs", color: PURPLE }], format: count, unit: " VMs" },
   ],
   volume: [

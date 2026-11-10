@@ -2,7 +2,7 @@
 
 
 
-**Version:** 0.7.0  
+**Version:** 0.8.0  
 **Base URL:** `/api`  
 **Auth:** PCD login (session cookie). See *Authentication* below.
 
@@ -363,11 +363,12 @@ Delete a capacity plan.
 
 ### **GET** `/api/drift/changes`
 
-The config change log, newest first: flavors, security groups, aggregates, hosts and
+The config change log, newest first: VMs, flavors, security groups, aggregates, hosts
 
-quotas added, removed or modified between collections, each with its changed fields
-({field, op: added|removed|changed, before, after}) and severity. Filter by `kind`, the
-last `days`, and `q` (item name or field).
+and quotas added, removed or modified between collections, each with its changed fields
+({field, op: added|removed|changed, before, after}) and severity. VM changes carry Nova's
+actions on the VM since the previous collection (`actions`: [{action, user, at,
+request_id}], else null). Filter by `kind`, the last `days`, and `q` (item name or field).
 
 **Parameters**
 
@@ -552,7 +553,9 @@ Return graph nodes + edges for the topology view.
 
 Return host aggregates (`kind` "cluster" for PCD clusters, which are pf9-managed
 
-aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation.
+aggregates) with their hosts, VM count, and vCPU/RAM totals and allocation (`allocation`:
+against the physical size and what the allocation ratios allow, null before Placement
+was read).
 
 **Response:** 200 — Successful Response  
 

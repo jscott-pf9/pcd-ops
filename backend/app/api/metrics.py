@@ -22,7 +22,7 @@ VM_SERIES = ["cpu_pct", "mem_pct", "mem_incl_cache_pct", "mem_total_bytes", "mem
 STORAGE_SERIES = ["total_bytes", "used_bytes", "provisioned_bytes", "read_bps", "write_bps", "iops",
                   "latency_ms"]
 CLUSTER_SERIES = HOST_SERIES
-CLUSTER_ALLOC_SERIES = ["vcpu_alloc_pct", "mem_alloc_pct", "vms"]
+CLUSTER_ALLOC_SERIES = ["vcpu_alloc_pct", "mem_alloc_pct", "vcpu_ratio_pct", "mem_ratio_pct", "vms"]
 VOLUME_SERIES = ["read_bps", "write_bps", "read_iops", "write_iops", "latency_ms",
                  "allocated_bytes", "capacity_bytes"]
 

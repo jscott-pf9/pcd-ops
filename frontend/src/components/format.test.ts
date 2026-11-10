@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatPct, formatRate, pctColor } from "./format";
+import { formatBytes, formatNumber, formatPct, formatRate, pctColor } from "./format";
 import { rangesWithin } from "../api/metrics";
 import { noDataReason } from "../api/client";
 
@@ -16,6 +16,15 @@ describe("formatBytes / formatRate / formatPct", () => {
       expect(formatRate(v)).toBe("—");
       expect(formatPct(v)).toBe("—");
     }
+  });
+  it("counts and rates keep small values instead of rounding them to zero", () => {
+    expect(formatNumber(0)).toBe("0");
+    expect(formatNumber(1234.4)).toBe("1234");
+    expect(formatNumber(12.34)).toBe("12.3");
+    expect(formatNumber(0.1234)).toBe("0.12");
+    expect(formatNumber(0.0033333)).toBe("0.0033");
+    expect(formatNumber(0.00002)).toBe("0.00002");
+    expect(formatNumber(null)).toBe("—");
   });
   it("rates and percentages", () => {
     expect(formatRate(12.5 * 1024 ** 2)).toBe("12.5 MB/s");

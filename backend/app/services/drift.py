@@ -4,7 +4,8 @@ since the previous one (pure functions; collector.collect_drift fetches and stor
 A snapshot is {kind: {id: {"name", "project_id", "attrs": {...}}}}. Attribute values are
 scalars, or dicts diffed per key: metadata and extra specs, and sets (aggregate hosts,
 security group rules) as {member: description}. Changes are recorded between collections, so
-they say what changed and roughly when, not who: Keystone doesn't expose that.
+they say what changed and roughly when, not who: Keystone doesn't expose that. VMs are the
+exception: Nova's action log says what was done to one and by whom (attach_actions).
 """
 
 from __future__ import annotations
@@ -13,8 +14,9 @@ import json
 
 from app.services.reclamation import HIDDEN_PROJECTS
 
-KINDS = ("flavors", "security_groups", "aggregates", "hosts", "quotas")
+KINDS = ("servers", "flavors", "security_groups", "aggregates", "hosts", "quotas")
 LABEL = {
+    "servers": "VM",
     "flavors": "flavor",
     "security_groups": "security group",
     "aggregates": "aggregate",
@@ -22,6 +24,7 @@ LABEL = {
     "quotas": "quotas",
 }
 PLURAL = {
+    "servers": "VMs",
     "flavors": "flavors",
     "security_groups": "security groups",
     "aggregates": "aggregates",
@@ -69,6 +72,26 @@ def flavors(records: list[dict]) -> dict:
             extra_specs=dict(f.get("extra_specs") or {}),
         )
         for f in records
+    }
+
+
+def servers(records: list[dict]) -> dict:
+    """VM configuration: its size (a resize), host (a migration), image (a rebuild) and
+    security groups. Not power state: starting and stopping a VM doesn't change it. VMs still
+    building are left out until they have a host."""
+    return {
+        s["id"]: _item(
+            s["name"],
+            s.get("project_id"),
+            flavor=s.get("flavor_name"),
+            vcpus=s.get("flavor_vcpus"),
+            ram_mb=s.get("flavor_ram_mb"),
+            host=s.get("hypervisor_hostname"),
+            image_id=s.get("image_id") or None,
+            security_groups={g: "" for g in s.get("security_groups") or []},
+        )
+        for s in records
+        if s.get("status") != "BUILD"
     }
 
 
@@ -212,7 +235,11 @@ def _fields(before: dict, after: dict) -> list[dict]:
 
 def severity(kind: str, change: str, fields: list[dict]) -> str:
     """high: a security group's rules added or removed, a host going down, disabled or gone,
-    an aggregate losing a host. medium: everything else."""
+    an aggregate losing a host. low: a VM created, deleted, migrated or renamed. medium:
+    everything else (a VM resized, rebuilt or given other security groups among it)."""
+    if kind == "servers":
+        return ("medium" if change == "modified"
+                and any(f["field"] not in ("host", "name") for f in fields) else "low")
     if kind == "security_groups" and any(
         f["field"].startswith("rules.") and f["op"] != "changed" for f in fields
     ):
@@ -273,9 +300,26 @@ def diff(prev: dict, cur: dict) -> list[dict]:
     return out
 
 
+def attach_actions(changes: list[dict], actions: dict[str, list[dict]]) -> None:
+    """Give each VM change Nova's actions on that VM ({server id: [{action, user, at}]}, since
+    the previous collection): "resize, confirmResize by alice"."""
+    for c in changes:
+        if c["kind"] == "servers" and actions.get(c["item_id"]):
+            c["actions"] = sorted(actions[c["item_id"]], key=lambda a: a.get("at") or "")
+
+
+def actions_text(acts: list[dict]) -> str:
+    """"resize, confirmResize by alice"."""
+    names = list(dict.fromkeys(a["action"] for a in acts))
+    users = list(dict.fromkeys(a["user"] for a in acts if a.get("user")))
+    return ", ".join(names) + (f" by {', '.join(users)}" if users else "")
+
+
 def describe(c: dict) -> str:
     """One line for alerts: "flavor m1.large modified: vcpus 4 → 8"."""
     head = f"{LABEL[c['kind']]} {c['name']} {c['change']}"
+    if c.get("actions"):
+        head += f" ({actions_text(c['actions'])})"
     if not c["fields"]:
         return head
     parts = []

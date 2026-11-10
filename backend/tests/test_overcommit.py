@@ -123,6 +123,11 @@ def test_collector_maps_load_and_vms_to_hosts(monkeypatch):
 
     monkeypatch.setattr(collector.metrics_catalog, "source", src)
     monkeypatch.setattr(collector.metrics_catalog, "client", lambda s: NS(query=query))
+    pushed = []
+
+    async def push(samples):
+        pushed.extend(samples)
+    monkeypatch.setattr(collector.local_metrics, "push", push)
     asyncio.run(collector.collect_overcommit())
     data, _ = db.cache_get("capacity:overcommit")
     h = data["hosts"][0]
@@ -133,6 +138,24 @@ def test_collector_maps_load_and_vms_to_hosts(monkeypatch):
     assert all(q.startswith("quantile_over_time(0.95, (") and "[168h:1h]" in q for q in seen)
     assert not any("pswpin" in q for q in seen)     # swap-in is local only
     assert data["load"] == {"source": "pcd", "hours": 168, "note": None}
+    # The cluster's allocation against what its ratios allow, for its chart: 8 CPUs × 4
+    assert {(n, v) for n, labels, v in pushed if labels == {"aggregate": "1"}} == {
+        ("pcd_ops_cluster_vcpus_capacity", 32.0), ("pcd_ops_cluster_vcpus_allocated", 30.0),
+        ("pcd_ops_cluster_memory_capacity_bytes", 32768 * 1024**2),
+        ("pcd_ops_cluster_memory_allocated_bytes", 8192 * 1024**2)}
+
+
+def test_inventory_lists_carry_allocation(admin):
+    db.cache_set("inventory:hypervisors", [{"id": "h1", "hostname": "one"}, {"id": "h2"}])
+    db.cache_set("inventory:clusters", [{"id": 1, "name": "c"}])
+    cpu = o.allocation(inv(8, 4.0), 30)
+    db.cache_set("capacity:overcommit", {
+        "hosts": [{"id": "h1", "cpu": cpu, "memory": None}],
+        "clusters": [{"id": 1, "cpu": cpu, "memory": None}]})
+    hosts = admin.get("/api/inventory/hypervisors").json()
+    assert hosts[0]["allocation"]["cpu"]["alloc_pct"] == 93.8 and hosts[1]["allocation"] is None
+    c = admin.get("/api/inventory/clusters").json()[0]
+    assert c["allocation"] == {"cpu": cpu, "memory": None}
 
 
 def test_overcommit_503_until_collected(admin):
