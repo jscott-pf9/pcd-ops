@@ -116,7 +116,7 @@
     "timeout_s": 600
   },
   "access": {
-    "url": "http://{ip}/"
+    "url": "https://{ip}/"
   },
   "ui": {
     "nav": {
