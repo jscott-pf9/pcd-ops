@@ -9,7 +9,8 @@
 # Environment:
 #   FIRMWARE=uefi|bios   uefi = q35 + OVMF (default), bios = SeaBIOS
 #   IMAGE=<qcow2>        default: newest deploy/packer/alpine/output/*/pcd-ops-*.qcow2
-#   PORT=8180            host port forwarded to guest :80
+#   PORT=8180            host port forwarded to guest :80 (health check, redirect to HTTPS)
+#   HTTPS_PORT=PORT+1000 host port forwarded to guest :443 (the app, self-signed certificate)
 #   TIMEOUT=300          seconds to wait for /api/health
 #   KEEP=1               leave the VM running (skips the offline disk checks)
 #   DISK_GB=60           disk size, as the catalog's flavor gives it (the root fs must grow)
@@ -21,6 +22,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 FIRMWARE=${FIRMWARE:-uefi}
 USER_DATA=${1:-build/user-data.sample}
 PORT=${PORT:-8180}
+HTTPS_PORT=${HTTPS_PORT:-$((PORT + 1000))}
 TIMEOUT=${TIMEOUT:-300}
 DISK_GB=${DISK_GB:-60}
 RUN=${RUN:-build/run/$FIRMWARE}
@@ -48,12 +50,12 @@ case "$FIRMWARE" in
   *) echo "FIRMWARE must be uefi or bios" >&2; exit 1 ;;
 esac
 
-echo "==> Booting (console: $RUN/console.log, http://127.0.0.1:$PORT/)"
+echo "==> Booting (console: $RUN/console.log, https://127.0.0.1:$HTTPS_PORT/)"
 qemu-system-x86_64 -enable-kvm "${FW_ARGS[@]}" -m 4096 -smp 2 -display none \
   -daemonize -pidfile "$RUN/qemu.pid" \
   -drive file="$RUN/disk.qcow2",if=virtio \
   -drive file="$RUN/config-drive.iso",if=virtio,format=raw,readonly=on \
-  -netdev user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:80 -device virtio-net-pci,netdev=n0 \
+  -netdev user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443 -device virtio-net-pci,netdev=n0 \
   -serial file:"$RUN/console.log" -monitor unix:"$RUN/monitor.sock",server,nowait
 stop_vm() { kill "$(cat "$RUN/qemu.pid" 2>/dev/null)" 2>/dev/null || true; }
 # ACPI power button, so the guest unmounts cleanly before the disk is read; kill after 60s.
@@ -75,13 +77,21 @@ elapsed=$(( $(date +%s) - start ))
 if curl -sf -o /dev/null "http://127.0.0.1:$PORT/api/health"; then
   healthy=1
   echo "==> /api/health: 200 after ${elapsed}s: $(curl -s "http://127.0.0.1:$PORT/api/health")"
+  # Plain HTTP answers only the health check; the rest redirects to HTTPS (APPLIANCE_STANDARD §7.9)
+  read -r code location < <(curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://127.0.0.1:$PORT/login")
+  echo "==> http /login: HTTP $code → $location (expect 301 to https)"
+  [ "$code" = 301 ] && [ "${location#https://}" != "$location" ] || healthy=
+  # The app over HTTPS, with the self-signed certificate made at first boot (-k: not trusted here)
+  H="https://127.0.0.1:$HTTPS_PORT"
+  echo "==> certificate: $(curl -skv -o /dev/null "$H/api/health" 2>&1 | sed -n 's/^\* *subject: //p' | head -1)"
   # Everything else needs a PCD login (APPLIANCE_STANDARD §7); the connection comes from config.env.
-  echo "==> /api/auth/session: $(curl -s "http://127.0.0.1:$PORT/api/auth/session")"
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/settings")
+  echo "==> /api/auth/session: $(curl -sk "$H/api/auth/session")"
+  code=$(curl -sk -o /dev/null -w '%{http_code}' "$H/api/settings")
   echo "==> /api/settings without a login: HTTP $code (expect 401)"
   [ "$code" = 401 ] || healthy=
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/login")
-  echo "==> /login (SPA): HTTP $code"
+  code=$(curl -sk -o /dev/null -w '%{http_code}' "$H/login")
+  echo "==> /login (SPA): HTTP $code (expect 200)"
+  [ "$code" = 200 ] || healthy=
 else
   echo "==> /api/health: no answer after ${elapsed}s (HTTP $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/health"))"
 fi
