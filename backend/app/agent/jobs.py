@@ -5,18 +5,21 @@ Job types:
   snapshot-cleanup      Delete volume snapshots older than max_age_days (optionally per tenant)
   snapshot-create       Create volume snapshots for VMs matching tenant/name filter
   snapshot-rotate       Enforce per-volume retention count for prefixed snapshots
-  resource-reclamation  Shelve/delete stopped VMs and unattached volumes past thresholds
+  resource-reclamation  Shelve/delete stopped VMs, delete unattached volumes and (when set)
+                        unused floating IPs, orphaned ports, empty server groups, private images
   capacity-report       AI-generated capacity summary (stored as report, optionally emailed)
-  rightsizing-resize    Resize over-provisioned VMs to their suggested smaller flavor
+  rightsizing-resize    Resize VMs to their suggested flavor where a host has room
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import uuid
 from datetime import datetime, timedelta
 
-from app.services import db
+from app.config import settings
+from app.services import alerts, db, reclamation, rightsizing
 from app.services.openstack import get_connection
 
 logger = logging.getLogger(__name__)
@@ -148,6 +151,7 @@ async def _run_snapshot_cleanup(config: dict) -> dict:
                 await asyncio.to_thread(lambda sid=s.id: conn.block_storage.delete_snapshot(sid))
             except Exception as e:
                 logger.warning("Failed to delete snapshot %s: %s", s.id, e)
+                _fail("delete snapshot " + str(s.name or s.id), e)
                 success = False
         if success:
             size_gb = s.size or 0
@@ -224,6 +228,7 @@ async def _run_snapshot_create(config: dict) -> dict:
                     })
                 except Exception as e:
                     logger.warning("Failed to create snapshot for volume %s: %s", vol.id, e)
+                    _fail("snapshot of volume " + str(vol.name or vol.id), e)
                     skipped.append({"id": vol.id, "name": vol.name or vol.id, "reason": str(e)})
             else:
                 created.append({
@@ -238,6 +243,14 @@ async def _run_snapshot_create(config: dict) -> dict:
     prefix = "[DRY RUN] " if dry_run else ""
     summary = (f"{prefix}{'Would create' if dry_run else 'Created'} {len(created)} snapshot(s) "
                f"across {len(servers)} VM(s)")
+    # Say why VMs were left out: one booted from an image has only a local disk, no volume
+    no_volumes = sum(1 for s in skipped if s["reason"] == "no attached volumes")
+    failed = len(skipped) - no_volumes
+    if no_volumes:
+        summary += (f"; {no_volumes} VM(s) have no Cinder volumes to snapshot (booted from an "
+                    "image onto a local disk)")
+    if failed:
+        summary += f"; {failed} snapshot(s) failed"
     return {"summary": summary, "dry_run": dry_run, "created_count": len(created),
             "skipped_count": len(skipped), "snapshots": created, "skipped": skipped}
 
@@ -283,6 +296,7 @@ async def _run_snapshot_rotate(config: dict) -> dict:
                     await asyncio.to_thread(lambda sid=s.id: conn.block_storage.delete_snapshot(sid))
                 except Exception as e:
                     logger.warning("Failed to delete snapshot %s: %s", s.id, e)
+                    _fail("delete snapshot " + str(s.name or s.id), e)
                     success = False
             if success:
                 deleted.append({
@@ -302,98 +316,162 @@ async def _run_snapshot_rotate(config: dict) -> dict:
 
 
 async def _run_resource_reclamation(config: dict) -> dict:
+    """Stopped VMs and unattached volumes, chosen by the same rules as the Reclamation page
+    (services/reclamation.py). A volume's unattached time is the earlier of when PCD Ops first saw
+    it unattached and Cinder's updated_at (which a detach sets), never its age. Floating IPs,
+    orphaned ports, empty server groups and private images too when their days are set
+    (_reclaim_more)."""
     conn = get_connection()
     stopped_days      = int(config.get("stopped_days", 30))
     unattached_days   = int(config.get("unattached_days", 30))
     action            = config.get("action", "shelve")
     dry_run           = bool(config.get("dry_run", True))
-    cutoff_stopped    = datetime.utcnow() - timedelta(days=stopped_days)
-    cutoff_unattached = datetime.utcnow() - timedelta(days=unattached_days)
 
     tenants_cache, _ = db.cache_get("inventory:tenants")
     tenant_map = {t["id"]: t["name"] for t in (tenants_cache or [])}
 
-    servers, volumes = await asyncio.gather(
+    servers_raw, volumes_raw = await asyncio.gather(
         asyncio.to_thread(lambda: list(conn.compute.servers(all_projects=True))),
         asyncio.to_thread(lambda: list(conn.block_storage.volumes(all_projects=True))),
     )
-
-    # Build server_id → attached_gb map
-    attached_gb: dict[str, int] = {}
-    for v in volumes:
-        for att in (v.attachments or []):
-            sid = att.get("server_id")
-            if sid:
-                attached_gb[sid] = attached_gb.get(sid, 0) + (v.size or 0)
+    servers = [reclamation.server_record(s) for s in servers_raw]
+    volumes = [reclamation.volume_record(v) for v in volumes_raw]
+    seen_volumes = db.seen_get("unattached_volumes")
 
     vms_actioned, volumes_deleted = [], []
 
-    for s in servers:
-        if s.status not in ("SHUTOFF", "ERROR", "SHELVED_OFFLOADED"):
+    for s in reclamation.stopped_servers(servers, volumes):
+        offline_days = _age_days(s["updated_at"])
+        if not s["updated_at"] or offline_days < stopped_days:
             continue
-        updated = s.updated_at
-        if isinstance(updated, str):
-            try:
-                updated = datetime.fromisoformat(updated.replace("Z", "+00:00")).replace(tzinfo=None)
-            except ValueError:
-                continue
-        if updated >= cutoff_stopped:
-            continue
-        offline_days = (datetime.utcnow() - updated).days
-        logger.info("reclamation: %s VM %s (%dd offline)", "DRY" if dry_run else action, s.name, offline_days)
+        logger.info("reclamation: %s VM %s (%dd offline)",
+                    "DRY" if dry_run else action, s["name"], offline_days)
         success = True
         if not dry_run:
             try:
                 if action == "delete":
-                    await asyncio.to_thread(lambda sid=s.id: conn.compute.delete_server(sid, force=True))
+                    await asyncio.to_thread(
+                        lambda sid=s["id"]: conn.compute.delete_server(sid, force=True))
                 else:
-                    await asyncio.to_thread(lambda sid=s.id: conn.compute.shelve_server(sid))
+                    await asyncio.to_thread(lambda sid=s["id"]: conn.compute.shelve_server(sid))
             except Exception as e:
-                logger.warning("Failed to %s VM %s: %s", action, s.name, e)
+                logger.warning("Failed to %s VM %s: %s", action, s["name"], e)
+                _fail(f"{action} VM {s['name']}", e)
                 success = False
         if success:
             vms_actioned.append({
-                "id":           s.id,
-                "name":         s.name,
+                "id":           s["id"],
+                "name":         s["name"],
                 "action":       action,
                 "offline_days": offline_days,
-                "attached_gb":  attached_gb.get(s.id, 0),
-                "tenant_name":  tenant_map.get(s.project_id, "—"),
+                "attached_gb":  s["attached_disk_gb"],
+                "tenant_name":  tenant_map.get(s["project_id"], "—"),
             })
 
-    for v in volumes:
-        if v.status != "available" or v.attachments:
+    for v in reclamation.unattached_volumes(volumes):
+        since = reclamation.earliest(seen_volumes.get(v["id"]), v["since_hint"])
+        days = _age_days(since)
+        if not since or days < unattached_days:
             continue
-        created = v.created_at
-        if isinstance(created, str):
-            try:
-                created = datetime.fromisoformat(created.replace("Z", "+00:00")).replace(tzinfo=None)
-            except ValueError:
-                continue
-        if created >= cutoff_unattached:
-            continue
-        logger.info("reclamation: %s volume %s", "DRY" if dry_run else "DELETE", v.name or v.id)
+        logger.info("reclamation: %s volume %s", "DRY" if dry_run else "DELETE", v["name"])
         success = True
         if not dry_run:
             try:
-                await asyncio.to_thread(lambda vid=v.id: conn.block_storage.delete_volume(vid))
+                await asyncio.to_thread(lambda vid=v["id"]: conn.block_storage.delete_volume(vid))
             except Exception as e:
-                logger.warning("Failed to delete volume %s: %s", v.id, e)
+                logger.warning("Failed to delete volume %s: %s", v["id"], e)
+                _fail(f"delete volume {v['name']}", e)
                 success = False
         if success:
             volumes_deleted.append({
-                "id":              v.id,
-                "name":            v.name or "(unnamed)",
-                "size_gb":         v.size or 0,
-                "unattached_days": _age_days(v.created_at),
-                "tenant_name":     tenant_map.get(v.project_id, "—"),
+                "id":              v["id"],
+                "name":            v["name"],
+                "size_gb":         v["size"],
+                "unattached_days": days,
+                "tenant_name":     tenant_map.get(v["project_id"], "—"),
             })
+
+    deleted = await _reclaim_more(conn, config, servers, volumes, dry_run, tenant_map)
 
     prefix = "[DRY RUN] " if dry_run else ""
     summary = (f"{prefix}{action.title()} {len(vms_actioned)} VM(s) offline >{stopped_days}d, "
                f"deleted {len(volumes_deleted)} volume(s) unattached >{unattached_days}d")
+    for cat, items in deleted.items():
+        summary += f", {len(items)} {RECLAIM_MORE[cat][0]}(s) >{config[cat + '_days']}d"
     return {"summary": summary, "dry_run": dry_run, "action": action,
-            "vms_actioned": vms_actioned, "volumes_deleted": volumes_deleted}
+            "vms_actioned": vms_actioned, "volumes_deleted": volumes_deleted,
+            "deleted": deleted}
+
+
+# Categories the job deletes besides stopped VMs and volumes, each only when its
+# "<category>_days" setting is above 0: (noun, how to delete one).
+RECLAIM_MORE = {
+    "unused_floating_ips": ("floating IP", lambda c, i: c.network.delete_ip(i)),
+    "orphaned_ports": ("orphaned port", lambda c, i: c.network.delete_port(i)),
+    "empty_server_groups": ("empty server group", lambda c, i: c.compute.delete_server_group(i)),
+    "unused_images": ("unused image", lambda c, i: c.image.delete_image(i)),
+}
+
+
+async def _live_candidates(conn, cats: list[str], servers: list[dict],
+                           volumes: list[dict]) -> dict[str, set[str]]:
+    """Ids each category's rule picks from PCD right now."""
+    async def fetch(fn):
+        return await asyncio.to_thread(lambda: list(fn()))
+    out: dict[str, set[str]] = {}
+    if "unused_floating_ips" in cats:
+        fips = [reclamation.fip_record(f) for f in await fetch(conn.network.ips)]
+        out["unused_floating_ips"] = {f["id"] for f in reclamation.unused_floating_ips(fips)}
+    if "orphaned_ports" in cats:
+        ports, routers = await asyncio.gather(fetch(conn.network.ports), fetch(conn.network.routers))
+        found = reclamation.orphaned_ports([reclamation.port_record(p) for p in ports],
+                                           {s["id"] for s in servers}, {r.id for r in routers})
+        out["orphaned_ports"] = {p["id"] for p in found}
+    if "empty_server_groups" in cats:
+        groups = await fetch(lambda: conn.compute.server_groups(all_projects=True))
+        found = reclamation.empty_server_groups([reclamation.group_record(g) for g in groups])
+        out["empty_server_groups"] = {g["id"] for g in found}
+    if "unused_images" in cats:
+        images = [reclamation.image_record(i) for i in await fetch(conn.image.images)]
+        found = reclamation.unused_images(images, reclamation.image_use(servers, volumes))
+        # Only a project's own images: public, community and shared ones others may boot later
+        out["unused_images"] = {i["id"] for i in found
+                                if i["visibility"] == "private" and not i["is_protected"]}
+    return out
+
+
+async def _reclaim_more(conn, config: dict, servers: list[dict], volumes: list[dict],
+                        dry_run: bool, tenant_map: dict) -> dict[str, list[dict]]:
+    """Delete the newer categories' candidates that have been candidates for their setting's
+    days. An item must be one now (checked live, so nothing that came into use since the last
+    collection is touched) and at the last collection, which has how long it has been one and
+    the rules' full inputs (an image a host boots from that Nova doesn't know is in use)."""
+    days = {cat: int(config.get(f"{cat}_days") or 0) for cat in RECLAIM_MORE}
+    cats = [c for c, d in days.items() if d > 0]
+    if not cats:
+        return {}
+    cached, _ = db.cache_get("reclamation:candidates")
+    live = await _live_candidates(conn, cats, servers, volumes)
+    out: dict[str, list[dict]] = {}
+    for cat in cats:
+        noun, delete = RECLAIM_MORE[cat]
+        done = out[cat] = []
+        for item in (cached or {}).get(cat) or []:
+            age = _age_days(item.get("since"))
+            if item["id"] not in live[cat] or not item.get("since") or age < days[cat]:
+                continue
+            logger.info("reclamation: %s %s %s", "DRY" if dry_run else "DELETE", noun,
+                        item.get("name") or item["id"])
+            if not dry_run:
+                try:
+                    await asyncio.to_thread(delete, conn, item["id"])
+                except Exception as e:
+                    logger.warning("Failed to delete %s %s: %s", noun, item["id"], e)
+                    _fail(f"delete {noun} {item.get('name') or item['id']}", e)
+                    continue
+            done.append({"id": item["id"], "name": item.get("name") or item["id"][:8],
+                         "days": age, "tenant_name": tenant_map.get(item.get("project_id"), "—")})
+    return out
 
 
 async def _run_capacity_report(config: dict) -> dict:
@@ -570,7 +648,9 @@ async def _run_capacity_report(config: dict) -> dict:
 
 
 async def _run_rightsizing_resize(config: dict) -> dict:
-    """Resize over-provisioned / idle VMs to their AI-suggested smaller flavor."""
+    """Resize VMs of the chosen classifications to their suggested flavor: smaller for
+    over-provisioned and idle VMs, bigger for CPU or memory pressure. A VM whose flavor no host
+    in its cluster has room for now is skipped."""
     conn = get_connection()
     dry_run         = bool(config.get("dry_run", True))
     classifications = config.get("classifications", ["overprovisioned", "idle"])
@@ -590,7 +670,12 @@ async def _run_rightsizing_resize(config: dict) -> dict:
     ]
 
     resized, skipped = [], []
-    for rec in candidates:
+    oc, _ = db.cache_get("capacity:overcommit")
+    clusters, _ = db.cache_get("inventory:clusters")
+    for rec in rightsizing.with_fit(candidates, oc, clusters):
+        if rec["fit"]["status"] != "fits":
+            skipped.append({"name": rec["server_name"], "reason": rec["fit"]["reason"]})
+            continue
         vm_id     = rec["server_id"]
         vm_name   = rec["server_name"]
         cur_fl    = rec["current_flavor"]
@@ -617,6 +702,7 @@ async def _run_rightsizing_resize(config: dict) -> dict:
                 await asyncio.to_thread(lambda vid=vm_id: conn.compute.confirm_server_resize(vid))
             except Exception as e:
                 logger.warning("Failed to resize %s: %s", vm_name, e)
+                _fail(f"resize {vm_name}", e)
                 skipped.append({"name": vm_name, "reason": str(e)})
                 action_ok = False
 
@@ -632,7 +718,7 @@ async def _run_rightsizing_resize(config: dict) -> dict:
             })
 
     prefix = "[DRY RUN] " if dry_run else ""
-    summary = (f"{prefix}Resized {len(resized)} VM(s) to smaller flavors; "
+    summary = (f"{prefix}Resized {len(resized)} VM(s) to their suggested flavors; "
                f"{len(skipped)} skipped. Classifications: {', '.join(classifications)}.")
     return {
         "summary": summary,
@@ -656,11 +742,25 @@ _EXECUTORS = {
 }
 
 
+# Per-item failures in the running job (a snapshot that couldn't be made, a VM that didn't
+# resize): the job carries on, and execute_job alerts on them once.
+_FAILED: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("job_failed",
+                                                                          default=None)
+
+
+def _fail(what: str, e: Exception) -> None:
+    failed = _FAILED.get()
+    if failed is not None:
+        failed.append(f"{what}: {e}")
+
+
 async def execute_job(job: dict) -> None:
-    """Run a job, log the run, update job status."""
+    """Run a job, log the run, update job status, and alert (services/alerts.py) when it fails,
+    when some of its items fail, or, if Settings say so, when it succeeds."""
     job_id  = job["id"]
     type_   = job["type"]
     config  = job.get("config") or {}
+    name    = job.get("name") or type_
 
     executor = _EXECUTORS.get(type_)
     if not executor:
@@ -669,14 +769,33 @@ async def execute_job(job: dict) -> None:
 
     run_id = db.job_run_start(job_id)
     logger.info("Job %d (%s) started (run_id=%d)", job_id, type_, run_id)
+    failed: list[str] = []
+    token = _FAILED.set(failed)
+    alert = None
     try:
         result = await executor(config)
+        if failed and isinstance(result, dict):
+            result["failed"] = failed[:50]
         result_str = json.dumps(result) if isinstance(result, dict) else str(result)
         db.job_run_finish(run_id, job_id, "success", result=result_str)
-        summary = result.get("summary", "") if isinstance(result, dict) else result
+        summary = result.get("summary", "") if isinstance(result, dict) else str(result)
         logger.info("Job %d (%s) complete: %s", job_id, type_, summary[:120])
+        if failed:
+            alert = alerts.Alert(
+                "job", f"job:{job_id}", "medium", f"Job {name}: {len(failed)} item(s) failed",
+                summary, fields=[[f"Failed {i + 1}", f] for i, f in enumerate(failed[:5])],
+                link="/jobs")
+        elif settings.alert_jobs_success:
+            alert = alerts.Alert("job", f"job:{job_id}:ok", "low", f"Job {name} succeeded",
+                                 summary, link="/jobs")
     except Exception as e:
         db.job_run_finish(run_id, job_id, "error", error=str(e))
         logger.exception("Job %d (%s) failed", job_id, type_)
         from app.services.openstack import report_background_failure
         report_background_failure(e)
+        alert = alerts.Alert("job", f"job:{job_id}", "high", f"Job {name} failed", str(e),
+                             fields=[["Type", type_]], link="/jobs")
+    finally:
+        _FAILED.reset(token)
+    if alert:
+        await alerts.raise_alert(alert)

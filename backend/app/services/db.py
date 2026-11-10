@@ -95,13 +95,45 @@ def init_db() -> None:
                 component  TEXT,
                 tenant     TEXT
             );
+            CREATE TABLE IF NOT EXISTS alerts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                at         TEXT NOT NULL,
+                source     TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                severity   TEXT NOT NULL,
+                title      TEXT NOT NULL,
+                body       TEXT,
+                results    TEXT,
+                suppressed INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS alerts_key ON alerts (key, at);
+            CREATE TABLE IF NOT EXISTS drift_changes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                at         TEXT NOT NULL,
+                kind       TEXT NOT NULL,
+                item_id    TEXT NOT NULL,
+                name       TEXT,
+                project_id TEXT,
+                change     TEXT NOT NULL,
+                severity   TEXT NOT NULL,
+                fields     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS drift_changes_at ON drift_changes (at);
+            CREATE TABLE IF NOT EXISTS reclamation_seen (
+                kind       TEXT NOT NULL,
+                id         TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen  TEXT NOT NULL,
+                PRIMARY KEY (kind, id)
+            );
         """)
 
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
 
-def cache_set(key: str, data: Any) -> str:
-    collected_at = datetime.utcnow().isoformat()
+def cache_set(key: str, data: Any, collected_at: str | None = None) -> str:
+    """Store `data` under `key`, collected now (or at `collected_at`, to edit it in place)."""
+    collected_at = collected_at or datetime.utcnow().isoformat()
     with _connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO cache (key, data, collected_at) VALUES (?, ?, ?)",
@@ -125,6 +157,31 @@ def cache_meta() -> dict[str, str]:
     with _connect() as conn:
         rows = conn.execute("SELECT key, collected_at FROM cache").fetchall()
     return {row["key"]: row["collected_at"] for row in rows}
+
+
+# ── Reclamation first-seen ─────────────────────────────────────────────────────
+
+def seen_update(kind: str, ids: list[str]) -> dict[str, str]:
+    """Record that `ids` are the current candidates of `kind`: new ones get first_seen now,
+    ones no longer listed are forgotten. Returns {id: first_seen}."""
+    now = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.executemany(
+            "INSERT INTO reclamation_seen (kind, id, first_seen, last_seen) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (kind, id) DO UPDATE SET last_seen = excluded.last_seen",
+            [(kind, i, now, now) for i in ids],
+        )
+        conn.execute("DELETE FROM reclamation_seen WHERE kind = ? AND last_seen < ?", (kind, now))
+        rows = conn.execute(
+            "SELECT id, first_seen FROM reclamation_seen WHERE kind = ?", (kind,)).fetchall()
+    return {r["id"]: r["first_seen"] for r in rows}
+
+
+def seen_get(kind: str) -> dict[str, str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, first_seen FROM reclamation_seen WHERE kind = ?", (kind,)).fetchall()
+    return {r["id"]: r["first_seen"] for r in rows}
 
 
 # ── Agent run log ──────────────────────────────────────────────────────────────
@@ -396,3 +453,89 @@ def report_get(report_id: str) -> dict | None:
             "SELECT data FROM capacity_reports WHERE id = ?", (report_id,)
         ).fetchone()
     return json.loads(row["data"]) if row else None
+
+
+# ── Alerts (services/alerts.py) ──────────────────────────────────────────────────
+
+def alert_record(source: str, key: str, severity: str, title: str, body: str, results: str,
+                 suppressed: bool) -> dict:
+    at = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO alerts (at, source, key, severity, title, body, results, suppressed)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (at, source, key, severity, title, body, results, int(suppressed)))
+    return {"id": cur.lastrowid, "at": at, "source": source, "key": key, "severity": severity,
+            "title": title, "body": body, "results": json.loads(results or "{}"),
+            "suppressed": suppressed}
+
+
+def alert_last(key: str) -> dict | None:
+    """The last alert with this key that was sent (not suppressed)."""
+    with _connect() as conn:
+        row = conn.execute("SELECT at, severity FROM alerts WHERE key = ? AND suppressed = 0"
+                           " ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+    return dict(row) if row else None
+
+
+def alert_list(limit: int = 100) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["results"] = json.loads(d["results"] or "{}")
+        d["suppressed"] = bool(d["suppressed"])
+        out.append(d)
+    return out
+
+
+def purge_alerts(older_than_days: int) -> int:
+    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
+    with _connect() as conn:
+        return conn.execute("DELETE FROM alerts WHERE at < ?", (cutoff,)).rowcount
+
+
+# ── Config change log (services/drift.py) ────────────────────────────────────────
+
+def drift_add(changes: list[dict], at: str | None = None) -> None:
+    at = at or datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.executemany(
+            "INSERT INTO drift_changes (at, kind, item_id, name, project_id, change, severity,"
+            " fields) VALUES (?,?,?,?,?,?,?,?)",
+            [(at, c["kind"], c["item_id"], c["name"], c.get("project_id"), c["change"],
+              c["severity"], json.dumps(c["fields"], default=str)) for c in changes])
+
+
+def drift_list(kind: str | None = None, since: str | None = None, q: str | None = None,
+               limit: int = 500) -> list[dict]:
+    """Changes, newest first. `q` matches the item's name or a changed field's name or value."""
+    sql, args = "SELECT * FROM drift_changes WHERE 1=1", []
+    if kind:
+        sql += " AND kind = ?"
+        args.append(kind)
+    if since:
+        sql += " AND at >= ?"
+        args.append(since)
+    if q:
+        sql += " AND (name LIKE ? OR fields LIKE ?)"
+        args += [f"%{q}%", f"%{q}%"]
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [{**dict(r), "fields": json.loads(r["fields"] or "[]")} for r in rows]
+
+
+def drift_counts(since: str | None = None) -> dict[str, int]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT kind, COUNT(*) n FROM drift_changes WHERE at >= ? GROUP BY kind",
+                            (since or "",)).fetchall()
+    return {r["kind"]: r["n"] for r in rows}
+
+
+def purge_drift(older_than_days: int) -> int:
+    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
+    with _connect() as conn:
+        return conn.execute("DELETE FROM drift_changes WHERE at < ?", (cutoff,)).rowcount

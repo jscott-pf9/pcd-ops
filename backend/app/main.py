@@ -9,9 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     access,
     agent,
+    alerts,
     anomaly,
     auth,
     capacity,
+    drift,
     events,
     feedback,
     inventory,
@@ -24,6 +26,7 @@ from app.api import (
     settings,
     snapshots,
     system,
+    tls,
 )
 from app.appliance import web_auth
 from app.services import local_metrics
@@ -91,6 +94,9 @@ for router in (
     jobs.router,
     reports.router,
     events.router,
+    alerts.router,
+    drift.router,
+    tls.router,
 ):
     app.include_router(router, prefix="/api")
 

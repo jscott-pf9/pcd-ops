@@ -1,5 +1,6 @@
-import React from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useState } from "react";
+import { Link } from "react-router-dom";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Area,
   AreaChart,
@@ -10,12 +11,21 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { apiFetch } from "../api/client";
+import { apiFetch, errorDetail } from "../api/client";
+import { useTenants } from "../api/tenants";
 import DataFreshness from "../components/DataFreshness";
+import WhatIfResult, { type Simulation } from "../components/WhatIfResult";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface ResourceSummary { total: number | null; used: number; free: number | null; }
+interface ResourceSummary {
+  total: number | null; used: number; free: number | null;
+  /** Host CPUs or GB (vCPUs and RAM), or disk GB (storage), before the ratio or oversubscription. */
+  physical?: number | null; ratio?: number | null;
+  /** Storage: volumes' GB, and what thin backends let Cinder provision. */
+  provisioned?: number | null; provisionable?: number | null;
+  source?: "placement" | "hypervisors" | "cinder";
+}
 interface Summary { vcpus: ResourceSummary; ram_gb: ResourceSummary; storage_gb: ResourceSummary; }
 
 interface TrendPoint { ts: number; label: string; used: number; total: number; pct: number; }
@@ -27,6 +37,7 @@ interface ResourceTrend {
 }
 interface Trends {
   window_days: number;
+  note?: string | null;
   resources: { vcpus: ResourceTrend; ram_gb: ResourceTrend; storage_gb: ResourceTrend };
   ai_analysis: string | null;
   period_start: string;
@@ -57,14 +68,16 @@ export default function Capacity() {
 
       {summary && (
         <section style={{ marginBottom: 16 }}>
-          <SectionTitle>Current Utilization</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
-            <UtilCard label="vCPUs" r={summary.vcpus} unit="" />
-            <UtilCard label="Memory" r={summary.ram_gb} unit="GB" />
-            <UtilCard label="Storage" r={summary.storage_gb} unit="GB" />
+          <SectionTitle>Allocated</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
+            <UtilCard label="vCPUs" r={summary.vcpus} unit="" basis={basis("vcpus", summary.vcpus)} />
+            <UtilCard label="Memory" r={summary.ram_gb} unit=" GB" basis={basis("ram_gb", summary.ram_gb)} />
+            <UtilCard label="Storage" r={summary.storage_gb} unit=" GB" basis={basis("storage_gb", summary.storage_gb)} />
           </div>
         </section>
       )}
+
+      {summary && <WhatIf />}
 
       {trends && (
         <section style={{ marginBottom: 16 }}>
@@ -72,7 +85,8 @@ export default function Capacity() {
             <SectionTitle style={{ marginBottom: 0 }}>{trends.window_days}-Day Trends</SectionTitle>
             <DataFreshness domainKey="capacity:trends" slow />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
+          {trends.note && <p className="text-muted" style={{ fontSize: 13, margin: "0 0 8px" }}>{trends.note}</p>}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
             <TrendCard label="vCPUs" data={trends.resources.vcpus} unit="" color="var(--blue-primary)" />
             <TrendCard label="Memory (GB)" data={trends.resources.ram_gb} unit="GB" color="var(--purple)" />
             <TrendCard label="Storage (GB)" data={trends.resources.storage_gb} unit="GB" color="var(--green)" />
@@ -83,7 +97,7 @@ export default function Capacity() {
       {trends && (
         <section style={{ marginBottom: 16 }}>
           <SectionTitle>Capacity Runway</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem", marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem", marginBottom: 12 }}>
             <RunwayCard label="vCPUs" data={trends.resources.vcpus} />
             <RunwayCard label="Memory" data={trends.resources.ram_gb} />
             <RunwayCard label="Storage" data={trends.resources.storage_gb} />
@@ -107,7 +121,26 @@ function SectionTitle({ children, style }: { children: React.ReactNode; style?: 
   );
 }
 
-function UtilCard({ label, r, unit }: { label: string; r: ResourceSummary; unit: string }) {
+const n = (v: number) => Math.round(v).toLocaleString();
+
+/** What a total is made of: "48 host CPUs × 2:1". */
+function basis(kind: "vcpus" | "ram_gb" | "storage_gb", r: ResourceSummary): string {
+  if (r.source === "hypervisors") return "From the hypervisors at 1:1: Placement had no data";
+  if (kind === "storage_gb") {
+    if (r.total == null) return "Volumes provisioned; the backends report no capacity";
+    const prov = `${n(r.provisioned ?? 0)} GB of volumes provisioned`;
+    return r.provisionable && r.provisionable > (r.total ?? 0)
+      ? `Written to Cinder's backends. ${prov}; thin backends let Cinder provision up to ${n(r.provisionable)} GB`
+      : `Written to Cinder's backends. ${prov}`;
+  }
+  if (r.physical == null) return "";
+  const ratio = r.ratio != null ? `${r.ratio}:1` : "mixed ratios";
+  return kind === "vcpus"
+    ? `Allocated, of ${Math.round(r.physical)} host CPUs × ${ratio} (Placement)`
+    : `Allocated, of ${Math.round(r.physical)} GB × ${ratio}, less reserved (Placement)`;
+}
+
+function UtilCard({ label, r, unit, basis }: { label: string; r: ResourceSummary; unit: string; basis: string }) {
   const hasTotal = r.total !== null && r.total > 0;
   const pct = hasTotal ? Math.round((r.used / r.total!) * 100) : null;
   const fillColor = pct === null ? "var(--blue-primary)"
@@ -128,13 +161,75 @@ function UtilCard({ label, r, unit }: { label: string; r: ResourceSummary; unit:
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--gray-500)" }}>
-        <span>{Math.round(r.used)}{unit} used</span>
+        <span>{n(r.used)}{unit} used</span>
         {r.free !== null
-          ? <span>{Math.round(r.free)}{unit} free</span>
+          ? <span>{n(r.free)}{unit} free</span>
           : <span className="text-muted">capacity unknown</span>}
-        {hasTotal && <span>{Math.round(r.total!)}{unit} total</span>}
+        {hasTotal && <span>{n(r.total!)}{unit} {r.source === "cinder" ? "total" : "allowed"}</span>}
       </div>
+      {basis && <div style={{ fontSize: 11, color: "var(--gray-400)", marginTop: 6 }}>{basis}</div>}
     </div>
+  );
+}
+
+// ── What-if ────────────────────────────────────────────────────────────────────
+
+const NO_ADD = { vcpus: 0, ram_gb: 0, storage_gb: 0, vdisks: 0 };
+
+/** Would this much more fit, in the cloud and in a tenant's quotas? Not saved: Forecast Plans
+ *  keeps plans. */
+function WhatIf() {
+  const tenants = useTenants();
+  const [add, setAdd] = useState(NO_ADD);
+  const [tenant, setTenant] = useState("");
+  const run = useMutation({
+    mutationFn: () => apiFetch<Simulation>("/capacity/what-if", {
+      method: "POST",
+      body: JSON.stringify({
+        additional_vcpus: add.vcpus, additional_ram_gb: add.ram_gb,
+        additional_storage_gb: add.storage_gb, additional_vdisks: add.vdisks,
+        tenant_id: tenant || null,
+      }),
+    }),
+  });
+  const field = (k: keyof typeof NO_ADD, label: string) => (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12, color: "var(--gray-600)" }}>
+      {label}
+      <input className="form-input" type="number" min={0} value={add[k]} style={{ width: 110 }}
+        onChange={e => setAdd(a => ({ ...a, [k]: Math.max(0, Number(e.target.value) || 0) }))} />
+    </label>
+  );
+  const tenantList = Array.from(tenants.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  return (
+    <section style={{ marginBottom: 16 }}>
+      <SectionTitle>What if…</SectionTitle>
+      <div className="card card-body" style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", flex: "1 1 420px" }}>
+          {field("vcpus", "vCPUs")}
+          {field("ram_gb", "RAM (GB)")}
+          {field("storage_gb", "Volume storage (GB)")}
+          {field("vdisks", "vDisks (volumes)")}
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12, color: "var(--gray-600)" }}>
+            Tenant (checks its quotas)
+            <select className="form-select" value={tenant} onChange={e => setTenant(e.target.value)} style={{ minWidth: 160 }}>
+              <option value="">— Whole cloud —</option>
+              {tenantList.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+          <button className="btn btn-primary" disabled={run.isPending} onClick={() => run.mutate()}>
+            {run.isPending ? "Checking…" : "Check"}
+          </button>
+          <div style={{ fontSize: 11, color: "var(--gray-500)", flexBasis: "100%" }}>
+            Totals for everything to add. To keep a plan and see it against capacity as it changes, use{" "}
+            <Link to="/capacity/plans">Forecast Plans</Link>.
+          </div>
+        </div>
+        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+          {run.data && <WhatIfResult sim={run.data} />}
+          {run.error && <p className="text-muted" style={{ fontSize: 13, margin: 0 }}>{errorDetail(run.error)}</p>}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -147,6 +242,8 @@ function TrendCard({ label, data, unit, color }: { label: string; data: Resource
     );
   }
 
+  // An id url(#…) can reference: "Memory (GB)" has a space and parentheses
+  const gradId = `fill-${label.replace(/[^\w-]/g, "")}`;
   const slope = data.trend?.slope_per_day ?? 0;
   const trendLabel = slope > 0.01
     ? `+${slope.toFixed(2)} ${unit}/day`
@@ -163,7 +260,7 @@ function TrendCard({ label, data, unit, color }: { label: string; data: Resource
       <ResponsiveContainer width="100%" height={140}>
         <AreaChart data={data.series} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
           <defs>
-            <linearGradient id={`fill-${label}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor={color} stopOpacity={0.15} />
               <stop offset="95%" stopColor={color} stopOpacity={0} />
             </linearGradient>
@@ -188,7 +285,7 @@ function TrendCard({ label, data, unit, color }: { label: string; data: Resource
             dataKey="used"
             stroke={color}
             strokeWidth={2}
-            fill={`url(#fill-${label})`}
+            fill={`url(#${gradId})`}
             dot={false}
             activeDot={{ r: 4 }}
           />

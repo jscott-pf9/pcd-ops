@@ -27,15 +27,17 @@ PCD Ops runs as a dedicated appliance VM in your PCD environment — no Kubernet
 
 **VM requirements:** 2 vCPU, 4 GB RAM, 20 GB disk. Needs outbound internet access for self-updates.
 
-**Ports:** Only **port 80** (HTTP) needs to be open. The appliance does not run sshd — management is via the VM console (VNC) or the web UI.
+**Ports:** **443** (HTTPS) and **80** (HTTP, which redirects to HTTPS and answers the catalog's `/api/health`). The appliance does not run sshd — management is via the VM console (VNC) or the web UI.
 
-**Access:** you log in with your own **PCD account** (username, password, domain); you need the **admin** role in the project PCD Ops was installed into. PCD Ops never stores a PCD password. The appliance serves **plain HTTP**, so put it on a management network or behind an HTTPS proxy; its session cookie is `HttpOnly` and `SameSite=Lax` but not `Secure`.
+**Access:** you log in with your own **PCD account** (username, password, domain); you need the **admin** role in the project PCD Ops was installed into. PCD Ops never stores a PCD password.
+
+**HTTPS:** the appliance makes a self-signed certificate at first boot (for its host name and addresses) and serves the web UI on port 443; plain HTTP redirects there. Browsers warn about a self-signed certificate until it's trusted, so **Settings → HTTPS** can download it (to trust it on a computer), make a new one for other names or a floating IP, create a CSR for your CA, or take an uploaded certificate and key. The redirect can be turned off there too. Over HTTPS the session cookie is `Secure` as well as `HttpOnly` and `SameSite=Lax`. Appliances installed from an earlier image turn HTTPS on from the VM console: **Advanced Options → HTTPS → Enable HTTPS**, then allow TCP 443 in the VM's security group.
 
 ---
 
 ### Method 1 — PCD App Catalog (Extensions)
 
-In the PCD admin UI, open **Extensions**, pick **PCD Ops**, and install. The catalog imports the release image, opens port 80, and waits for `/api/health`. It writes `/etc/pcd-app/config.env` with the Keystone URL, region and install project (`PCD_AUTH_URL`, `PCD_REGION`, `PCD_PROJECT_ID`, `PCD_PROJECT_NAME`), which PCD Ops shows read-only, plus the AI backend, URL and model from **Advanced Configuration**, which become the appliance's defaults (anything saved on the Settings page wins). Secrets (Grafana token, Claude API key) are only ever entered on the Settings page.
+In the PCD admin UI, open **Extensions**, pick **PCD Ops**, and install. The catalog imports the release image, opens ports 80 and 443, and waits for `/api/health` on port 80. It writes `/etc/pcd-app/config.env` with the Keystone URL, region and install project (`PCD_AUTH_URL`, `PCD_REGION`, `PCD_PROJECT_ID`, `PCD_PROJECT_NAME`), which PCD Ops shows read-only, plus the AI backend, URL and model from **Advanced Configuration**, which become the appliance's defaults (anything saved on the Settings page wins). Secrets (Grafana token, Claude API key) are only ever entered on the Settings page.
 
 Each release carries the catalog's [manifest.json](manifest.json) as an asset, with the image's tag, file name and checksum filled in.
 
@@ -66,7 +68,7 @@ pcdctl image create --insecure \
 In the PCD dashboard, create a new instance from the `pcd-ops` image:
 - Flavor: 2 vCPU / 4 GB RAM or larger
 - Network: your management network
-- Security group: allow inbound port 80
+- Security group: allow inbound ports 80 and 443
 
 Or use `pcdctl server create` if you prefer the CLI.
 
@@ -129,7 +131,7 @@ cp terraform.tfvars.example terraform.tfvars
 ./deploy.sh -auto-approve
 ```
 
-The VM IP is printed on completion: `app_url = "http://192.168.1.50"`
+The VM IP is printed on completion: `app_url = "https://192.168.1.50"`
 
 ---
 

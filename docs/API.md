@@ -2,7 +2,7 @@
 
 
 
-**Version:** 0.6.1  
+**Version:** 0.7.0  
 **Base URL:** `/api`  
 **Auth:** PCD login (session cookie). See *Authentication* below.
 
@@ -49,9 +49,11 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 
 - [Access](#access)
 - [Agent](#agent)
+- [Alerts](#alerts)
 - [Anomaly](#anomaly)
 - [Auth](#auth)
 - [Capacity](#capacity)
+- [Drift](#drift)
 - [Events](#events)
 - [Feedback](#feedback)
 - [Inventory](#inventory)
@@ -64,6 +66,7 @@ Trigger a manual collection with `POST /api/agent/trigger` to populate it.
 - [Rightsizing](#rightsizing)
 - [Snapshots](#snapshots)
 - [System](#system)
+- [Tls](#tls)
 
 ---
 
@@ -158,11 +161,49 @@ Return recent agent run history (most recent first).
 
 ---
 
+## Alerts
+
+### **GET** `/api/alerts`
+
+Recent alerts, newest first: source, key, severity, title, body, `results` per channel
+
+(null = sent, else why not) and whether the cooldown suppressed it.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `limit` | query | integer | no | `100` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/alerts/test`
+
+Send a test alert to one channel (email, webhook, slack) or all of them, whatever the
+
+alert rules say. Returns {channel: null if sent, else why not}.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `channel` | string | no | — | Channel |
+
+**Response:** 200 — Successful Response  
+
+---
+
 ## Anomaly
 
 ### **GET** `/api/anomaly/`
 
-Return the latest anomaly detection results (metric drift and outlier analysis).
+The latest statistical anomalies: VMs and hosts whose last hour is far from their usual
+
+(z-score against the same hour on earlier days, or the whole window while history is short),
+each with now, usual, z, severity, since and a 48-hour sparkline. `explanation` is the AI's
+reading of them, when AI is on; `explanation_current` says whether it covers these findings.
 
 **Response:** 200 — Successful Response  
 
@@ -206,7 +247,12 @@ Who is logged in, and what the UI should show next (login, setup or the app).
 
 ### **GET** `/api/capacity/summary`
 
-Return current capacity summary: vCPU, RAM, and storage totals with used/free/percent.
+What the cloud can allocate and what is allocated: vCPUs and RAM from Placement
+
+(host CPUs or memory minus reserved, times the allocation ratio; `physical` and `ratio` say
+which), storage from Cinder's backends (GB written against the disks' size; `provisioned` is
+volumes' GB, `provisionable` what thin backends let Cinder provision). Not the sum of tenant
+quotas.
 
 **Response:** 200 — Successful Response  
 
@@ -214,7 +260,20 @@ Return current capacity summary: vCPU, RAM, and storage totals with used/free/pe
 
 ### **GET** `/api/capacity/trends`
 
-Return capacity trend data over a rolling window with per-resource time series and AI analysis.
+Allocation against capacity over up to 30 days from PCD Ops' metrics store, with a linear
+
+forecast per resource and AI analysis. `note` says why there is none.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/capacity/overcommit`
+
+CPU and memory overcommit per host and cluster: Placement's allocation (physical, reserved,
+
+allocation ratio, allocated) against the 95th percentile of real load, with a status and its
+reason for each host. Thresholds are in `thresholds`.
 
 **Response:** 200 — Successful Response  
 
@@ -222,7 +281,10 @@ Return capacity trend data over a rolling window with per-resource time series a
 
 ### **POST** `/api/capacity/what-if`
 
-Simulate the impact of adding resources; returns current vs projected utilization and whether it fits.
+Simulate adding resources: current vs projected capacity and whether it fits. With
+
+`tenant_id`, also the tenant's quotas (cores, RAM, volume GB, and vDisks against the volumes
+quota), and `would_fit` needs both.
 
 **Request body** (`application/json`)
 
@@ -232,6 +294,7 @@ Simulate the impact of adding resources; returns current vs projected utilizatio
 | `additional_ram_gb` | number | no | `0` | Additional Ram Gb |
 | `additional_storage_gb` | number | no | `0` | Additional Storage Gb |
 | `additional_vdisks` | integer | no | `0` | Additional Vdisks |
+| `tenant_id` | string | no | — | Tenant Id |
 
 **Response:** 200 — Successful Response  
 
@@ -253,7 +316,9 @@ Extract structured resource requirements (vCPUs, RAM, storage) from a natural la
 
 ### **GET** `/api/capacity/plans`
 
-List capacity plans, each annotated with a live what-if simulation against current capacity.
+List capacity plans, each with a what-if against current capacity (and its tenant's
+
+quotas, for a tenant plan).
 
 **Response:** 200 — Successful Response  
 
@@ -291,6 +356,39 @@ Delete a capacity plan.
 | `plan_id` | path | integer | yes | — |  |
 
 **Response:** 204 No Content  
+
+---
+
+## Drift
+
+### **GET** `/api/drift/changes`
+
+The config change log, newest first: flavors, security groups, aggregates, hosts and
+
+quotas added, removed or modified between collections, each with its changed fields
+({field, op: added|removed|changed, before, after}) and severity. Filter by `kind`, the
+last `days`, and `q` (item name or field).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `kind` | query | string | no | — |  |
+| `days` | query | string | no | — |  |
+| `q` | query | string | no | — |  |
+| `limit` | query | integer | no | `500` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/drift/status`
+
+When the change log started, the last collection, items tracked per kind, notes on what
+
+couldn't be read, and changes per kind in the last 24 hours and 7 days.
+
+**Response:** 200 — Successful Response  
 
 ---
 
@@ -396,7 +494,15 @@ Return all Neutron networks with external/shared flags and project ownership.
 
 ### **GET** `/api/inventory/tenants`
 
-Return all projects/tenants (admin and service tenants excluded).
+Return the projects/tenants to pick from (admin and service excluded). `all=true`: every
+
+project but admin (PCD's hidden background tenant), for showing names.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `all` | query | boolean | no | `false` |  |
 
 **Response:** 200 — Successful Response  
 
@@ -715,9 +821,9 @@ the host and VM views use: "local", "pcd" (PCD's Grafana, 14 days) or null.
 
 ### **GET** `/api/metrics/hosts/{hypervisor_id}`
 
-CPU, memory, disk and network history for one hypervisor. `range` is clamped to what
+CPU, memory (used, with cache, swap, swapping, OOM kills, hugepages), disk and network
 
-the source keeps.
+history for one hypervisor. `range` is clamped to what the source keeps.
 
 **Parameters**
 
@@ -732,7 +838,9 @@ the source keeps.
 
 ### **GET** `/api/metrics/vms/{server_id}`
 
-CPU, memory, network, disk and CPU-wait history for one VM.
+CPU, memory (in use, with disk cache, bytes, major page faults), network, disk and
+
+CPU-wait history for one VM.
 
 **Parameters**
 
@@ -834,8 +942,19 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `ai_capacity_enabled` | boolean | no | — | Ai Capacity Enabled |
 | `ai_rightsizing_schedule` | string | no | — | Ai Rightsizing Schedule |
 | `ai_anomaly_schedule` | string | no | — | Ai Anomaly Schedule |
+| `reclamation_idle_days` | integer | no | — | Reclamation Idle Days |
+| `reclamation_idle_cpu_pct` | number | no | — | Reclamation Idle Cpu Pct |
+| `reclamation_idle_net_kbps` | number | no | — | Reclamation Idle Net Kbps |
+| `reclamation_idle_iops` | number | no | — | Reclamation Idle Iops |
+| `reclamation_currency` | string | no | — | Reclamation Currency |
+| `reclamation_price_vcpu` | number | no | — | Reclamation Price Vcpu |
+| `reclamation_price_ram_gb` | number | no | — | Reclamation Price Ram Gb |
+| `reclamation_price_volume_gb` | number | no | — | Reclamation Price Volume Gb |
+| `reclamation_price_image_gb` | number | no | — | Reclamation Price Image Gb |
+| `reclamation_price_ip` | number | no | — | Reclamation Price Ip |
 | `job_run_retention_days` | integer | no | — | Job Run Retention Days |
 | `report_retention_days` | integer | no | — | Report Retention Days |
+| `drift_retention_days` | integer | no | — | Drift Retention Days |
 | `hypervisor_ssh_user` | string | no | — | Hypervisor Ssh User |
 | `hypervisor_ssh_key_path` | string | no | — | Hypervisor Ssh Key Path |
 | `hypervisor_ssh_password` | string | no | — | Hypervisor Ssh Password |
@@ -846,6 +965,15 @@ Save the fields sent. A secret sent as '***' or '' keeps the saved value.
 | `smtp_from` | string | no | — | Smtp From |
 | `alert_email_to` | string | no | — | Alert Email To |
 | `webhook_url` | string | no | — | Webhook Url |
+| `slack_webhook_url` | string | no | — | Slack Webhook Url |
+| `alert_base_url` | string | no | — | Alert Base Url |
+| `alert_cooldown_min` | integer | no | — | Alert Cooldown Min |
+| `alert_anomaly_enabled` | boolean | no | — | Alert Anomaly Enabled |
+| `alert_anomaly_min` | string | no | — | Alert Anomaly Min |
+| `alert_drift_enabled` | boolean | no | — | Alert Drift Enabled |
+| `alert_drift_min` | string | no | — | Alert Drift Min |
+| `alert_jobs_enabled` | boolean | no | — | Alert Jobs Enabled |
+| `alert_jobs_success` | boolean | no | — | Alert Jobs Success |
 
 **Response:** 200 — Successful Response  
 
@@ -941,7 +1069,9 @@ setup_required: no admin has authorized background access, or it stopped working
 
 ### **GET** `/api/reclamation/candidates`
 
-Return idle VMs, unattached volumes, and unused floating IPs for reclamation.
+Everything Reclamation & Warnings lists, by category (services/reclamation.py), with
+
+`notes` saying why a category couldn't be checked, `idle_rule` and `orphan_check`.
 
 **Response:** 200 — Successful Response  
 
@@ -984,6 +1114,80 @@ Release an unused floating IP back to the pool (irreversible).
 | Name | In | Type | Required | Default | Description |
 |------|----|------|----------|---------|-------------|
 | `fip_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/ports/{port_id}`
+
+Delete an orphaned port, freeing its IP addresses (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `port_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/routers/{router_id}`
+
+Delete a router: detach its interfaces, clear its gateway, then delete it (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `router_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/networks/{network_id}`
+
+Delete a network with its subnets; Neutron removes its DHCP and metadata ports. 409 names
+
+the ports still using it (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `network_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/server_groups/{group_id}`
+
+Delete a server group (irreversible).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `group_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/reclamation/images/{image_id}`
+
+Delete a Glance image or snapshot; 409 if it's protected (irreversible). Deleting a
+
+volume-backed VM's snapshot image leaves its Cinder snapshots.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `image_id` | path | string | yes | — |  |
 
 **Response:** 200 — Successful Response  
 
@@ -1037,9 +1241,63 @@ Delete a capacity report.
 
 ### **GET** `/api/rightsizing/recommendations`
 
-Return VM right-sizing recommendations with CPU/memory usage metrics and AI-generated analysis.
+VM right-sizing recommendations: CPU, RAM and IOPS use and AI analysis. A suggested
 
-503 no_data until the first run succeeds; `error` says why the last one failed.
+flavor carries `fit`: whether a host in the VM's cluster has room for it now (fits,
+same_host, no_room, unknown). `series=false` leaves out the per-VM series (the list doesn't
+draw them). 503 no_data until the first run succeeds; `error` says why the last one
+failed.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `series` | query | boolean | no | `true` |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/rightsizing/recommendations/{server_id}`
+
+One VM's recommendation in detail: why it has its class (`reasons`), what the suggested
+
+flavor had to have (`basis`), the VM's CPU and RAM projected onto it (`projected`, with
+`warnings` when its busiest hours would run it hot), other flavors that would do
+(`alternatives`, each with its fit), and every host in its cluster with its free room for
+the suggested flavor, or the shaped one when there's none (`hosts`). `custom` is a flavor
+shaped for it when the catalog has no good match, with its
+projection and fit. `thresholds` are the classification rules.
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `server_id` | path | string | yes | — |  |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/rightsizing/recommendations/{server_id}/flavor`
+
+Create the flavor shaped for this VM (`custom_flavor` of the last run) as a private
+
+flavor its tenant can use, with the current flavor's extra specs. Only the name comes from
+the request. It becomes the VM's suggested flavor at once. 409 when the name is taken or a
+flavor the tenant can already use has this shape (`existing` names it).
+
+**Parameters**
+
+| Name | In | Type | Required | Default | Description |
+|------|----|------|----------|---------|-------------|
+| `server_id` | path | string | yes | — |  |
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | yes | — | Name |
 
 **Response:** 200 — Successful Response  
 
@@ -1137,6 +1395,110 @@ Reboot the appliance VM (response returns before the reboot completes).
 ### **POST** `/api/system/update`
 
 Trigger a self-update: runs deploy/scripts/update.sh detached (git pull + pip install + npm build + service restart).
+
+**Response:** 200 — Successful Response  
+
+---
+
+## Tls
+
+### **GET** `/api/tls`
+
+HTTPS on this appliance: whether nginx serves it (`https_enabled`; older appliances turn
+
+it on from the console), whether plain HTTP redirects to it, the certificate (subject,
+names, issuer, validity, fingerprint, chain length), a CSR waiting for its certificate, and
+the names a new self-signed certificate would cover.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/tls/self-signed`
+
+Make a new self-signed certificate for `names` (the first is its common name) and
+
+serve it.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `names` | array | yes | — | Names |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/tls/certificate`
+
+Install a certificate (PEM; the certificate first, then its chain) and its key. Without
+
+a key, the pending CSR's key is used. 422 says what's wrong with them.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `certificate` | string | yes | — | Certificate |
+| `key` | string | no | — | Key |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/tls/certificate.pem`
+
+The certificate and its chain, to trust a self-signed one on a computer.
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **POST** `/api/tls/csr`
+
+Make a key and a certificate signing request for `names` (the first is its common name).
+
+The key stays on the appliance; upload the signed certificate without a key to use it.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `names` | array | yes | — | Names |
+| `organization` | string | no | `""` | Organization |
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **DELETE** `/api/tls/csr`
+
+Discard Csr
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **GET** `/api/tls/csr.pem`
+
+Download Csr
+
+**Response:** 200 — Successful Response  
+
+---
+
+### **PUT** `/api/tls/redirect`
+
+Plain HTTP redirects to HTTPS, or serves the app as well. /api/health stays on HTTP
+
+either way, for the catalog's health check.
+
+**Request body** (`application/json`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `redirect` | boolean | yes | — | Redirect |
 
 **Response:** 200 — Successful Response  
 

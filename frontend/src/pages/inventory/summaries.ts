@@ -103,7 +103,7 @@ export function summary(kind: Kind, r: any, ctx: Ctx): Fact[] {
       ["Visibility", r.visibility],
       ["Format", r.disk_format ?? "—"],
       ["Size", r.size_gb > 0 ? fmtSize(r.size_gb) : "—"],
-      ["Used by", `${r.used_by_vms?.length ?? 0} VMs`],
+      ["Used by", `${r.used_by_vms?.length ?? 0} VMs, ${r.used_by_volumes ?? 0} volumes`],
     ];
     case "security_groups": return [
       ["Rules", String(r.rules?.length ?? 0)],

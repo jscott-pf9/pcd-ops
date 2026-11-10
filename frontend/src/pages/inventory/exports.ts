@@ -3,7 +3,7 @@ import { fmtDate, mbToGb, ramGb } from "./format";
 import type { Kind } from "./kinds";
 import type { Ctx } from "./summaries";
 
-type Cell = string | number | null | undefined;
+export type Cell = string | number | null | undefined;
 export interface Sheet { name: string; file: string; headers: string[]; rows: (items: any[], ctx: Ctx) => Cell[][] }
 
 const r1 = (v?: number | null) => (v == null ? "" : Math.round(v * 10) / 10);
@@ -138,11 +138,11 @@ export const EXPORTS: Record<Kind, Sheet[]> = {
   images: [{
     name: "Images & Snapshots", file: "images.csv",
     headers: ["Name", "Type", "Snapshot Of", "Base Image", "Status", "Visibility", "Format", "Size GB",
-      "Min Disk GB", "Min RAM MB", "VMs Using", "Protected", "Owner", "Created", "ID"],
+      "Min Disk GB", "Min RAM MB", "VMs Using", "Volumes From It", "Protected", "Owner", "Created", "ID"],
     rows: (items, ctx) => items.map(img => [
       img.name, img.kind === "snapshot" ? `snapshot (${img.snapshot_type})` : "image",
       img.instance_uuid ?? "", img.base_image_ref ?? "", img.status, img.visibility, img.disk_format,
-      img.size_gb, img.min_disk_gb ?? "", img.min_ram_mb ?? "", join(img.used_by_vms),
+      img.size_gb, img.min_disk_gb ?? "", img.min_ram_mb ?? "", join(img.used_by_vms), img.used_by_volumes ?? 0,
       yn(img.is_protected), ctx.tenant(img.owner), fmtDate(img.created_at), img.id,
     ]),
   }],

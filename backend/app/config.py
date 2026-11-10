@@ -49,9 +49,24 @@ class Settings(BaseSettings):
     ai_rightsizing_schedule: str = "daily@02:00"
     ai_anomaly_schedule:     str = "hourly"
 
+    # Reclamation: a running VM is idle when its 95th-percentile CPU, network and disk I/O over
+    # the window are all under these (services/reclamation.py; Right-Sizing uses the same rule)
+    reclamation_idle_days:     int = 14
+    reclamation_idle_cpu_pct:  float = 5.0
+    reclamation_idle_net_kbps: float = 10.0
+    reclamation_idle_iops:     float = 1.0
+    # What reclaiming saves: a monthly price per unit, in reclamation_currency (0 = not shown)
+    reclamation_currency:        str = "$"
+    reclamation_price_vcpu:      float = 0.0   # per vCPU
+    reclamation_price_ram_gb:    float = 0.0
+    reclamation_price_volume_gb: float = 0.0
+    reclamation_price_image_gb:  float = 0.0
+    reclamation_price_ip:        float = 0.0   # per IP address
+
     # Data retention (days; 0 = keep forever)
     job_run_retention_days:  int = 30
     report_retention_days:   int = 30
+    drift_retention_days:    int = 180   # the config change log
 
     # Hypervisor SSH (for log collection)
     hypervisor_ssh_user:     str = "root"
@@ -66,6 +81,16 @@ class Settings(BaseSettings):
     smtp_from:     str = ""
     alert_email_to: str = ""
     webhook_url:   str = ""
+    slack_webhook_url: str = ""   # a Slack app's incoming webhook
+    alert_base_url:    str = ""   # this appliance's address, for links in alerts
+    # What raises an alert (services/alerts.py): on/off and the lowest severity sent
+    alert_cooldown_min:    int = 60     # the same alert again within this is not sent
+    alert_anomaly_enabled: bool = True
+    alert_anomaly_min:     str = "high"
+    alert_drift_enabled:   bool = True
+    alert_drift_min:       str = "medium"
+    alert_jobs_enabled:    bool = True
+    alert_jobs_success:    bool = False  # also when a job succeeds
 
     # GitHub feedback — token needs issues:write scope on the target repo
     github_token: str = ""

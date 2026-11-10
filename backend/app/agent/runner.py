@@ -1,10 +1,12 @@
 """
 Agent runner — orchestrates collection across all domains and logs each run.
 
-Fast  (inventory, reclamation, capacity, snapshots, logs): every 15 min.
-Slow  (anomaly, capacity trends — 1 AI call each):         every 1 hour.
+Fast  (inventory, reclamation, capacity, overcommit, config changes, anomalies, snapshots,
+      logs): every 15 min.
+Slow  (capacity trends, the AI's anomaly explanation — 1 AI call each): every 1 hour.
 Daily (right-sizing — 1 AI call per VM):                   per its schedule in Settings
                                                             (checked hourly).
+HTTPS certificate expiry: hourly; an alert 30 and 7 days before, and once it has expired.
 """
 
 import asyncio
@@ -78,12 +80,16 @@ async def run_fast() -> None:
         errors = await _gather_named([
             ("inventory",   collector.collect_inventory()),
             ("reclamation", collector.collect_reclamation()),
-            ("capacity",    collector.collect_capacity()),
             ("snapshots",   collector.collect_snapshots()),
             ("logs",        collector.collect_logs()),
         ])
-        # After inventory, which it maps hosts through.
-        errors += await _gather_named([("host_metrics", collector.collect_host_metrics())])
+        # After inventory, which they map hosts through.
+        errors += await _gather_named([("host_metrics", collector.collect_host_metrics()),
+                                       ("overcommit", collector.collect_overcommit()),
+                                       ("anomaly", collector.collect_anomaly())])
+        # After overcommit, whose results they read.
+        errors += await _gather_named([("capacity", collector.collect_capacity()),
+                                       ("drift", collector.collect_drift())])
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))
             logger.error("Fast collection run failed (run_id=%d): %s", run_id, errors)
@@ -111,11 +117,12 @@ async def run_slow() -> None:
     run_id = db.run_start()
     try:
         tasks = [("capacity_trends", collector.collect_capacity_trends())]
-        if _ai_feature_due("anomaly:latest", settings.ai_anomaly_schedule, settings.ai_anomaly_enabled):
-            tasks.append(("anomaly", collector.collect_anomaly()))
+        if _ai_feature_due("anomaly:explanation", settings.ai_anomaly_schedule,
+                           settings.ai_anomaly_enabled):
+            tasks.append(("anomaly_explanation", collector.explain_anomalies()))
         else:
-            logger.info("Anomaly AI skipped (disabled or not yet due per schedule '%s').",
-                        settings.ai_anomaly_schedule)
+            logger.info("Anomaly AI explanation skipped (disabled or not yet due per schedule "
+                        "'%s').", settings.ai_anomaly_schedule)
         errors = await _gather_named(tasks)
         if errors:
             db.run_finish(run_id, "error", "; ".join(errors))
@@ -197,6 +204,7 @@ async def scheduler_loop() -> None:
         (SLOW_INTERVAL,      run_slow),
         (SLOW_INTERVAL,      run_daily),       # gated by ai_rightsizing_schedule
         (DAILY_INTERVAL,     _run_retention_cleanup),
+        (SLOW_INTERVAL,      check_certificate),
     ]
     start = time.monotonic()
     last_run = [start] * len(tasks)
@@ -207,6 +215,50 @@ async def scheduler_loop() -> None:
             if time.monotonic() - last_run[i] >= interval:
                 last_run[i] = time.monotonic()
                 await task()
+
+
+def certificate_level(days_left: int, expired: bool) -> str | None:
+    """The alert severity for a certificate's remaining days: critical once expired, high
+    within 7 days, medium within 30."""
+    if expired:
+        return "critical"
+    if days_left <= 7:
+        return "high"
+    if days_left <= 30:
+        return "medium"
+    return None
+
+
+async def check_certificate() -> None:
+    """Alert when the HTTPS certificate nears expiry: once per level (30 days, 7 days,
+    expired) per certificate, so it isn't repeated every hour."""
+    from app.appliance import tls
+    from app.services import alerts
+    try:
+        pem = tls.current()
+        if not pem or not tls.https_enabled():
+            return
+        info = tls.describe(pem)
+    except Exception as e:
+        logger.warning("Certificate check failed: %s", e)
+        return
+    level = certificate_level(info["days_left"], info["expired"])
+    sent, _ = db.cache_get("tls:expiry_alerted")
+    if not level or (sent and sent.get("fingerprint") == info["fingerprint_sha256"]
+                     and alerts.rank(sent.get("severity", "")) >= alerts.rank(level)):
+        return
+    when = (f"expired on {info['not_after'][:10]}" if info["expired"]
+            else f"expires in {info['days_left']} days ({info['not_after'][:10]})")
+    await alerts.raise_alert(alerts.Alert(
+        source="certificate", key="tls:expiry", severity=level,
+        title=f"PCD Ops HTTPS certificate {when}",
+        body=("Browsers will refuse the appliance until it's replaced. " if info["expired"] else "")
+        + "Upload a new one or regenerate the self-signed one in Settings → HTTPS.",
+        fields=[["Certificate", info["subject"]], ["Issuer", info["issuer"]],
+                ["Valid until", info["not_after"][:10]]],
+        link="/settings?tab=https"))
+    db.cache_set("tls:expiry_alerted",
+                 {"fingerprint": info["fingerprint_sha256"], "severity": level})
 
 
 async def _run_due_jobs() -> None:
@@ -228,6 +280,15 @@ async def _run_retention_cleanup() -> None:
         n = db.purge_job_runs(runs_days)
         if n:
             logger.info("Retention cleanup: removed %d job runs older than %dd.", n, runs_days)
+    if runs_days > 0:
+        n = db.purge_alerts(runs_days)
+        if n:
+            logger.info("Retention cleanup: removed %d alerts older than %dd.", n, runs_days)
+    if settings.drift_retention_days > 0:
+        n = db.purge_drift(settings.drift_retention_days)
+        if n:
+            logger.info("Retention cleanup: removed %d config changes older than %dd.", n,
+                        settings.drift_retention_days)
     if reports_days > 0:
         n = db.purge_reports(reports_days)
         if n:

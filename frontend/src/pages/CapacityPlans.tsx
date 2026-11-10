@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, Plus, Sparkles, Trash2 } from "lucide-react";
 import { apiFetch } from "../api/client";
+import WhatIfResult, { type Simulation } from "../components/WhatIfResult";
 
-interface ResourceSummary { total: number | null; used: number; free: number | null; fits?: boolean; }
 interface Plan {
   id: number;
   name: string;
@@ -15,7 +15,7 @@ interface Plan {
   additional_storage_gb: number;
   additional_vdisks: number;
   created_at: string;
-  simulation: { would_fit: boolean; projected: Record<string, ResourceSummary> } | null;
+  simulation: Simulation | null;
 }
 interface ParsedResources { vcpus: number; ram_gb: number; storage_gb: number; vdisks: number; summary: string; }
 
@@ -187,7 +187,6 @@ function PlanCard({ plan, onDelete }: { plan: Plan; onDelete: () => void }) {
   const sim = plan.simulation;
   const fits = sim?.would_fit ?? null;
   const fitColor = fits === null ? "var(--gray-300)" : fits ? "var(--green)" : "var(--red)";
-  const fitBg   = fits === null ? "var(--gray-50)"  : fits ? "var(--green-light)" : "var(--red-light)";
 
   return (
     <div className="card" style={{ borderTop: `3px solid ${fitColor}` }}>
@@ -219,30 +218,7 @@ function PlanCard({ plan, onDelete }: { plan: Plan; onDelete: () => void }) {
             </div>
           ))}
         </div>
-        {sim && (
-          <div style={{ background: fitBg, borderRadius: 5, padding: "7px 10px" }}>
-            <div style={{ fontWeight: 600, fontSize: 12, color: fitColor, marginBottom: 5 }}>
-              {fits ? "✓ Fits current capacity" : "✗ Insufficient capacity"}
-            </div>
-            {(["vcpus", "ram_gb", "storage_gb"] as const).map(key => {
-              const labels: Record<string, string> = { vcpus: "vCPUs", ram_gb: "RAM", storage_gb: "Storage" };
-              const p = sim.projected[key];
-              const pct = (p.total ?? 0) > 0 ? Math.min(100, Math.round(p.used / (p.total ?? 1) * 100)) : 0;
-              const col = !p.fits ? "var(--red)" : pct >= 70 ? "var(--yellow)" : "var(--blue-primary)";
-              return (
-                <div key={key} style={{ marginBottom: 4 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 1 }}>
-                    <span className="text-muted">{labels[key]}</span>
-                    <span style={{ color: col, fontWeight: 600 }}>{pct}%</span>
-                  </div>
-                  <div style={{ height: 5, background: "var(--gray-200)", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: col, borderRadius: 3 }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {sim && <WhatIfResult sim={sim} />}
       </div>
     </div>
   );

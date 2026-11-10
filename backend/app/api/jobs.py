@@ -141,12 +141,16 @@ async def job_types():
         },
         "resource-reclamation": {
             "label": "Resource Reclamation",
-            "description": "Shelve or delete stopped VMs and orphaned volumes past thresholds.",
+            "description": "Shelve or delete stopped VMs and delete unattached volumes past thresholds; also floating IPs, orphaned ports, empty server groups and private images when their days are set (0 = leave them).",
             "config_schema": {
                 "stopped_days":    {"type": "number",  "default": 30,      "label": "VM stopped for (days)"},
                 "unattached_days": {"type": "number",  "default": 30,      "label": "Volume unattached for (days)"},
                 "action":          {"type": "select",  "default": "shelve", "label": "VM action",
                                     "options": ["shelve", "delete"]},
+                "unused_floating_ips_days": {"type": "number", "default": 0, "label": "Release floating IPs unused for (days, 0 = never)"},
+                "orphaned_ports_days":      {"type": "number", "default": 0, "label": "Delete orphaned ports after (days, 0 = never)"},
+                "empty_server_groups_days": {"type": "number", "default": 0, "label": "Delete empty server groups after (days, 0 = never)"},
+                "unused_images_days":       {"type": "number", "default": 0, "label": "Delete unused private images after (days, 0 = never)"},
                 "dry_run":         {"type": "boolean", "default": True,     "label": "Dry run"},
             },
         },
@@ -160,7 +164,7 @@ async def job_types():
         },
         "rightsizing-resize": {
             "label": "Right-Sizing Resize",
-            "description": "Resize over-provisioned and idle VMs to their AI-suggested smaller flavor.",
+            "description": "Resize VMs to their suggested flavor (smaller when over-provisioned or idle, bigger under pressure), where a host has room.",
             "config_schema": {
                 "tenant_id":  {"type": "tenant_select", "default": "",                           "label": "Tenant (blank = all)"},
                 "dry_run":    {"type": "boolean",       "default": True,                         "label": "Dry run"},

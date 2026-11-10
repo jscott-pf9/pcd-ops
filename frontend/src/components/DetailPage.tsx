@@ -3,11 +3,12 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ChevronRight, Copy } from "lucide-react";
 
 /** A full page for one inventory item: breadcrumb, title with badges, stat cards, then
- *  sections in a responsive grid. */
-export function DetailPage({ section, sectionTo, kindLabel, title, badges, subtitle, id, stats, children }: {
+ *  sections in a responsive grid. `root` replaces the breadcrumb's Inventory for pages
+ *  outside it. */
+export function DetailPage({ section, sectionTo, kindLabel, title, badges, subtitle, id, stats, root, children }: {
   section: string; sectionTo: string; kindLabel: string; title: string;
   badges?: React.ReactNode; subtitle?: React.ReactNode; id?: string;
-  stats?: React.ReactNode; children: React.ReactNode;
+  stats?: React.ReactNode; root?: { label: string; to: string }; children: React.ReactNode;
 }) {
   const navigate = useNavigate();
   const loc = useLocation();
@@ -19,7 +20,9 @@ export function DetailPage({ section, sectionTo, kindLabel, title, badges, subti
           onClick={() => (loc.key !== "default" ? navigate(-1) : navigate(sectionTo))} title="Back">
           <ArrowLeft size={13} />
         </button>
-        <Link to={from ?? "/"} style={{ color: "inherit" }}>Inventory</Link>
+        {root !== undefined
+          ? <Link to={root.to} style={{ color: "inherit" }}>{root.label}</Link>
+          : <Link to={from ?? "/"} style={{ color: "inherit" }}>Inventory</Link>}
         <ChevronRight size={12} />
         <Link to={sectionTo} style={{ color: "inherit" }}>{section}</Link>
         <ChevronRight size={12} />
@@ -39,7 +42,7 @@ export function DetailPage({ section, sectionTo, kindLabel, title, badges, subti
 
       {stats && <div style={{ display: "flex", gap: "0.75rem", marginBottom: 14, flexWrap: "wrap" }}>{stats}</div>}
 
-      <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", alignItems: "start" }}>
+      <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))", alignItems: "start" }}>
         {children}
       </div>
     </div>

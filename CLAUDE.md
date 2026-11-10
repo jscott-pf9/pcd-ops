@@ -81,10 +81,12 @@ Installs without config.env get the connection from first-run setup (saved in `c
   - Unattended work (scheduler collectors, scheduled jobs) uses the **background application credential** minted at `/setup` (`api/access.py`, `appliance/app_credentials.py`).
   - Call `report_background_failure(exc)` on errors from background work: Keystone rejecting the credential (401, or 404 from `/auth/tokens` when it was deleted) marks it failed → re-authorize banner + `setup_required` in `/api/health`.
 - **Console TUI** "Reset setup" (`deploy/scripts/reset-setup.sh`) forgets the credential and logs everyone out.
+- **HTTPS** (APPLIANCE_STANDARD §7.9, `appliance/tls.py`, `api/tls.py`, Settings → HTTPS): nginx serves 443 with `<state dir>/tls/cert.pem` + `key.pem`; port 80 answers `/api/health` and otherwise does what `tls/http.conf` says (redirect, the default, or include the app). First boot: OpenRC `pcd-ops-tls` runs `deploy/scripts/tls.sh ensure` before nginx (self-signed, via the app's own Python; openssl fallback). Settings regenerates, uploads (checked: key matches, valid, chain order), makes a CSR (key stays in `tls/pending-key.pem`) and reloads nginx with `sudo nginx -s reload`. Console: Advanced → HTTPS (regenerate; **Enable HTTPS** for appliances built before it, which copies `deploy/nginx/pcd-ops.conf` into `/etc/nginx`). The app's locations are in `deploy/nginx/pcd-ops-app.conf`, included from the repo, so updates change them; `pcd-ops.conf` itself only changes through the image or the console. Expiry alerts at 30 and 7 days and when expired (`runner.check_certificate`).
 
 ### Metrics: PCD Ops' own store, and PCD's Grafana
 - **Own store (host and VM metrics):** VictoriaMetrics single-node on the appliance (`pcd-ops-metrics`, `127.0.0.1:8428`) scrapes node-exporter (`:9388`) and libvirt-exporter (`:9177`) on every hypervisor. `services/local_metrics.py` writes its scrape config, targets (labelled `hypervisor_id`, `hypervisor`, `host_ip`) and retention in the state dir. `services/exporters.py` probes the exporters (Inventory → Hypervisors → Probe exporters).
 - **PCD's Grafana (SaaS, 14 days, reduced `pcd:*` series):** PCD's Prometheus is VictoriaMetrics inside the PCD cluster, reachable only through the Grafana data source proxy. `PrometheusClient` in `services/prometheus.py` adds `Authorization: Bearer <GRAFANA_TOKEN>` and resolves the data source from the current settings. Used for the `openstack_*` series only PCD has, and as a fallback.
+- **VM memory:** `mem_pct` locally is libvirt's used % (what the guest needs, disk cache left out); PCD's `pcd:vm_mem_usage` counts the cache as used, so a caching VM reads near 100 %. Right-sizing takes RAM from the local store once it has a day of data (even while CPU still comes from Grafana) and never calls Grafana's RAM memory pressure on its own (`mem_source`, `rightsizing.mem_high`).
 - **Query host and VM metrics through `services/metrics_catalog.py`**, not with raw PromQL: each metric is defined for both sources, and `source()` picks local when it has data. VMs join on `domain` = Nova server UUID; hosts on `hypervisor_id` locally, or `host` = Nova compute service host (PCD host UUID) in Grafana.
 
 ## Architecture
@@ -94,11 +96,17 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `config.py` — App settings via Pydantic BaseSettings (env, then `settings.json` overrides). Read `settings.<field>` when the work runs, never at import, so saved changes apply at once
 - `dependencies.py` — FastAPI dependency injection: OpenStack connection, Prometheus client, AI provider
 - `api/` — One router per feature domain (see table below)
-- `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir)
+- `appliance/` — APPLIANCE_STANDARD §8 modules: `config_env.py`, `keystone.py` (login), `web_auth.py` (sessions + gate), `app_credentials.py` (background credential), `connection.py` (PCD connection), `state.py` (state dir), `tls.py` (HTTPS certificate)
 - `services/openstack.py` — Wraps `openstacksdk`; all features import from here, never instantiate `openstack.connect()` elsewhere. `get_connection()` returns the user's connection inside `acting_as()`, else the background one
 - `services/prometheus.py` — Prometheus HTTP query client; derives the Grafana URL and finds the data source
 - `services/local_metrics.py`, `services/metrics_catalog.py`, `services/exporters.py` — PCD Ops' own metrics store (`push()` writes samples PCD Ops computes, such as storage capacity), host/VM/storage metric definitions, the exporter probe
 - `services/storage.py`, `services/server_groups.py` — Cinder pools grouped into backends (a shared store counted once) and the volume → VM disk series that joins libvirt disk stats to volumes and backends; whether a server group's placement meets its policy
+- `services/capacity.py`, `services/rightsizing.py` — what the cloud can allocate (Placement for vCPUs and RAM, Cinder backends' written GB for storage; not quota sums) and what-if with a tenant's quotas; a VM's class, the suggested flavor (smaller or bigger; an image-backed VM keeps its root disk), whether a host in the VM's cluster has room for it, the drill-down's reasons, projected use and alternatives, and a flavor shaped for the VM when the catalog fits badly (`custom_flavor`). Candidates are public flavors plus private ones the VM's tenant has access to
+- `services/overcommit.py` — CPU and memory overcommit (pure functions): Placement's allocation per host (resource provider UUID = Nova hypervisor id) against the 95th percentile of host load and VM CPU wait; a status and reason per host, summed per cluster
+- `services/reclamation.py` — Reclamation & Warnings rules (pure functions over records): stopped, idle and orphaned VMs, unused images, orphaned ports, unused routers and networks, empty tenants. The collector, the `resource-reclamation` job and Right-Sizing's idle class all use them. PCD's `admin` project is never shown as a tenant
+- `services/anomaly.py` — statistical anomaly detection: each VM's and host's last hour against its usual (same hour on earlier days, z-score, minimum real change); the AI only explains the findings (`collector.explain_anomalies`)
+- `services/drift.py` — config change log: snapshots of flavors, security groups, aggregates, hosts and tenant quotas, diffed each collection (`drift_changes` table)
+- `services/alerts.py`, `services/notifications.py` — what raises an alert (anomalies, config changes, jobs: on/off and minimum severity in Settings), the cooldown, and delivery to email, the generic webhook and Slack; every alert is recorded (`alerts` table, `GET /api/alerts`)
 - `services/settings_store.py` — Persists runtime settings overrides to `settings.json` in the state dir (0600)
 - `services/ai/base.py` — `AIProvider` abstract base class with `analyze(prompt, context) -> str` and `models() -> list[str]`
 - `services/ai/claude.py` — Anthropic Claude implementation
@@ -112,24 +120,27 @@ Installs without config.env get the connection from first-run setup (saved in `c
 - `api/auth.ts` — Session, login/logout, setup and background-access calls
 - `pages/Login.tsx`, `pages/Setup.tsx` — rendered outside the shell; `AuthGate` in `App.tsx` guards everything else
 - `pages/` — One page component per feature domain
-- `components/` — Shared UI (charts, data tables, stat cards)
+- `components/` — Shared UI (charts, data tables, stat cards). `ChartFrame.tsx` gives a chart its pop-out and copy-as-image (`chartImage.ts`; saves a PNG where the browser can't copy images, i.e. not HTTPS)
 
 ### Feature Domains
 Each feature has a backend router and a frontend page:
 
 | Domain | Backend | Frontend |
 |---|---|---|
-| Resource Reclamation | `api/reclamation.py` | `pages/Reclamation.tsx` |
-| Capacity Planning | `api/capacity.py` | `pages/Capacity.tsx` |
+| Reclamation & Warnings | `api/reclamation.py` (rules in `services/reclamation.py`) | `pages/reclamation/` (`model.ts` categories, `columns.tsx`, `Reclamation.tsx`) |
+| Capacity Planning | `api/capacity.py` (overcommit rules in `services/overcommit.py`) | `pages/Capacity.tsx`, `pages/overcommit/` (Overcommit), `pages/CapacityPlans.tsx` |
 | Inventory | `api/inventory.py` | `pages/Inventory.tsx` (tabs), `pages/inventory/` (`kinds.ts` registry, `tables/`, `details/` pages at `/inventory/<kind>/<id>`, `exports.ts` for CSV and Export All; live properties from `GET /inventory/{kind}/{id}/details` with the user's token) |
 | Snapshot Management | `api/snapshots.py` | `pages/Snapshots.tsx` |
-| Right-Sizing | `api/rightsizing.py` | `pages/RightSizing.tsx` |
-| Anomaly Detection | `api/anomaly.py` | `pages/Anomaly.tsx` |
+| Right-Sizing | `api/rightsizing.py` (rules in `services/rightsizing.py`; `POST /rightsizing/recommendations/{id}/flavor` creates the shaped flavor, private to the VM's tenant, with the user's token) | `pages/rightsizing/` (`RightSizing.tsx` table with class, tenant and search filters in the URL, `RightSizingDetail.tsx` drill-down at `/rightsizing/<id>`, `model.ts`) |
+| Anomaly Detection | `api/anomaly.py` (`services/anomaly.py`) | `pages/Anomaly.tsx`, `pages/anomaly.ts` |
 | Log Analysis | `api/logs.py` | `pages/Logs.tsx` |
 | Login | `api/auth.py` | `pages/Login.tsx` |
 | Setup / background access | `api/access.py` | `pages/Setup.tsx`, `components/PcdAccess.tsx` |
 | Host, VM and storage metrics | `api/metrics.py` (+ `metrics` merged into `/inventory/hypervisors` and `/inventory/servers`) | Inventory detail pages (`components/MetricsCharts.tsx`, synced `TimeChart`s), `pages/settings/SettingsMetrics.tsx` |
+| Config Changes | `api/drift.py` (`services/drift.py`) | `pages/drift/` (`ChangeLog.tsx`, `model.ts`) |
+| Alerts | `api/alerts.py` (`services/alerts.py`) | `pages/settings/SettingsAlerts.tsx` |
 | Settings | `api/settings.py` | `pages/settings/Settings.tsx` (one page, tabs in `?tab=`), `pages/settings/*.tsx` |
+| HTTPS certificate | `api/tls.py` (`appliance/tls.py`) | `pages/settings/SettingsHttps.tsx` |
 | System (version/update) | `api/system.py` | `pages/settings/SettingsUpdates.tsx` |
 
 ### Available Prometheus Metrics (openstack-exporter)
@@ -158,7 +169,8 @@ Production runs as a dedicated Alpine Linux appliance VM. The image is a qcow2 b
 **Release:** `deploy/release.sh` — build → boot tests (UEFI + BIOS) → manifest validation → GitHub release (three assets, public) → anonymous download check → PR to the extension index `jscott-pf9/pcd-extensions`. Don't publish or open the index PR without Jeff's approval.
 
 **Runtime on VM:**
-- nginx on port 80 — serves `frontend/dist/` and proxies `/api/` to uvicorn
+- nginx on 443 (HTTPS, certificate in `/var/lib/pcd-ops/tls`) and 80 (`/api/health`, and a redirect to HTTPS unless Settings turns it off) — serves `frontend/dist/` and proxies `/api/` to uvicorn (`deploy/nginx/`)
+- OpenRC service `pcd-ops-tls` — a self-signed certificate at first boot, before nginx
 - OpenRC service `pcd-ops` — uvicorn on `127.0.0.1:8000`
 - OpenRC service `pcd-ops-metrics` — VictoriaMetrics on `127.0.0.1:8428` (`deploy/openrc/run-metrics.sh`), data in `/var/lib/pcd-ops/metrics`
 - `/etc/pcd-app/config.env` then `/opt/pcd-ops/.env`, sourced by `deploy/openrc/run-uvicorn.sh`

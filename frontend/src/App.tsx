@@ -10,6 +10,7 @@ import {
   Camera,
   ChevronDown,
   FileText,
+  History,
   type LucideIcon,
   LogOut,
   MessageSquarePlus,
@@ -23,12 +24,15 @@ import PcdOpsMark from "./assets/PcdOpsMark";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import Anomaly from "./pages/Anomaly";
 import Capacity from "./pages/Capacity";
+import ChangeLog from "./pages/drift/ChangeLog";
 import CapacityPlans from "./pages/CapacityPlans";
+import Overcommit from "./pages/overcommit/Overcommit";
 import Inventory from "./pages/Inventory";
 import InventoryDetail from "./pages/inventory/Detail";
 import Logs from "./pages/Logs";
-import Reclamation from "./pages/Reclamation";
-import RightSizing from "./pages/RightSizing";
+import Reclamation from "./pages/reclamation/Reclamation";
+import RightSizing from "./pages/rightsizing/RightSizing";
+import RightSizingDetail from "./pages/rightsizing/RightSizingDetail";
 import Snapshots from "./pages/Snapshots";
 import Jobs from "./pages/Jobs";
 import Topology from "./pages/Topology";
@@ -61,6 +65,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/",         label: "Inventory", icon: Server  },
       { path: "/topology", label: "Topology",  icon: Network },
+      { path: "/changes",  label: "Config Changes", icon: History },
     ],
   },
   {
@@ -68,7 +73,8 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/reclamation", label: "Reclamation",     icon: RefreshCw },
       { path: "/capacity",    label: "Capacity Planning", icon: BarChart2,
-        children: [{ path: "/capacity/plans", label: "Forecast Plans" }] },
+        children: [{ path: "/capacity/overcommit", label: "Overcommit" },
+                   { path: "/capacity/plans", label: "Forecast Plans" }] },
       { path: "/rightsizing", label: "Right-Sizing",    icon: Sliders   },
       { path: "/snapshots",   label: "Snapshots",       icon: Camera    },
       { path: "/jobs",        label: "Automation",      icon: Briefcase },
@@ -288,10 +294,13 @@ function Shell({ backgroundFailed }: { backgroundFailed: boolean }) {
           <Route path="/"                  element={<Inventory />}       />
           <Route path="/inventory/:kind/:id" element={<InventoryDetail />} />
           <Route path="/topology"          element={<Topology />}        />
+          <Route path="/changes"           element={<ChangeLog />}       />
           <Route path="/reclamation"       element={<Reclamation />}     />
           <Route path="/capacity"          element={<Capacity />}        />
+          <Route path="/capacity/overcommit" element={<Overcommit />}  />
           <Route path="/capacity/plans"    element={<CapacityPlans />}   />
           <Route path="/rightsizing"       element={<RightSizing />}     />
+          <Route path="/rightsizing/:id"   element={<RightSizingDetail />} />
           <Route path="/snapshots"         element={<Snapshots />}       />
           <Route path="/jobs"              element={<Jobs />}            />
           <Route path="/anomaly"           element={<Anomaly />}         />

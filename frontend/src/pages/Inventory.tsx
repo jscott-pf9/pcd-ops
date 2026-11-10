@@ -2,9 +2,9 @@ import { type ComponentType, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Download } from "lucide-react";
-import * as XLSX from "xlsx";
 import { apiFetch } from "../api/client";
 import DataFreshness from "../components/DataFreshness";
+import { downloadWorkbook } from "../components/workbook";
 import { useCtx } from "./inventory/details/common";
 import { EXPORTS } from "./inventory/exports";
 import { fetchInventory, isKind, KINDS, type Kind, TAB_ORDER, useInventory } from "./inventory/kinds";
@@ -59,14 +59,8 @@ export default function Inventory() {
     setExportingAll(true);
     try {
       const lists = await Promise.all(TAB_ORDER.map(k => fetchInventory(k).catch(() => [] as any[])));
-      const wb = XLSX.utils.book_new();
-      TAB_ORDER.forEach((k, i) => {
-        for (const sheet of EXPORTS[k]) {
-          const ws = XLSX.utils.aoa_to_sheet([sheet.headers, ...sheet.rows(lists[i], ctx)]);
-          XLSX.utils.book_append_sheet(wb, ws, sheet.name.slice(0, 31));
-        }
-      });
-      XLSX.writeFile(wb, "inventory.xlsx");
+      downloadWorkbook("inventory.xlsx", TAB_ORDER.flatMap((k, i) => EXPORTS[k].map(sheet =>
+        ({ name: sheet.name, headers: sheet.headers, rows: sheet.rows(lists[i], ctx) }))));
     } finally {
       setExportingAll(false);
     }
