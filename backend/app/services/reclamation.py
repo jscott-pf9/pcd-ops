@@ -57,6 +57,7 @@ def volume_record(v) -> dict:
         "image_id": (v.volume_image_metadata or {}).get("image_id"),
         # Glance's Cinder store keeps each image's data in a volume tagged with the image
         "glance_image_id": (v.metadata or {}).get("glance_image_id"),
+        "glance_image_owner": (v.metadata or {}).get("image_owner"),
         "created_at": _ts(v.created_at), "updated_at": _ts(v.updated_at),
     }
 
@@ -217,29 +218,55 @@ def empty_server_groups(groups: list[dict]) -> list[dict]:
 
 # ── Storage ──────────────────────────────────────────────────────────────────────
 
-def unattached_volumes(volumes: list[dict], image_ids: set[str] | None = None) -> list[dict]:
+def unattached_volumes(volumes: list[dict], gone_images: set[str] | None = None) -> list[dict]:
     """Available volumes with no attachment. Cinder's updated_at changes on detach, so it's a
     floor for how long the volume has been unattached.
 
-    Volumes Glance's Cinder store keeps image data in are never listed while their image
-    exists; one whose image is gone is leaked storage and is listed. Without `image_ids` (the
-    Glance image ids) no store volume is listed."""
+    Volumes Glance's Cinder store keeps image data in (`image-<image id>`) back the image:
+    deleting one breaks it. One is listed only when its image is in `gone_images`, the images
+    Glance confirmed deleted (`store_images_to_check`); an image missing from the image list
+    proves nothing, since Glance doesn't list other tenants' private images to everyone."""
     out = []
     for v in volumes:
         if v["status"] != "available" or v["attachments"]:
             continue
-        reason, kind = "unattached", "volume"
+        reason, kind, extra = "unattached", "volume", {}
         if v.get("glance_image_id"):
-            if image_ids is None or v["glance_image_id"] in image_ids:
+            if v["glance_image_id"] not in (gone_images or set()):
                 continue
             reason, kind = "Glance image store volume; its image was deleted", "image_store"
+            extra = {"glance_image_id": v["glance_image_id"]}
         out.append({
             **{k: v[k] for k in ("id", "name", "size", "volume_type", "availability_zone",
                                  "is_bootable", "description", "project_id", "created_at",
                                  "updated_at")},
-            "reason": reason, "kind": kind, "since_hint": v["updated_at"],
+            "reason": reason, "kind": kind, "since_hint": v["updated_at"], **extra,
         })
     return out
+
+
+def sees_all_images(images: list[dict], own_project: str | None) -> bool:
+    """Whether Glance lists other tenants' private images to PCD Ops, i.e. treats it as an
+    admin. PCD's Glance may not, even with the admin role: it then lists public, shared and
+    community images and the install project's own. Without such an image in the list there's
+    no telling, so this answers no."""
+    return bool(own_project) and any(
+        i["visibility"] == "private" and i.get("owner") not in (None, own_project)
+        for i in images)
+
+
+def store_images_to_check(volumes: list[dict], listed: set[str], own_project: str | None,
+                          sees_all: bool) -> set[str]:
+    """Images of unattached Glance store volumes that aren't in the image list but that
+    Glance would show PCD Ops if they existed: only these can be proven deleted, by a 404 for
+    the image itself. Another tenant's image (the volume's `image_owner`) can only be checked
+    when Glance shows PCD Ops every tenant's images."""
+    return {
+        v["glance_image_id"] for v in volumes
+        if v.get("glance_image_id") and v["glance_image_id"] not in listed
+        and v["status"] == "available" and not v["attachments"]
+        and (sees_all or (own_project and v.get("glance_image_owner") == own_project))
+    }
 
 
 def image_use(servers: list[dict], volumes: list[dict],

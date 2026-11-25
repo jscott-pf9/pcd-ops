@@ -107,9 +107,30 @@ def test_empty_server_groups():
 def test_unattached_volumes_and_glance_store_volumes():
     vols = [vol("v1"), vol("v2", "in-use", ["a"]), vol("store", glance_image_id="img1"),
             vol("leak", glance_image_id="gone")]
-    assert [v["id"] for v in r.unattached_volumes(vols, {"img1"})] == ["v1", "leak"]
-    assert r.unattached_volumes(vols, {"img1"})[1]["kind"] == "image_store"
-    assert [v["id"] for v in r.unattached_volumes(vols)] == ["v1"]   # images unknown: skip all
+    out = r.unattached_volumes(vols, {"gone"})
+    assert [v["id"] for v in out] == ["v1", "leak"]
+    assert out[1]["kind"] == "image_store" and out[1]["glance_image_id"] == "gone"
+    # Only an image Glance confirmed deleted: missing from the image list isn't enough
+    assert [v["id"] for v in r.unattached_volumes(vols)] == ["v1"]
+
+
+def test_store_volumes_of_images_pcd_ops_cant_see_are_never_checked():
+    """PCD's Glance lists PCD Ops public, shared and its own project's images, not another
+    tenant's private ones: their store volumes (in `services`) back live images."""
+    mine = {"id": "i-svc", "visibility": "private", "owner": "svc"}
+    shared = {"id": "i-sh", "visibility": "shared", "owner": "vdi"}
+    vols = [vol("own-leak", glance_image_id="a", glance_image_owner="svc"),
+            vol("vdi-store", glance_image_id="b", glance_image_owner="vdi"),
+            vol("no-owner", glance_image_id="c"),
+            vol("listed", glance_image_id="i-svc", glance_image_owner="svc"),
+            vol("attached", "in-use", ["s"], glance_image_id="d", glance_image_owner="svc")]
+    assert not r.sees_all_images([mine, shared], "svc")
+    assert r.store_images_to_check(vols, {"i-svc"}, "svc", False) == {"a"}
+    other = {"id": "i-vdi", "visibility": "private", "owner": "vdi"}
+    assert r.sees_all_images([mine, other], "svc")
+    assert r.store_images_to_check(vols, {"i-svc", "i-vdi"}, "svc", True) == {"a", "b", "c"}
+    assert not r.sees_all_images([other], None)
+    assert r.store_images_to_check(vols, set(), None, False) == set()
 
 
 def test_image_use_counts_vms_volumes_and_libvirt_roots():
@@ -321,6 +342,8 @@ def fake_conn():
 
     class Image:
         def get_image(self, i):
+            if i.startswith("gone"):
+                raise os_exc.ResourceNotFound("No image")
             return NS(name=i, is_protected=i == "locked")
 
         def delete_image(self, i):
@@ -333,7 +356,17 @@ def fake_conn():
         def delete_server_group(self, i):
             raise os_exc.ResourceNotFound("No server group")
 
-    conn = NS(network=Net(), image=Image(), compute=Compute())
+    class Storage:
+        meta = {"plain": {}, "store": {"glance_image_id": "live"},
+                "leak": {"glance_image_id": "gone1"}, "stale": {"glance_image_id": "gone2"}}
+
+        def get_volume(self, i):
+            return NS(name=i, metadata=self.meta[i])
+
+        def delete_volume(self, i):
+            calls.append(("delete_volume", i))
+
+    conn = NS(network=Net(), image=Image(), compute=Compute(), block_storage=Storage())
     app.dependency_overrides[user_connection] = lambda: conn
     yield calls
     app.dependency_overrides.pop(user_connection, None)
@@ -354,3 +387,17 @@ def test_delete_endpoints(admin, fake_conn):
     titles = [e["title"] for e in db.get_recent_events(20)]
     assert "Deleted port: 10.0.0.5" in titles and "Deleted router: r1" in titles
     assert "Delete network failed" in titles and "Delete server group failed" in titles
+
+
+def test_delete_volume_refuses_glance_store_volumes_unless_image_confirmed_gone(admin, fake_conn):
+    db.cache_set("reclamation:candidates", {"unattached_volumes": [
+        {"id": "leak", "glance_image_id": "gone1"},
+        {"id": "store", "glance_image_id": "live"},
+        {"id": "stale"},                       # listed before the image was confirmed gone
+    ]})
+    assert admin.delete("/api/reclamation/volumes/plain", headers=CSRF).status_code == 200
+    assert admin.delete("/api/reclamation/volumes/leak", headers=CSRF).status_code == 200
+    for vid in ("store", "stale"):
+        res = admin.delete(f"/api/reclamation/volumes/{vid}", headers=CSRF)
+        assert res.status_code == 409 and "breaks the image" in res.json()["detail"]
+    assert fake_conn == [("delete_volume", "plain"), ("delete_volume", "leak")]

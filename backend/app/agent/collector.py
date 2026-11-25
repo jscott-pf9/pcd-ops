@@ -617,6 +617,30 @@ def _deleted_users(conn, user_ids: set[str]) -> set[str]:
     return gone
 
 
+def _deleted_store_images(conn, volumes: list[dict], images: list[dict]) -> tuple[set[str], bool]:
+    """(images Glance store volumes belong to that Glance says are deleted, whether Glance
+    shows PCD Ops every tenant's private images). Only an image Glance would show PCD Ops is
+    checked, one by one (a hidden image isn't listed either): a 404 for another tenant's
+    private image only means PCD Ops can't see it, and deleting its volume breaks the image."""
+    from openstack.exceptions import ResourceNotFound
+    try:
+        own = conn.current_project_id
+    except Exception as e:
+        logger.debug("Couldn't tell the current project: %s", e)
+        return set(), False
+    sees_all = reclamation.sees_all_images(images, own)
+    gone = set()
+    for iid in reclamation.store_images_to_check(volumes, {i["id"] for i in images}, own,
+                                                 sees_all):
+        try:
+            conn.image.get_image(iid)
+        except ResourceNotFound:
+            gone.add(iid)
+        except Exception as e:  # can't tell: don't call it deleted
+            logger.debug("Image lookup %s failed: %s", iid, e)
+    return gone, sees_all
+
+
 async def collect_reclamation() -> None:
     """Reclamation & Warnings: what could be freed, and what looks wrong
     (services/reclamation.py has the rules)."""
@@ -694,13 +718,18 @@ async def collect_reclamation() -> None:
           "iops": idle_rule["iops"],
           "window_start": (datetime.utcnow() - timedelta(days=idle_rule["days"])).isoformat()}
 
+    gone_images, sees_all = (set(), True) if images is None else await asyncio.to_thread(
+        _deleted_store_images, conn, volumes, images)
+    if not sees_all:
+        notes["unused_images"] = (
+            "PCD's Glance shows PCD Ops public, shared and community images and its own "
+            "project's, not other tenants' private images: those aren't checked")
     cats: dict[str, list[dict] | None] = {
         "stopped_servers": reclamation.stopped_servers(servers, volumes),
         "idle_servers": reclamation.idle_servers(servers, idle_stats, th),
         "orphaned_vms": orphans,
         "empty_server_groups": None if groups is None else reclamation.empty_server_groups(groups),
-        "unattached_volumes": reclamation.unattached_volumes(
-            volumes, None if images is None else {i["id"] for i in images}),
+        "unattached_volumes": reclamation.unattached_volumes(volumes, gone_images),
         "unused_images": None if images is None else reclamation.unused_images(
             images, reclamation.image_use(servers, volumes, domains)),
         "unused_floating_ips": None if fips is None else reclamation.unused_floating_ips(fips),

@@ -62,14 +62,37 @@ async def delete_server(server_id: str,
     return await _reclaim("server_delete", "Delete server", server_id, act, {"deleted": server_id})
 
 
+def _store_image_gone(conn, volume_id: str, image_id: str) -> bool:
+    """Whether the last collection confirmed `image_id` deleted (only it can tell whether
+    Glance would show PCD Ops that image) and Glance still answers 404 for it."""
+    data, _ = cache_get("reclamation:candidates")
+    if not any(i["id"] == volume_id and i.get("glance_image_id") == image_id
+               for i in (data or {}).get("unattached_volumes") or []):
+        return False
+    try:
+        conn.image.get_image(image_id)
+    except os_exc.ResourceNotFound:
+        return True
+    except os_exc.SDKException:
+        pass
+    return False
+
+
 @router.delete("/volumes/{volume_id}")
 async def delete_volume(volume_id: str,
                         conn: openstack.connection.Connection = Depends(user_connection)):
-    """Delete a Cinder volume (irreversible)."""
+    """Delete a Cinder volume (irreversible). A volume Glance's Cinder store keeps an image's
+    data in is deleted only when Reclamation listed it as left behind by a deleted image and
+    Glance still says that image is gone: deleting it otherwise breaks the image."""
     def act():
-        name = conn.block_storage.get_volume(volume_id).name
+        v = conn.block_storage.get_volume(volume_id)
+        image_id = (v.metadata or {}).get("glance_image_id")
+        if image_id and not _store_image_gone(conn, volume_id, image_id):
+            raise HTTPException(409, detail=(
+                f"Glance keeps the data of image {image_id} in this volume: deleting it breaks "
+                "the image. Delete the image instead."))
         conn.block_storage.delete_volume(volume_id)
-        return name
+        return v.name
     return await _reclaim("volume_delete", "Delete volume", volume_id, act, {"deleted": volume_id})
 
 
